@@ -137,7 +137,7 @@ export interface LogEntry {
 }
 
 // ============================================================================
-// 순환 경제 · 고유 영웅 · 던전 · 포션 가게 · 대장간 (+강화) 확장 타입
+// 순환 경제 · 고유 영웅 · 던전 · 포션 가게 · 대장간 (+강화) · 살아있는 여관 에이전트 타입
 // ============================================================================
 
 export type RarityTier = 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary';
@@ -218,7 +218,7 @@ export interface PersonalityPairRule {
   b: PersonalityId;
   title: string;
   isPositive: boolean;
-  successRateBonus: number; // e.g. +0.06 or -0.06
+  successRateBonus: number;
   statMultBonus?: Partial<Record<keyof StatBlock, number>>;
   extraGoldMult?: number;
   extraXpMult?: number;
@@ -251,7 +251,7 @@ export interface OriginDef {
   icon: string;
   description: string;
   preferredDungeonTags: DungeonTag[];
-  dungeonSuccessBonus: number; // 선호 던전 성공률 보너스
+  dungeonSuccessBonus: number;
   statBonusPct: Partial<Record<keyof StatBlock, number>>;
   goldBonusPct: number;
   lootChanceBonus: number;
@@ -286,6 +286,56 @@ export interface HeroRosterDef {
 }
 
 export type HeroStatus = 'idle' | 'exploring' | 'resting' | 'injured' | 'fatigued';
+
+export type InnZoneId =
+  | 'dining'
+  | 'bar'
+  | 'room'
+  | 'potion'
+  | 'blacksmith'
+  | 'trade'
+  | 'board'
+  | 'gate'
+  | 'hall';
+
+export type HeroActivityState =
+  | 'idle'
+  | 'walking'
+  | 'eating'
+  | 'drinking'
+  | 'shopping_potion'
+  | 'shopping_equip'
+  | 'enhancing'
+  | 'selling_loot'
+  | 'sleeping'
+  | 'rallying'
+  | 'exploring';
+
+export type PlayerOrderKind =
+  | 'eat_meal'
+  | 'drink_ale'
+  | 'rest_room'
+  | 'buy_potion'
+  | 'buy_equip'
+  | 'enhance_equip'
+  | 'sell_loot'
+  | 'rally_board'
+  | 'depart_dungeon';
+
+export interface HeroPlayerOrder {
+  kind: PlayerOrderKind;
+  targetId?: string;
+  slot?: EquipSlot;
+  stockUid?: number;
+  label: string;
+}
+
+export interface HeroInteractionEffect {
+  icon: string;
+  text: string;
+  color: string;
+  timer: number;
+}
 
 export interface HeroBuff {
   id: string;
@@ -350,6 +400,42 @@ export interface HeroState {
   totalRuns: number;
   totalWins: number;
   lastMealTimer: number;
+  // v3 살아있는 여관 에이전트 확장 필드
+  hunger?: number; // 0(배부름) ~ 100(매우 배고픔)
+  fatigue?: number; // 0(상쾌함) ~ 100(극심한 피로)
+  morale?: number; // 0 ~ 100
+  tileX?: number;
+  tileY?: number;
+  x?: number;
+  y?: number;
+  facing?: 'left' | 'right';
+  path?: { col: number; row: number }[];
+  targetTileX?: number;
+  targetTileY?: number;
+  targetZone?: InnZoneId;
+  activity?: HeroActivityState;
+  activityTimer?: number;
+  intentText?: string;
+  partyId?: string | null;
+  rallyDungeonId?: string | null;
+  playerOrder?: HeroPlayerOrder | null;
+  speechText?: string | null;
+  speechTimer?: number;
+  speechCooldown?: number;
+  interactionEffect?: HeroInteractionEffect | null;
+}
+
+export interface ShopMarketConfig {
+  mealSaleEnabled: boolean;
+  mealPriceMultiplier: number; // 0.8 | 1.0 | 1.25 | 1.5
+  potionSaleEnabled: Record<string, boolean>;
+  potionPriceMultiplier: number; // 0.8 | 1.0 | 1.25 | 1.5
+  lootBuyEnabled: Record<string, boolean>;
+  lootBuyRatePct: number; // 75 | 90 | 100 | 115
+  lootReserveGold: number; // 최소 남겨둘 여관 비상금
+  blacksmithSaleEnabled: boolean;
+  blacksmithPriceMultiplier: number; // 0.8 | 1.0 | 1.25
+  blacksmithAutoEnhanceEnabled: boolean;
 }
 
 export interface MaterialDef {
@@ -357,8 +443,8 @@ export interface MaterialDef {
   name: string;
   icon: string;
   rarity: RarityTier;
-  buyPrice: number; // 플레이어가 영웅에게서 매입하는 정가
-  peddlerPrice: number; // 행상인 자동 매각 가격 (안전장치)
+  buyPrice: number;
+  peddlerPrice: number;
   sourceDungeonId: string;
   description: string;
 }
@@ -391,6 +477,51 @@ export interface DungeonDef {
   drops: DungeonDropEntry[];
 }
 
+export type MonsterSpriteType =
+  | 'slime'
+  | 'goblin'
+  | 'wolf'
+  | 'golem'
+  | 'troll'
+  | 'knight'
+  | 'dragon';
+
+export interface ExpeditionMonsterUnit {
+  id: string;
+  name: string;
+  spriteType: MonsterSpriteType;
+  maxHp: number;
+  currentHp: number;
+  atk: number;
+  isBoss: boolean;
+  hitFlashTimer: number;
+  lungeTimer: number;
+}
+
+export interface ExpeditionCombatFloatingText {
+  x: number;
+  y: number;
+  text: string;
+  color: string;
+  life: number;
+}
+
+export interface ExpeditionDropVisual {
+  x: number;
+  y: number;
+  icon: string;
+  name: string;
+  count: number;
+  life: number;
+}
+
+export interface ExpeditionFloorLog {
+  id: number;
+  floor: number;
+  text: string;
+  type: 'march' | 'combat' | 'drop' | 'boss' | 'win' | 'retreat';
+}
+
 export interface ActiveExpedition {
   id: string;
   dungeonId: string;
@@ -398,6 +529,29 @@ export interface ActiveExpedition {
   totalDurationSec: number;
   remainingSec: number;
   expectedSuccessRate: number;
+  // v3 카이로소프트풍 층별 던전 탐험 & 자동 전투 상태
+  totalFloors?: number;
+  currentFloor?: number;
+  floorPhase?: 'marching' | 'fighting' | 'floor_clear' | 'completed' | 'retreated';
+  marchProgress?: number; // 0..1
+  monsters?: ExpeditionMonsterUnit[];
+  partyCombatState?: Record<
+    string,
+    {
+      currentHp: number;
+      maxHp: number;
+      hitFlashTimer: number;
+      lungeTimer: number;
+    }
+  >;
+  combatRoundTimer?: number;
+  floorTransitionTimer?: number;
+  combatFloats?: ExpeditionCombatFloatingText[];
+  dropVisuals?: ExpeditionDropVisual[];
+  floorLogs?: ExpeditionFloorLog[];
+  accumulatedLoot?: Record<string, number>;
+  willSucceed?: boolean;
+  failAtFloor?: number;
 }
 
 export interface ExpeditionResultSummary {
@@ -414,6 +568,9 @@ export interface ExpeditionResultSummary {
   lootDropped: Record<string, number>;
   injuredHeroNames: string[];
   synergySummaryText: string;
+  reachedFloor?: number;
+  totalFloors?: number;
+  floorLogs?: ExpeditionFloorLog[];
 }
 
 export interface ShopToolDef {
@@ -425,7 +582,7 @@ export interface ShopToolDef {
   description: string;
   baseGoldCost: number;
   costScale: number;
-  materialCostsPerLevel: Record<string, number>; // 레벨업 시 필요한 재료 기본치
+  materialCostsPerLevel: Record<string, number>;
   materialStartLevel: number;
   maxLevel: number;
   successBonusPerLevel: number;
@@ -459,7 +616,7 @@ export interface PotionRecipeDef {
 export interface CraftQueueItem {
   uid: number;
   shop: 'potion' | 'blacksmith';
-  recipeId: string; // potionId or equipmentDefId
+  recipeId: string;
   totalSec: number;
   remainingSec: number;
   successRate: number;
@@ -487,7 +644,7 @@ export interface SaveData {
   muted: boolean;
   tutorialSeen: boolean;
   lastSavedAt: number;
-  // v2 순환 시스템 확장 필드
+  // v2 & v3 순환 시스템 및 살아있는 여관 확장 필드
   heroes?: Record<string, HeroState>;
   materials?: Record<string, number>;
   potionTools?: Record<string, number>;
@@ -504,6 +661,7 @@ export interface SaveData {
   recentExpeditionResults?: ExpeditionResultSummary[];
   autoBuyLoot?: boolean;
   autoDispatch?: boolean;
+  shopConfig?: ShopMarketConfig;
   nextEquipUid?: number;
   totalPotionsCrafted?: number;
   totalEquipCrafted?: number;

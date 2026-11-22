@@ -29,7 +29,12 @@ import {
   getHeroRequiredXp,
   getInnUpgradeMaterialRequirements,
 } from './loopData';
-import { CANVAS_HEIGHT, CANVAS_WIDTH, InnRenderer } from './renderer';
+import {
+  CANVAS_HEIGHT,
+  CANVAS_WIDTH,
+  DungeonExpeditionRenderer,
+  InnRenderer,
+} from './renderer';
 import { getGuestPortraitDataUrl, getHeroPortraitDataUrl } from './sprites';
 import {
   canClassEquip,
@@ -49,8 +54,8 @@ import {
 
 type ActiveTab =
   | 'heroes'
-  | 'dungeon'
   | 'trade'
+  | 'dungeon'
   | 'potion'
   | 'blacksmith'
   | UpgradeCategory
@@ -58,17 +63,17 @@ type ActiveTab =
 
 const TAB_SUMMARIES: Record<ActiveTab, string> = {
   heroes:
-    '🦸 고유 이름을 지닌 9직업 30명의 영웅 명부입니다. 성격·출신·4슬롯 장비·버프를 확인하고 식사나 휴식, +강화를 진행하세요.',
-  dungeon:
-    '🗺️ 7개 던전의 요구 스탯과 출발 전 파티 시너지(역할 삼각 진형, 성격 궁합/충돌, 출신 세트)를 미리 확인하고 파견합니다.',
+    '🦸 고유 이름을 지닌 9직업 30명의 영웅 명부입니다. 영웅을 선택해 HP·허기·피로·의도를 확인하고 행동을 직접 지시하거나 +강화를 진행하세요.',
   trade:
-    '💎 영웅들이 던전에서 획득한 전리품을 골드로 매입하여 창고에 비축합니다. 영웅은 판매 대금으로 음식·포션·장비를 구매합니다.',
+    '💎 상점 판매가(요리·포션·장비)와 전리품 매입 시세/품목을 설정하세요. 설정에 맞춰 영웅들이 스스로 걸어가 거래합니다.',
+  dungeon:
+    '🗺️ 7개 던전의 요구 스탯과 출발 전 파티 시너지(역할 삼각 진형, 성격 궁합/충돌, 출신 세트)를 확인하고 원정대를 파견합니다.',
   potion:
-    '⚗️ 연금 도구와 약초 정원·작업실을 건설하고 8종의 포션을 조제합니다. 완성된 포션은 영웅이 구매하거나 직접 지급할 수 있습니다.',
+    '⚗️ 연금 도구와 약초 정원·작업실을 건설하고 8종의 포션을 조제합니다. 판매 등록된 포션은 영웅들이 걸어와 구매합니다.',
   blacksmith:
     '⚒️ 드워프 화로와 모루로 직업별 장비를 단조하고 +1~+15 강화를 시도합니다. (⚠️ +강화 실패 시 장비 완전 파괴 → 기본 장비 복귀)',
-  menu: '🍲 따뜻한 수프와 스튜, 에일, 만찬을 개발하여 서빙 수익과 영웅 식사 버프 강도를 높입니다. (상위 레벨은 전리품 재료 필요)',
-  room: '🛏️ 침대와 객실을 확충하여 숙박 초당 수입과 영웅 부상/피로 회복 속도를 높입니다. (상위 레벨은 전리품 재료 필요)',
+  menu: '🍲 따뜻한 수프와 스튜, 에일, 만찬을 개발하여 서빙 수익과 영웅 식사 버프 강도를 높입니다.',
+  room: '🛏️ 2층 침대와 객실을 확충하여 숙박 수입과 영웅 부상/피로 수면 회복 속도를 높입니다.',
   staff:
     '🧑‍🍳 메이드·바텐더·요리사·음유시인을 고용하면 여관에 등장하여 자동 서빙과 수익을 돕습니다.',
   facility:
@@ -80,16 +85,25 @@ const TAB_SUMMARIES: Record<ActiveTab, string> = {
 class InnAppController {
   private game: DungeonInnGame;
   private renderer: InnRenderer;
+  private dungeonRenderer: DungeonExpeditionRenderer;
   private canvas: HTMLCanvasElement;
+  private dungeonCanvas: HTMLCanvasElement;
   private activeTab: ActiveTab = 'heroes';
   private lastFrameTime = performance.now();
   private uiRefreshAccumulator = 0;
   private lastLogTopId = -1;
+  private lastFloorLogTopId = -1;
+  private mapZoomExpanded = false;
+  private dungeonViewCollapsed = false;
 
   // 던전 탭 파티 편성 상태
   private selectedDungeonId = 'dungeon_slime';
   private selectedPartyHeroIds: string[] = [];
   private heroFilterClass: HeroClassId | 'all' = 'all';
+
+  // 영웅 지시 패널 드롭다운 선택 상태
+  private orderPotionId = 'potion_heal_minor';
+  private orderDungeonId = 'dungeon_slime';
 
   // +강화 확인 모달 대기 타겟
   private pendingEnhanceTarget: {
@@ -113,6 +127,13 @@ class InnAppController {
   private elEventTitle = document.getElementById('event-banner-title')!;
   private elEventTimer = document.getElementById('event-banner-timer')!;
   private elEventDesc = document.getElementById('event-banner-desc')!;
+
+  private elHeroInspector = document.getElementById('hero-inspector-panel')!;
+  private elDungeonPartyTabs = document.getElementById('dungeon-party-tabs')!;
+  private elDungeonViewBody = document.getElementById('dungeon-view-body')!;
+  private elDungeonFloorLogs = document.getElementById(
+    'dungeon-floor-log-list'
+  )!;
 
   private elServeBtnLabel = document.getElementById('serve-btn-label')!;
   private elServeBtnSub = document.getElementById('serve-btn-sub')!;
@@ -141,15 +162,22 @@ class InnAppController {
     const canvasEl = document.getElementById(
       'inn-canvas'
     ) as HTMLCanvasElement | null;
-    if (!canvasEl) {
-      throw new Error('#inn-canvas 요소를 찾을 수 없습니다.');
+    const dCanvasEl = document.getElementById(
+      'dungeon-canvas'
+    ) as HTMLCanvasElement | null;
+    if (!canvasEl || !dCanvasEl) {
+      throw new Error('캔버스 요소를 찾을 수 없습니다.');
     }
     this.canvas = canvasEl;
+    this.dungeonCanvas = dCanvasEl;
     this.renderer = new InnRenderer(this.canvas);
+    this.dungeonRenderer = new DungeonExpeditionRenderer(this.dungeonCanvas);
 
     this.game = new DungeonInnGame(
       () => this.refreshHeaderAndLogs(),
-      () => this.refreshAllUi(true)
+      () => this.refreshAllUi(true),
+      undefined,
+      (zoneTab) => this.switchTab(zoneTab)
     );
 
     const offlineReport = this.game.loadFromStorage();
@@ -189,8 +217,34 @@ class InnAppController {
       const scaleY = CANVAS_HEIGHT / rect.height;
       const cx = (e.clientX - rect.left) * scaleX;
       const cy = (e.clientY - rect.top) * scaleY;
+      const prevHero = this.game.selectedHeroId;
       this.game.handleCanvasTap(cx, cy);
+      if (this.game.selectedHeroId !== prevHero) {
+        this.renderHeroInspectorPanel(true);
+      }
     });
+
+    document
+      .getElementById('btn-toggle-map-zoom')
+      ?.addEventListener('click', (e) => {
+        this.mapZoomExpanded = !this.mapZoomExpanded;
+        const viewport = document.getElementById('inn-canvas-viewport');
+        viewport?.classList.toggle('zoom-scroll-mode', this.mapZoomExpanded);
+        const btn = e.currentTarget as HTMLButtonElement;
+        btn.textContent = this.mapZoomExpanded
+          ? '↔️ 확대 팬 모드 (탭해 축소)'
+          : '🔍 전체 맞춤 보기';
+      });
+
+    document
+      .getElementById('btn-toggle-dungeon-size')
+      ?.addEventListener('click', () => {
+        this.dungeonViewCollapsed = !this.dungeonViewCollapsed;
+        this.elDungeonViewBody.classList.toggle(
+          'hidden',
+          this.dungeonViewCollapsed
+        );
+      });
 
     document.getElementById('btn-serve-now')?.addEventListener('click', () => {
       this.game.serveAllOrSolicit();
@@ -229,7 +283,6 @@ class InnAppController {
         this.game.sound.playCoin();
       });
 
-    // +강화 확인 모달 버튼
     document
       .getElementById('btn-cancel-enhance')
       ?.addEventListener('click', () => {
@@ -243,11 +296,11 @@ class InnAppController {
           this.game.enhanceEquipment(this.pendingEnhanceTarget, false);
           this.pendingEnhanceTarget = null;
           this.elEnhanceModal.classList.add('hidden');
+          this.renderHeroInspectorPanel(true);
           this.buildTabCards();
         }
       });
 
-    // v1 구세이브 마이그레이션 모달 버튼
     document
       .getElementById('btn-migrate-continue')
       ?.addEventListener('click', () => {
@@ -264,7 +317,6 @@ class InnAppController {
         this.refreshAllUi(true);
       });
 
-    // 리셋 모달
     document.getElementById('btn-reset')?.addEventListener('click', () => {
       this.elResetModal.classList.remove('hidden');
     });
@@ -350,7 +402,7 @@ class InnAppController {
       elCraft.textContent = `포션 ${report.potionsCrafted}병 / 장비 ${report.equipsCrafted}개`;
     }
     if (elExtra) {
-      elExtra.textContent = `안전 매각 ${report.peddlerSales}개 / 부상 ${report.injuredCount}명`;
+      elExtra.textContent = `상점 거래 ${report.heroShopTransactions}건 / 치료 ${report.heroesHealedCount}회 / 안전매각 ${report.peddlerSales}개`;
     }
     if (elGold) {
       elGold.textContent = `+${formatGold(report.earnedGold)} G`;
@@ -422,7 +474,11 @@ class InnAppController {
     const prevSmithQueueCount = this.game.craftQueues.blacksmith.length;
 
     this.game.update(dt);
-    this.renderer.render(this.game.getRenderState());
+    const renderState = this.game.getRenderState();
+    this.renderer.render(renderState);
+    if (!this.dungeonViewCollapsed) {
+      this.dungeonRenderer.render(renderState);
+    }
 
     const queueChanged =
       this.game.expeditions.length !== prevExpCount ||
@@ -437,6 +493,8 @@ class InnAppController {
       this.uiRefreshAccumulator = 0;
       this.refreshHeaderAndLogs();
       this.updateLiveProgressBars();
+      this.updateHeroInspectorVitalsLive();
+      this.renderDungeonExpeditionPartyTabsAndLogs();
     }
 
     requestAnimationFrame((nextNow) => this.loop(nextNow));
@@ -444,10 +502,406 @@ class InnAppController {
 
   private refreshAllUi(forceRebuildCards: boolean): void {
     this.refreshHeaderAndLogs();
+    this.renderHeroInspectorPanel(forceRebuildCards);
+    this.renderDungeonExpeditionPartyTabsAndLogs();
     if (forceRebuildCards) {
       this.buildTabCards();
     } else {
       this.updateLiveProgressBars();
+    }
+  }
+
+  // ==========================================================================
+  // 영웅 클릭 상태 확인 & 특정 행동 직접 지시 패널 (섹션 3 필수 요구사항)
+  // ==========================================================================
+
+  private renderHeroInspectorPanel(forceRebuild = false): void {
+    const heroId = this.game.selectedHeroId;
+    if (!heroId || !this.game.heroes[heroId]?.unlocked) {
+      this.elHeroInspector.classList.add('hidden');
+      return;
+    }
+    this.elHeroInspector.classList.remove('hidden');
+    if (
+      !forceRebuild &&
+      this.elHeroInspector.dataset.renderedHeroId === heroId
+    ) {
+      this.updateHeroInspectorVitalsLive();
+      return;
+    }
+    this.elHeroInspector.dataset.renderedHeroId = heroId;
+
+    const hero = this.game.heroes[heroId];
+    const roster = HERO_ROSTER_MAP[hero.id];
+    const cls = HERO_CLASSES[roster.classId];
+    const origin = ORIGINS[roster.originId];
+    const bd = getHeroStatBreakdown(hero);
+    const reqXp = getHeroRequiredXp(hero.level);
+    const hunger = Math.round(hero.hunger ?? 20);
+    const fatigue = Math.round(hero.fatigue ?? 10);
+
+    // 소속 파티 텍스트
+    let partyText = '단독 자율 행동 중';
+    if (hero.expeditionId) {
+      const exp = this.game.expeditions.find((e) => e.id === hero.expeditionId);
+      if (exp) {
+        const dName = DUNGEON_MAP[exp.dungeonId]?.name ?? '던전';
+        const mates = exp.heroIds
+          .map((id) => HERO_ROSTER_MAP[id]?.name ?? id)
+          .join(' · ');
+        partyText = `[${dName} 원정대] ${mates}`;
+      }
+    } else if (hero.partyId) {
+      const mates = this.game
+        .getUnlockedHeroes()
+        .filter((h) => h.partyId === hero.partyId)
+        .map((h) => HERO_ROSTER_MAP[h.id].name)
+        .join(' · ');
+      partyText = mates ? `파티 결성: ${mates}` : '단독 자율 행동 중';
+    }
+
+    const equipSlotsHtml = (
+      ['weapon', 'armor', 'offhand', 'accessory'] as EquipSlot[]
+    )
+      .map((slot) => {
+        const inst = hero.equipment[slot];
+        const def = EQUIPMENT_DEF_MAP[inst.defId];
+        const rInfo = RARITY_INFO[def.rarity];
+        const canEnh = !def.isBase && inst.enhanceLevel < 15;
+        return `
+          <div class="insp-equip-chip" style="border-color:${rInfo.color}">
+            <span class="insp-eq-slot">${EQUIP_SLOT_LABELS[slot]}</span>
+            <strong style="color:${rInfo.color}">${def.icon} ${def.name}${
+          inst.enhanceLevel > 0 ? ` +${inst.enhanceLevel}` : ''
+        }</strong>
+            ${
+              canEnh
+                ? `<button type="button" class="insp-mini-enh-btn" data-enh-slot="${slot}">🔥+강화</button>`
+                : ''
+            }
+          </div>
+        `;
+      })
+      .join('');
+
+    // 가용 포션 옵션
+    const potionOptionsHtml = POTION_RECIPES.map((p) => {
+      const stock = this.game.potionStock[p.id] ?? 0;
+      const price = this.game.getEffectivePotionSellPrice(p.id);
+      const sel = p.id === this.orderPotionId ? 'selected' : '';
+      return `<option value="${p.id}" ${sel}>${p.icon} ${p.name} (재고 ${stock} / ${price}G)</option>`;
+    }).join('');
+
+    // 해금된 던전 옵션
+    const dungeonOptionsHtml = DUNGEONS.filter((d) =>
+      this.game.isDungeonUnlocked(d.id)
+    )
+      .map((d) => {
+        const sel = d.id === this.orderDungeonId ? 'selected' : '';
+        return `<option value="${d.id}" ${sel}>${d.icon} T${d.tier}. ${d.name}</option>`;
+      })
+      .join('');
+
+    this.elHeroInspector.innerHTML = `
+      <div class="inspector-top-row">
+        <div class="inspector-hero-id">
+          <img src="${getHeroPortraitDataUrl(hero.id)}" alt="${
+      roster.name
+    }" class="pixel-portrait" />
+          <div>
+            <div class="upgrade-title-row">
+              <strong class="upgrade-name">🎯 ${roster.name} <small class="hero-title-sub">(${
+      roster.title
+    })</small></strong>
+              <span class="role-badge role-${cls.role}">${cls.icon} ${
+      cls.name
+    } · ${cls.roleName}</span>
+              <span class="upgrade-level-badge" id="insp-lv-xp">Lv.${
+                hero.level
+              } (XP ${hero.xp}/${reqXp})</span>
+            </div>
+            <div class="trait-row">
+              ${roster.personalities
+                .map(
+                  (p) =>
+                    `<span class="trait-chip">${PERSONALITIES[p].icon} ${PERSONALITIES[p].name}</span>`
+                )
+                .join('')}
+              <span class="trait-chip origin-chip">${origin.icon} ${
+      origin.name
+    }</span>
+              <span class="trait-chip" id="insp-party-pill">👥 ${partyText}</span>
+            </div>
+          </div>
+        </div>
+        <div class="inspector-other-heroes">
+          ${this.game
+            .getUnlockedHeroes()
+            .slice(0, 8)
+            .map((h) => {
+              const r = HERO_ROSTER_MAP[h.id];
+              return `<button type="button" class="hero-quick-switch-btn${
+                h.id === hero.id ? ' active' : ''
+              }" data-switch-hero="${h.id}">${r.name}</button>`;
+            })
+            .join('')}
+        </div>
+      </div>
+
+      <div class="inspector-vitals-grid">
+        <div class="vital-pill">❤️ 체력 <strong id="insp-hp">${
+          hero.currentHp
+        }/${bd.totalStats.hp}</strong></div>
+        <div class="vital-pill">🍖 허기 <strong id="insp-hunger">${hunger}%</strong></div>
+        <div class="vital-pill">💦 피로 <strong id="insp-fatigue">${fatigue}%</strong></div>
+        <div class="vital-pill">💰 보유 골드 <strong id="insp-gold">${formatGold(
+          hero.gold
+        )} G</strong></div>
+        <div class="vital-pill intent-pill">🧭 현재 의도: <strong id="insp-intent">${
+          hero.intentText ?? '여관 대기 중'
+        }</strong></div>
+      </div>
+
+      <div class="stat-pill-row">
+        <span>⚔️전투력 <b id="insp-cp">${bd.combatPower}</b></span>
+        <span>ATK <b>${bd.totalStats.atk}</b></span>
+        <span>DEF <b>${bd.totalStats.def}</b></span>
+        <span>AGI <b>${bd.totalStats.agi}</b></span>
+        <span>INT <b>${bd.totalStats.int}</b></span>
+        <span>LUK <b>${bd.totalStats.luk}</b></span>
+      </div>
+
+      <div class="inspector-equip-row">
+        ${equipSlotsHtml}
+      </div>
+
+      <div class="inspector-orders-box">
+        <div class="orders-box-header">
+          <span>📣 <b>플레이어 행동 지시</b> (지시 완료 시 자율 AI로 자동 복귀)</span>
+          <button type="button" id="btn-cancel-hero-order" class="cancel-order-btn" ${
+            hero.playerOrder ? '' : 'disabled'
+          }>
+            ✖ 지시 취소 ${hero.playerOrder ? `(${hero.playerOrder.label})` : ''}
+          </button>
+        </div>
+        <div class="orders-btn-grid">
+          <button type="button" class="order-action-btn" data-order-kind="eat_meal">🍲 식당 가서 식사</button>
+          <button type="button" class="order-action-btn" data-order-kind="drink_ale">🍺 바에서 에일</button>
+          <button type="button" class="order-action-btn" data-order-kind="rest_room">🛏️ 2층 객실 휴식</button>
+          <button type="button" class="order-action-btn" data-order-kind="sell_loot">💎 거래대 전리품 매각</button>
+          <button type="button" class="order-action-btn" data-order-kind="buy_equip">⚒️ 대장간 장비 장착</button>
+          <button type="button" class="order-action-btn" data-order-kind="rally_board">📋 게시판 파티 결성</button>
+        </div>
+        <div class="orders-custom-row">
+          <div class="custom-order-group">
+            <select id="select-order-potion" class="order-select">${potionOptionsHtml}</select>
+            <button type="button" id="btn-order-buy-potion" class="order-action-btn">⚗️ 포션 사러 가기</button>
+          </div>
+          <div class="custom-order-group">
+            <select id="select-order-dungeon" class="order-select">${dungeonOptionsHtml}</select>
+            <button type="button" id="btn-order-depart-dungeon" class="order-action-btn primary-order-btn">🚀 지정 던전 출발</button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // 이벤트 바인딩
+    this.elHeroInspector
+      .querySelectorAll<HTMLButtonElement>('[data-switch-hero]')
+      .forEach((btn) => {
+        btn.addEventListener('click', () => {
+          this.game.selectedHeroId = btn.dataset.switchHero ?? null;
+          this.renderHeroInspectorPanel(true);
+        });
+      });
+
+    this.elHeroInspector
+      .querySelectorAll<HTMLButtonElement>('[data-enh-slot]')
+      .forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const slot = btn.dataset.enhSlot as EquipSlot;
+          this.openEnhanceConfirmModal({ heroId: hero.id, slot });
+        });
+      });
+
+    this.elHeroInspector
+      .querySelectorAll<HTMLButtonElement>('[data-order-kind]')
+      .forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const kind = btn.dataset.orderKind as
+            | 'eat_meal'
+            | 'drink_ale'
+            | 'rest_room'
+            | 'sell_loot'
+            | 'buy_equip'
+            | 'rally_board';
+          const labels: Record<typeof kind, string> = {
+            eat_meal: '식당 식사',
+            drink_ale: '바 음료',
+            rest_room: '객실 휴식',
+            sell_loot: '전리품 매각',
+            buy_equip: '대장간 장비 정비',
+            rally_board: '게시판 파티 모집',
+          };
+          this.game.issueHeroOrder(hero.id, {
+            kind,
+            label: labels[kind],
+          });
+          this.renderHeroInspectorPanel(true);
+        });
+      });
+
+    const selPot = document.getElementById(
+      'select-order-potion'
+    ) as HTMLSelectElement | null;
+    selPot?.addEventListener('change', () => {
+      this.orderPotionId = selPot.value;
+    });
+
+    document
+      .getElementById('btn-order-buy-potion')
+      ?.addEventListener('click', () => {
+        const chosenId = selPot ? selPot.value : this.orderPotionId;
+        const pName =
+          POTION_RECIPES.find((p) => p.id === chosenId)?.name ?? '포션';
+        this.game.issueHeroOrder(hero.id, {
+          kind: 'buy_potion',
+          targetId: chosenId,
+          label: `${pName} 구매`,
+        });
+        this.renderHeroInspectorPanel(true);
+      });
+
+    const selDun = document.getElementById(
+      'select-order-dungeon'
+    ) as HTMLSelectElement | null;
+    selDun?.addEventListener('change', () => {
+      this.orderDungeonId = selDun.value;
+    });
+
+    document
+      .getElementById('btn-order-depart-dungeon')
+      ?.addEventListener('click', () => {
+        const chosenDun = selDun ? selDun.value : this.orderDungeonId;
+        const dName = DUNGEON_MAP[chosenDun]?.name ?? '던전';
+        this.game.issueHeroOrder(hero.id, {
+          kind: 'depart_dungeon',
+          targetId: chosenDun,
+          label: `${dName} 출정`,
+        });
+        this.renderHeroInspectorPanel(true);
+      });
+
+    document
+      .getElementById('btn-cancel-hero-order')
+      ?.addEventListener('click', () => {
+        this.game.cancelHeroOrder(hero.id);
+        this.renderHeroInspectorPanel(true);
+      });
+  }
+
+  private updateHeroInspectorVitalsLive(): void {
+    const heroId = this.game.selectedHeroId;
+    if (!heroId || !this.game.heroes[heroId]?.unlocked) return;
+    const hero = this.game.heroes[heroId];
+    const bd = getHeroStatBreakdown(hero);
+
+    const elHp = document.getElementById('insp-hp');
+    const elHunger = document.getElementById('insp-hunger');
+    const elFatigue = document.getElementById('insp-fatigue');
+    const elGold = document.getElementById('insp-gold');
+    const elIntent = document.getElementById('insp-intent');
+    const btnCancel = document.getElementById(
+      'btn-cancel-hero-order'
+    ) as HTMLButtonElement | null;
+
+    if (elHp) elHp.textContent = `${hero.currentHp}/${bd.totalStats.hp}`;
+    if (elHunger) elHunger.textContent = `${Math.round(hero.hunger ?? 20)}%`;
+    if (elFatigue) elFatigue.textContent = `${Math.round(hero.fatigue ?? 10)}%`;
+    if (elGold) elGold.textContent = `${formatGold(hero.gold)} G`;
+    if (elIntent) elIntent.textContent = hero.intentText ?? '여관 대기 중';
+    if (btnCancel) {
+      btnCancel.disabled = !hero.playerOrder;
+      btnCancel.textContent = hero.playerOrder
+        ? `✖ 지시 취소 (${hero.playerOrder.label})`
+        : '✖ 지시 취소';
+    }
+  }
+
+  // ==========================================================================
+  // 카이로소프트풍 던전 실시간 층별 탐험 뷰 파티 탭 & 전투 로그 렌더링
+  // ==========================================================================
+
+  private renderDungeonExpeditionPartyTabsAndLogs(): void {
+    const exps = this.game.expeditions;
+    this.elDungeonPartyTabs.innerHTML = '';
+
+    if (exps.length === 0) {
+      const badge = document.createElement('span');
+      badge.className = 'dungeon-idle-badge';
+      badge.textContent = '대기 중 (의뢰 게시판에서 파티 결성 시 자동 출정)';
+      this.elDungeonPartyTabs.appendChild(badge);
+    } else {
+      for (const exp of exps) {
+        const d = DUNGEON_MAP[exp.dungeonId];
+        const isFocused =
+          (this.game.focusedExpeditionId ?? exps[0].id) === exp.id;
+        const pct = Math.min(
+          100,
+          Math.max(
+            0,
+            ((exp.totalDurationSec - exp.remainingSec) /
+              Math.max(1, exp.totalDurationSec)) *
+              100
+          )
+        );
+
+        const tabBtn = document.createElement('button');
+        tabBtn.type = 'button';
+        tabBtn.className = `dungeon-party-tab-btn${isFocused ? ' active' : ''}`;
+        tabBtn.innerHTML = `
+          <span>${d?.icon ?? '🗺️'} ${d?.name ?? exp.dungeonId} [${
+          exp.currentFloor ?? 1
+        }/${exp.totalFloors ?? 3}F]</span>
+          <span class="mini-party-bar"><span style="width:${pct.toFixed(
+            0
+          )}%"></span></span>
+        `;
+        tabBtn.addEventListener('click', () => {
+          this.game.focusedExpeditionId = exp.id;
+          this.renderDungeonExpeditionPartyTabsAndLogs();
+        });
+        this.elDungeonPartyTabs.appendChild(tabBtn);
+      }
+    }
+
+    const activeExp =
+      exps.find((e) => e.id === this.game.focusedExpeditionId) ??
+      exps[0] ??
+      null;
+    const logs =
+      activeExp?.floorLogs ??
+      this.game.recentExpeditionResults[0]?.floorLogs ??
+      [];
+    const topId = logs[0]?.id ?? -1;
+    if (topId === this.lastFloorLogTopId) return;
+    this.lastFloorLogTopId = topId;
+
+    this.elDungeonFloorLogs.innerHTML = '';
+    if (logs.length === 0) {
+      const li = document.createElement('li');
+      li.className = 'floor-log-item';
+      li.textContent =
+        '🧭 원정대가 출발하면 층별 전진·몬스터 교전·아이템 드랍·보스전 기록이 여기에 실시간으로 중계됩니다.';
+      this.elDungeonFloorLogs.appendChild(li);
+      return;
+    }
+
+    for (const item of logs.slice(0, 4)) {
+      const li = document.createElement('li');
+      li.className = `floor-log-item floor-log-${item.type}`;
+      li.textContent = `[${item.floor}층] ${item.text}`;
+      this.elDungeonFloorLogs.appendChild(li);
     }
   }
 
@@ -543,7 +997,9 @@ class InnAppController {
     for (const exp of this.game.expeditions) {
       const d = DUNGEON_MAP[exp.dungeonId];
       parts.push(
-        `🗺️ ${d?.name ?? exp.dungeonId} (${Math.ceil(exp.remainingSec)}초 남음)`
+        `🗺️ ${d?.name ?? exp.dungeonId} [${exp.currentFloor ?? 1}/${
+          exp.totalFloors ?? 3
+        }층] (${Math.ceil(exp.remainingSec)}초)`
       );
     }
     for (const pq of this.game.craftQueues.potion) {
@@ -563,32 +1019,32 @@ class InnAppController {
     this.elLiveStrip.textContent =
       parts.length > 0
         ? parts.join('  |  ')
-        : '🏠 현재 진행 중인 원정이나 제작이 없습니다. [🗺️ 던전] 탭에서 영웅 파티를 파견해 보세요!';
+        : '🏠 영웅들이 여관 안에서 식사·쇼핑·파티 모집 중입니다. 준비가 끝나면 던전 입구로 출발합니다!';
   }
 
   private updateLiveProgressBars(): void {
-    // 진행 바 실시간 업데이트
-    document
-      .querySelectorAll<HTMLElement>('[data-exp-id]')
-      .forEach((el) => {
-        const expId = el.dataset.expId;
-        const exp = this.game.expeditions.find((e) => e.id === expId);
-        if (exp) {
-          const pct = Math.min(
-            100,
-            Math.max(
-              0,
-              ((exp.totalDurationSec - exp.remainingSec) /
-                Math.max(1, exp.totalDurationSec)) *
-                100
-            )
-          );
-          const fill = el.querySelector<HTMLElement>('.mini-progress-fill');
-          const txt = el.querySelector<HTMLElement>('.mini-progress-text');
-          if (fill) fill.style.width = `${pct.toFixed(1)}%`;
-          if (txt) txt.textContent = `${Math.ceil(exp.remainingSec)}초 남음`;
-        }
-      });
+    document.querySelectorAll<HTMLElement>('[data-exp-id]').forEach((el) => {
+      const expId = el.dataset.expId;
+      const exp = this.game.expeditions.find((e) => e.id === expId);
+      if (exp) {
+        const pct = Math.min(
+          100,
+          Math.max(
+            0,
+            ((exp.totalDurationSec - exp.remainingSec) /
+              Math.max(1, exp.totalDurationSec)) *
+              100
+          )
+        );
+        const fill = el.querySelector<HTMLElement>('.mini-progress-fill');
+        const txt = el.querySelector<HTMLElement>('.mini-progress-text');
+        if (fill) fill.style.width = `${pct.toFixed(1)}%`;
+        if (txt)
+          txt.textContent = `${exp.currentFloor ?? 1}/${
+            exp.totalFloors ?? 3
+          }층 · ${Math.ceil(exp.remainingSec)}초 남음`;
+      }
+    });
 
     if (
       this.activeTab === 'menu' ||
@@ -634,11 +1090,11 @@ class InnAppController {
       case 'heroes':
         this.buildHeroesTab();
         break;
-      case 'dungeon':
-        this.buildDungeonTab();
-        break;
       case 'trade':
         this.buildTradeTab();
+        break;
+      case 'dungeon':
+        this.buildDungeonTab();
         break;
       case 'potion':
         this.buildPotionTab();
@@ -656,18 +1112,19 @@ class InnAppController {
   }
 
   // --------------------------------------------------------------------------
-  // 1. 🦸 영웅 명단 탭 (고정 고유 영웅 30명, 성격·출신·4슬롯 장비·대접/휴식/+강화)
+  // 1. 🦸 영웅 명단 탭 (클릭 시 상태/지시 패널 연동 + 허기/피로/의도 표시)
   // --------------------------------------------------------------------------
   private buildHeroesTab(): void {
     const unlockedCount = this.game.getUnlockedHeroCount();
 
-    // 상단 필터 바
     const filterBar = document.createElement('div');
     filterBar.className = 'sub-filter-bar';
 
     const allBtn = document.createElement('button');
     allBtn.type = 'button';
-    allBtn.className = `chip-btn${this.heroFilterClass === 'all' ? ' active' : ''}`;
+    allBtn.className = `chip-btn${
+      this.heroFilterClass === 'all' ? ' active' : ''
+    }`;
     allBtn.textContent = `전체 (${unlockedCount}/${HERO_ROSTER.length})`;
     allBtn.addEventListener('click', () => {
       this.heroFilterClass = 'all';
@@ -690,7 +1147,6 @@ class InnAppController {
     }
     this.elUpgradeList.appendChild(filterBar);
 
-    // 합류한 영웅 먼저, 미합류 영웅은 뒤에 표시
     const sortedRoster = [...HERO_ROSTER]
       .filter(
         (r) =>
@@ -712,7 +1168,9 @@ class InnAppController {
       const origin = ORIGINS[roster.originId];
 
       const card = document.createElement('div');
-      card.className = `hero-card${state.unlocked ? '' : ' locked'}`;
+      card.className = `hero-card${state.unlocked ? '' : ' locked'}${
+        this.game.selectedHeroId === state.id ? ' selected-hero-card' : ''
+      }`;
 
       if (!state.unlocked) {
         card.innerHTML = `
@@ -737,8 +1195,11 @@ class InnAppController {
 
       const bd = getHeroStatBreakdown(state);
       const reqXp = getHeroRequiredXp(state.level);
-      const statusLabels: Record<HeroState['status'], { text: string; cls: string }> = {
-        idle: { text: '🏠 여관 대기 중', cls: 'status-idle' },
+      const statusLabels: Record<
+        HeroState['status'],
+        { text: string; cls: string }
+      > = {
+        idle: { text: '🏠 여관 활동 중', cls: 'status-idle' },
         exploring: { text: '🗺️ 던전 원정 중', cls: 'status-exploring' },
         resting: { text: '🛏️ 휴식 중', cls: 'status-resting' },
         injured: {
@@ -767,12 +1228,20 @@ class InnAppController {
       textWrap.className = 'upgrade-text-wrap';
       textWrap.innerHTML = `
         <div class="upgrade-title-row">
-          <span class="upgrade-name">${roster.name} <small class="hero-title-sub">(${roster.title})</small></span>
-          <span class="upgrade-level-badge">Lv.${state.level} (XP ${state.xp}/${reqXp})</span>
-          <span class="role-badge role-${cls.role}">${cls.icon} ${cls.name} · ${cls.roleName}</span>
+          <span class="upgrade-name">${roster.name} <small class="hero-title-sub">(${
+        roster.title
+      })</small></span>
+          <span class="upgrade-level-badge">Lv.${state.level} (XP ${
+        state.xp
+      }/${reqXp})</span>
+          <span class="role-badge role-${cls.role}">${cls.icon} ${cls.name} · ${
+        cls.roleName
+      }</span>
           <span class="status-pill ${stInfo.cls}">${stInfo.text}</span>
         </div>
-        <p class="upgrade-desc">${roster.backstory}</p>
+        <p class="upgrade-desc">🧭 현재 의도: <b>${
+          state.intentText ?? '여관 홀 대기 중'
+        }</b></p>
         <div class="trait-row">
           ${roster.personalities
             .map(
@@ -780,15 +1249,29 @@ class InnAppController {
                 `<span class="trait-chip" title="${PERSONALITIES[p].description}">${PERSONALITIES[p].icon} ${PERSONALITIES[p].name}</span>`
             )
             .join('')}
-          <span class="trait-chip origin-chip" title="${origin.description}">${origin.icon} ${origin.name}: ${origin.description}</span>
-          <span class="trait-chip gold-chip">💰 개인 골드 ${formatGold(state.gold)} G</span>
+          <span class="trait-chip origin-chip" title="${origin.description}">${
+        origin.icon
+      } ${origin.name}</span>
+          <span class="trait-chip gold-chip">💰 ${formatGold(state.gold)} G</span>
+          <span class="trait-chip">🍖 허기 ${Math.round(state.hunger ?? 20)}%</span>
+          <span class="trait-chip">💦 피로 ${Math.round(
+            state.fatigue ?? 10
+          )}%</span>
         </div>
         <div class="stat-pill-row">
           <span>⚔️전투력 <b>${bd.combatPower}</b></span>
-          <span>ATK <b>${bd.totalStats.atk}</b> <small>(+${bd.equipStats.atk})</small></span>
-          <span>DEF <b>${bd.totalStats.def}</b> <small>(+${bd.equipStats.def})</small></span>
-          <span>AGI <b>${bd.totalStats.agi}</b> <small>(+${bd.equipStats.agi})</small></span>
-          <span>INT <b>${bd.totalStats.int}</b> <small>(+${bd.equipStats.int})</small></span>
+          <span>ATK <b>${bd.totalStats.atk}</b> <small>(+${
+        bd.equipStats.atk
+      })</small></span>
+          <span>DEF <b>${bd.totalStats.def}</b> <small>(+${
+        bd.equipStats.def
+      })</small></span>
+          <span>AGI <b>${bd.totalStats.agi}</b> <small>(+${
+        bd.equipStats.agi
+      })</small></span>
+          <span>INT <b>${bd.totalStats.int}</b> <small>(+${
+        bd.equipStats.int
+      })</small></span>
           <span>HP <b>${state.currentHp}/${bd.totalStats.hp}</b></span>
           <span>LUK <b>${bd.totalStats.luk}</b></span>
         </div>
@@ -855,7 +1338,6 @@ class InnAppController {
         const btnRow = document.createElement('div');
         btnRow.className = 'equip-slot-actions';
 
-        // 기본 장비가 아니면 +강화 버튼 제공
         if (!def.isBase && inst.enhanceLevel < 15) {
           const enhPreview = this.game.getEnhancePreview({
             heroId: state.id,
@@ -874,7 +1356,6 @@ class InnAppController {
           }
         }
 
-        // 대장간 재고 중 이 영웅이 해당 슬롯에 장착 가능한 장비가 있으면 즉시 장착 버튼 제공
         const compatibleStock = this.game.equipmentStock.filter((s) => {
           const sDef = EQUIPMENT_DEF_MAP[s.defId];
           return sDef && sDef.slot === slot && canClassEquip(cls.id, sDef);
@@ -890,6 +1371,7 @@ class InnAppController {
           } 장착`;
           eqBtn.addEventListener('click', () => {
             this.game.equipItemToHero(state.id, bestStock.uid);
+            this.renderHeroInspectorPanel(true);
             this.buildTabCards();
           });
           btnRow.appendChild(eqBtn);
@@ -901,9 +1383,22 @@ class InnAppController {
 
       card.appendChild(equipGrid);
 
-      // 하단 여관 케어 액션 바 (요리 대접 / 특실 휴식 / 포션 지급)
+      // 하단 액션 바 (맵에서 상태/행동 지시 열기 + 요리 대접 / 특실 회복 / 포션 지급)
       const actionBar = document.createElement('div');
       actionBar.className = 'hero-care-bar';
+
+      const inspectBtn = document.createElement('button');
+      inspectBtn.type = 'button';
+      inspectBtn.className = `care-btn${
+        this.game.selectedHeroId === state.id ? ' active-toggle' : ''
+      }`;
+      inspectBtn.textContent = '🎯 상태 확인 & 행동 지시';
+      inspectBtn.addEventListener('click', () => {
+        this.game.selectedHeroId = state.id;
+        this.renderHeroInspectorPanel(true);
+        this.buildTabCards();
+      });
+      actionBar.appendChild(inspectBtn);
 
       const mealBtn = document.createElement('button');
       mealBtn.type = 'button';
@@ -916,6 +1411,7 @@ class InnAppController {
       mealBtn.textContent = `${topMeal.icon} 요리 대접 (${treatCost}G)`;
       mealBtn.addEventListener('click', () => {
         if (this.game.treatHeroMeal(state.id, topMeal.upgradeId)) {
+          this.renderHeroInspectorPanel(true);
           this.buildTabCards();
         }
       });
@@ -929,13 +1425,13 @@ class InnAppController {
         restBtn.textContent = `🛏️ 특실 즉시 회복 (10G)`;
         restBtn.addEventListener('click', () => {
           if (this.game.restHeroInRoom(state.id)) {
+            this.renderHeroInspectorPanel(true);
             this.buildTabCards();
           }
         });
         actionBar.appendChild(restBtn);
       }
 
-      // 보유 중인 포션 지급 버튼
       const availPotion = POTION_RECIPES.slice()
         .reverse()
         .find((p) => (this.game.potionStock[p.id] ?? 0) > 0);
@@ -943,11 +1439,12 @@ class InnAppController {
         const potBtn = document.createElement('button');
         potBtn.type = 'button';
         potBtn.className = 'care-btn potion-btn';
-        potBtn.textContent = `${availPotion.icon} ${availPotion.name} 지급 (재고 ${
-          this.game.potionStock[availPotion.id]
-        })`;
+        potBtn.textContent = `${availPotion.icon} ${
+          availPotion.name
+        } 지급 (${this.game.potionStock[availPotion.id]})`;
         potBtn.addEventListener('click', () => {
           if (this.game.givePotionToHero(state.id, availPotion.id, false)) {
+            this.renderHeroInspectorPanel(true);
             this.buildTabCards();
           }
         });
@@ -960,19 +1457,333 @@ class InnAppController {
   }
 
   // --------------------------------------------------------------------------
-  // 2. 🗺️ 던전 & 파티 시너지 미리보기 탭 (10.4 필수 요구사항)
+  // 2. 💎 상점 판매 설정 & 전리품 거래소 탭 (섹션 2 필수 요구사항)
+  // --------------------------------------------------------------------------
+  private buildTradeTab(): void {
+    const cfg = this.game.shopConfig;
+
+    // 1. 플레이어 상점 무대 설정 패널 (판매가·판매 등록·매입 시세·대장간 의뢰 설정)
+    const stageConfigPanel = document.createElement('div');
+    stageConfigPanel.className = 'section-panel';
+    stageConfigPanel.innerHTML = `
+      <div class="panel-subtitle">🎪 여관 상점 판매 &amp; 전리품 매입 시세 설정 (영웅 자율 반응)</div>
+      <p class="upgrade-desc">판매 물품을 등록하거나 매입 가격을 바꾸면 영웅들이 해당 구역으로 직접 걸어가 거래합니다. 가격이 높으면 불평하거나 망설이고, 할인하면 만족도가 올라갑니다.</p>
+
+      <div class="market-config-grid">
+        <div class="market-config-box">
+          <div class="mc-header">
+            <strong>🍲 식당·바 요리 판매</strong>
+            <button type="button" id="btn-toggle-meal-sale" class="mc-toggle-btn ${
+              cfg.mealSaleEnabled ? 'on' : 'off'
+            }">${cfg.mealSaleEnabled ? '판매 중 (ON)' : '판매 중단 (OFF)'}</button>
+          </div>
+          <div class="mc-rate-row">
+            ${[
+              { m: 0.8, label: '80% 할인' },
+              { m: 1.0, label: '100% 정가' },
+              { m: 1.25, label: '125% 할증' },
+              { m: 1.5, label: '150% 고급' },
+            ]
+              .map(
+                (opt) =>
+                  `<button type="button" class="mc-chip ${
+                    cfg.mealPriceMultiplier === opt.m ? 'active' : ''
+                  }" data-meal-mult="${opt.m}">${opt.label}</button>`
+              )
+              .join('')}
+          </div>
+        </div>
+
+        <div class="market-config-box">
+          <div class="mc-header">
+            <strong>⚗️ 포션 가게 판매 시세</strong>
+            <span class="mc-sub-note">재고 ${Object.values(
+              this.game.potionStock
+            ).reduce((a, b) => a + b, 0)}병</span>
+          </div>
+          <div class="mc-rate-row">
+            ${[
+              { m: 0.8, label: '80% 할인' },
+              { m: 1.0, label: '100% 정가' },
+              { m: 1.25, label: '125% 할증' },
+              { m: 1.5, label: '150% 고급' },
+            ]
+              .map(
+                (opt) =>
+                  `<button type="button" class="mc-chip ${
+                    cfg.potionPriceMultiplier === opt.m ? 'active' : ''
+                  }" data-pot-mult="${opt.m}">${opt.label}</button>`
+              )
+              .join('')}
+          </div>
+        </div>
+
+        <div class="market-config-box">
+          <div class="mc-header">
+            <strong>⚒️ 대장간 장비 판매 &amp; 강화 의뢰</strong>
+            <button type="button" id="btn-toggle-smith-sale" class="mc-toggle-btn ${
+              cfg.blacksmithSaleEnabled ? 'on' : 'off'
+            }">${
+      cfg.blacksmithSaleEnabled ? '판매 허용 (ON)' : '판매 중단 (OFF)'
+    }</button>
+          </div>
+          <div class="mc-rate-row">
+            ${[
+              { m: 0.8, label: '80% 할인' },
+              { m: 1.0, label: '100% 정가' },
+              { m: 1.25, label: '125% 할증' },
+            ]
+              .map(
+                (opt) =>
+                  `<button type="button" class="mc-chip ${
+                    cfg.blacksmithPriceMultiplier === opt.m ? 'active' : ''
+                  }" data-smith-mult="${opt.m}">${opt.label}</button>`
+              )
+              .join('')}
+            <button type="button" id="btn-toggle-auto-enh" class="mc-chip ${
+              cfg.blacksmithAutoEnhanceEnabled ? 'active' : ''
+            }">🔥 영웅 자율 +강화 의뢰: ${
+      cfg.blacksmithAutoEnhanceEnabled ? 'ON' : 'OFF'
+    }</button>
+          </div>
+        </div>
+
+        <div class="market-config-box">
+          <div class="mc-header">
+            <strong>💎 전리품 일괄 매입 시세</strong>
+            <button type="button" id="btn-toggle-autobuy" class="mc-toggle-btn ${
+              this.game.autoBuyLoot ? 'on' : 'off'
+            }">가판대 자동매입: ${this.game.autoBuyLoot ? 'ON' : 'OFF'}</button>
+          </div>
+          <div class="mc-rate-row">
+            ${[
+              { r: 75, label: '75% 저가' },
+              { r: 90, label: '90% 알뜰' },
+              { r: 100, label: '100% 정가' },
+              { r: 115, label: '115% 우대' },
+            ]
+              .map(
+                (opt) =>
+                  `<button type="button" class="mc-chip ${
+                    cfg.lootBuyRatePct === opt.r ? 'active' : ''
+                  }" data-loot-rate="${opt.r}">${opt.label}</button>`
+              )
+              .join('')}
+          </div>
+        </div>
+      </div>
+    `;
+
+    this.elUpgradeList.appendChild(stageConfigPanel);
+
+    // 설정 버튼 이벤트 바인딩
+    document
+      .getElementById('btn-toggle-meal-sale')
+      ?.addEventListener('click', () => {
+        cfg.mealSaleEnabled = !cfg.mealSaleEnabled;
+        this.buildTabCards();
+      });
+    document
+      .getElementById('btn-toggle-smith-sale')
+      ?.addEventListener('click', () => {
+        cfg.blacksmithSaleEnabled = !cfg.blacksmithSaleEnabled;
+        this.buildTabCards();
+      });
+    document
+      .getElementById('btn-toggle-auto-enh')
+      ?.addEventListener('click', () => {
+        cfg.blacksmithAutoEnhanceEnabled = !cfg.blacksmithAutoEnhanceEnabled;
+        this.buildTabCards();
+      });
+    document
+      .getElementById('btn-toggle-autobuy')
+      ?.addEventListener('click', () => {
+        this.game.autoBuyLoot = !this.game.autoBuyLoot;
+        this.buildTabCards();
+      });
+
+    stageConfigPanel
+      .querySelectorAll<HTMLButtonElement>('[data-meal-mult]')
+      .forEach((btn) => {
+        btn.addEventListener('click', () => {
+          cfg.mealPriceMultiplier = Number(btn.dataset.mealMult);
+          this.buildTabCards();
+        });
+      });
+    stageConfigPanel
+      .querySelectorAll<HTMLButtonElement>('[data-pot-mult]')
+      .forEach((btn) => {
+        btn.addEventListener('click', () => {
+          cfg.potionPriceMultiplier = Number(btn.dataset.potMult);
+          this.buildTabCards();
+        });
+      });
+    stageConfigPanel
+      .querySelectorAll<HTMLButtonElement>('[data-smith-mult]')
+      .forEach((btn) => {
+        btn.addEventListener('click', () => {
+          cfg.blacksmithPriceMultiplier = Number(btn.dataset.smithMult);
+          this.buildTabCards();
+        });
+      });
+    stageConfigPanel
+      .querySelectorAll<HTMLButtonElement>('[data-loot-rate]')
+      .forEach((btn) => {
+        btn.addEventListener('click', () => {
+          cfg.lootBuyRatePct = Number(btn.dataset.lootRate);
+          this.buildTabCards();
+        });
+      });
+
+    // 2. 현재 영웅 가방 전리품 매입소
+    const summary = this.game.getPendingLootSummary();
+    const tradeTopPanel = document.createElement('div');
+    tradeTopPanel.className = 'section-panel';
+
+    const headerRow = document.createElement('div');
+    headerRow.className = 'trade-header-row';
+    headerRow.innerHTML = `
+      <div>
+        <div class="panel-subtitle">💰 거래 가판대 — 영웅 전리품 대기 목록 (${
+          summary.totalCount
+        }개 / 매입 총액 ${formatGold(summary.totalCost)} G)</div>
+        <p class="upgrade-desc">영웅이 거래 가판대에 도착하면 켜져 있는 매입 품목을 자동 판매합니다. 여기서 즉시 수동 매입할 수도 있습니다.</p>
+      </div>
+    `;
+
+    const actionWrap = document.createElement('div');
+    actionWrap.className = 'party-header-btns';
+
+    const buyAllBtn = document.createElement('button');
+    buyAllBtn.type = 'button';
+    buyAllBtn.className = 'buy-btn';
+    buyAllBtn.disabled = summary.totalCount === 0 || this.game.gold < 4;
+    buyAllBtn.innerHTML = `
+      <span class="buy-btn-label">켜진 품목 일괄 매입</span>
+      <span class="buy-btn-cost">${formatGold(summary.totalCost)} G</span>
+    `;
+    buyAllBtn.addEventListener('click', () => {
+      this.game.buyAllHeroLoot(0);
+      this.buildTabCards();
+    });
+    actionWrap.appendChild(buyAllBtn);
+    headerRow.appendChild(actionWrap);
+    tradeTopPanel.appendChild(headerRow);
+
+    if (summary.items.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'empty-hint';
+      empty.textContent =
+        '현재 영웅 가방에 매입 대기 중인 전리품이 없습니다. 던전 원정대가 귀환하면 거래 가판대로 걸어옵니다.';
+      tradeTopPanel.appendChild(empty);
+    } else {
+      for (const item of summary.items) {
+        const rarity =
+          RARITY_INFO[item.rarity as keyof typeof RARITY_INFO] ??
+          RARITY_INFO.common;
+        const row = document.createElement('div');
+        row.className = 'upgrade-card compact-card';
+        row.innerHTML = `
+          <div class="upgrade-info">
+            <div class="upgrade-icon">${item.icon}</div>
+            <div class="upgrade-text-wrap">
+              <div class="upgrade-title-row">
+                <span class="upgrade-name" style="color:${rarity.color}">${
+          item.materialName
+        } x${item.count}</span>
+                <span class="upgrade-level-badge">보유: ${item.heroName}</span>
+                <span class="upgrade-level-badge">매입 단가 ${
+                  item.unitPrice
+                }G (행상인 매각까지 ${Math.max(
+          0,
+          45 - Math.floor(item.ageSeconds)
+        )}초)</span>
+              </div>
+            </div>
+          </div>
+        `;
+        const bBtn = document.createElement('button');
+        bBtn.type = 'button';
+        bBtn.className = 'buy-btn';
+        bBtn.disabled = this.game.gold < item.unitPrice;
+        bBtn.innerHTML = `
+          <span class="buy-btn-label">즉시 매입</span>
+          <span class="buy-btn-cost">${formatGold(item.totalPrice)} G</span>
+        `;
+        bBtn.addEventListener('click', () => {
+          this.game.buyHeroLoot(item.heroId, item.materialId);
+          this.buildTabCards();
+        });
+        row.appendChild(bBtn);
+        tradeTopPanel.appendChild(row);
+      }
+    }
+    this.elUpgradeList.appendChild(tradeTopPanel);
+
+    // 3. 종류별 전리품 매입 켜기/끄기 & 여관 재료 창고 현황
+    const warehousePanel = document.createElement('div');
+    warehousePanel.className = 'section-panel';
+    warehousePanel.innerHTML = `
+      <div class="panel-subtitle">📦 종류별 전리품 매입 허용 설정 &amp; 여관 재료 창고 (행상인 안전 매각 누적: ${this.game.totalPeddlerSales}개)</div>
+      <p class="upgrade-desc">품목별 [매입 ON/OFF] 버튼을 눌러 특정 전리품만 매입하거나 차단할 수 있습니다.</p>
+    `;
+
+    const matGrid = document.createElement('div');
+    matGrid.className = 'warehouse-grid';
+    for (const m of MATERIALS) {
+      const cnt = this.game.materials[m.id] ?? 0;
+      const rInfo = RARITY_INFO[m.rarity];
+      const dName = DUNGEON_MAP[m.sourceDungeonId]?.name ?? m.sourceDungeonId;
+      const isBuyOn = cfg.lootBuyEnabled[m.id] !== false;
+      const effBuyPrice = this.game.getEffectiveMaterialBuyPrice(m.id);
+
+      const box = document.createElement('div');
+      box.className = 'warehouse-item';
+      box.style.borderColor = cnt > 0 ? rInfo.color : '#4e382b';
+      box.innerHTML = `
+        <div class="wh-top">
+          <span>${m.icon} <b style="color:${rInfo.color}">${m.name}</b></span>
+          <strong class="wh-count">${formatGold(cnt)}개</strong>
+        </div>
+        <div class="wh-sub">[${rInfo.label}] 매입가 ${effBuyPrice}G (정가 ${
+        m.buyPrice
+      }G) · ${dName}</div>
+        <div class="wh-action-row">
+          <button type="button" class="mc-toggle-btn ${
+            isBuyOn ? 'on' : 'off'
+          }" data-toggle-mat-buy="${m.id}">
+            ${isBuyOn ? '✅ 매입 ON' : '⛔ 매입 OFF'}
+          </button>
+        </div>
+      `;
+      matGrid.appendChild(box);
+    }
+    warehousePanel.appendChild(matGrid);
+    this.elUpgradeList.appendChild(warehousePanel);
+
+    warehousePanel
+      .querySelectorAll<HTMLButtonElement>('[data-toggle-mat-buy]')
+      .forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const mId = btn.dataset.toggleMatBuy!;
+          cfg.lootBuyEnabled[mId] = !(cfg.lootBuyEnabled[mId] !== false);
+          this.buildTabCards();
+        });
+      });
+  }
+
+  // --------------------------------------------------------------------------
+  // 3. 🗺️ 던전 & 파티 시너지 미리보기 탭
   // --------------------------------------------------------------------------
   private buildDungeonTab(): void {
     const maxPartySize = this.game.getMaxPartySize();
     const dungeon = DUNGEON_MAP[this.selectedDungeonId] ?? DUNGEONS[0];
 
-    // 가용하지 않은 영웅은 선택 목록에서 정리
     this.selectedPartyHeroIds = this.selectedPartyHeroIds.filter((id) => {
       const h = this.game.heroes[id];
       return h && h.unlocked && h.status === 'idle' && !h.expeditionId;
     });
 
-    // 1. 진행 중인 원정 현황 박스
     if (this.game.expeditions.length > 0) {
       const activeBox = document.createElement('div');
       activeBox.className = 'section-panel';
@@ -998,11 +1809,17 @@ class InnAppController {
         row.innerHTML = `
           <div class="exp-row-top">
             <strong>${d?.icon ?? '🗺️'} ${d?.name ?? exp.dungeonId}</strong>
-            <span>파티: ${names} (성공률 ${Math.round(exp.expectedSuccessRate * 100)}%)</span>
-            <strong class="mini-progress-text">${Math.ceil(exp.remainingSec)}초 남음</strong>
+            <span>파티: ${names} (성공률 ${Math.round(
+          exp.expectedSuccessRate * 100
+        )}%)</span>
+            <strong class="mini-progress-text">${exp.currentFloor ?? 1}/${
+          exp.totalFloors ?? 3
+        }층 · ${Math.ceil(exp.remainingSec)}초 남음</strong>
           </div>
           <div class="mini-progress-track">
-            <div class="mini-progress-fill" style="width:${pct.toFixed(1)}%"></div>
+            <div class="mini-progress-fill" style="width:${pct.toFixed(
+              1
+            )}%"></div>
           </div>
         `;
         activeBox.appendChild(row);
@@ -1010,11 +1827,9 @@ class InnAppController {
       this.elUpgradeList.appendChild(activeBox);
     }
 
-    // 2. 던전 선택 & 파티 시너지 미리보기 패널
     const builderPanel = document.createElement('div');
     builderPanel.className = 'section-panel synergy-builder-panel';
 
-    // 던전 선택 버튼 행
     const dungeonSelector = document.createElement('div');
     dungeonSelector.className = 'sub-filter-bar';
     for (const d of DUNGEONS) {
@@ -1025,7 +1840,9 @@ class InnAppController {
         this.selectedDungeonId === d.id ? ' active' : ''
       }${unlocked ? '' : ' chip-locked'}`;
       const clears = this.game.dungeonClears[d.id] ?? 0;
-      btn.textContent = `${unlocked ? d.icon : '🔒'} T${d.tier}. ${d.name} (${clears}회)`;
+      btn.textContent = `${unlocked ? d.icon : '🔒'} T${d.tier}. ${
+        d.name
+      } (${clears}회)`;
       btn.addEventListener('click', () => {
         this.selectedDungeonId = d.id;
         this.buildTabCards();
@@ -1034,7 +1851,6 @@ class InnAppController {
     }
     builderPanel.appendChild(dungeonSelector);
 
-    // 선택된 던전 상세 요구치
     const dUnlocked = this.game.isDungeonUnlocked(dungeon.id);
     const dInfo = document.createElement('div');
     dInfo.className = 'dungeon-detail-box';
@@ -1069,7 +1885,6 @@ class InnAppController {
     `;
     builderPanel.appendChild(dInfo);
 
-    // 파티원 선택 로스터 (클릭하여 추가/제거 + 자동 최적 시너지 편성 버튼)
     const partyHeader = document.createElement('div');
     partyHeader.className = 'party-picker-header';
     partyHeader.innerHTML = `
@@ -1099,7 +1914,7 @@ class InnAppController {
     autoDispatchBtn.className = `care-btn${
       this.game.autoDispatch ? ' active-toggle' : ''
     }`;
-    autoDispatchBtn.textContent = `🤖 자동 파견: ${
+    autoDispatchBtn.textContent = `🤖 영웅 자율 파티·출발: ${
       this.game.autoDispatch ? 'ON' : 'OFF'
     }`;
     autoDispatchBtn.addEventListener('click', () => {
@@ -1148,7 +1963,6 @@ class InnAppController {
     }
     builderPanel.appendChild(heroPickerGrid);
 
-    // 10.4 출발 전 파티 시너지 미리보기 박스 (핵심!)
     const selectedHeroes = this.selectedPartyHeroIds
       .map((id) => this.game.heroes[id])
       .filter((h): h is HeroState => Boolean(h));
@@ -1162,7 +1976,9 @@ class InnAppController {
         ? preview.personalityMatches
             .map(
               (pm) =>
-                `<div class="syn-line ${pm.isPositive ? 'syn-good' : 'syn-bad'}">
+                `<div class="syn-line ${
+                  pm.isPositive ? 'syn-good' : 'syn-bad'
+                }">
                   ${pm.isPositive ? '💚' : '💔'} <b>${pm.title}</b> (${
                   pm.bonus >= 0 ? '+' : ''
                 }${Math.round(pm.bonus * 100)}%) — ${pm.description}
@@ -1174,7 +1990,9 @@ class InnAppController {
     const originLines = preview.originPassives
       .map(
         (op) =>
-          `<div class="syn-line ${op.successBonus > 0 ? 'syn-good' : 'syn-neutral'}">
+          `<div class="syn-line ${
+            op.successBonus > 0 ? 'syn-good' : 'syn-neutral'
+          }">
             ${op.icon} <b>[${op.heroName} · ${op.originName}]</b> ${op.bonusText}
           </div>`
       )
@@ -1227,7 +2045,10 @@ class InnAppController {
         </div>
         <div class="syn-group">
           <div class="syn-group-title">3. 출신 배경 패시브 &amp; 세트 시너지</div>
-          ${originLines || '<div class="syn-line syn-neutral">• 파티원을 선택하세요</div>'}
+          ${
+            originLines ||
+            '<div class="syn-line syn-neutral">• 파티원을 선택하세요</div>'
+          }
           ${setLines.join('')}
         </div>
       </div>
@@ -1237,11 +2058,15 @@ class InnAppController {
     } · AGI ${preview.partyStats.agi} · INT ${preview.partyStats.int} · HP ${
       preview.partyStats.hp
     } · LUK ${preview.partyStats.luk}) →
-        <b>기본 스탯 성공률 ${Math.round(preview.baseStatSuccessRate * 100)}%</b> +
-        <b>시너지 합계 ${preview.totalSynergyDelta >= 0 ? '+' : ''}${Math.round(
-      preview.totalSynergyDelta * 100
-    )}%</b> +
-        <b>음식·포션·숙면 버프 +${Math.round(preview.buffSuccessBonus * 100)}%</b> =
+        <b>기본 스탯 성공률 ${Math.round(
+          preview.baseStatSuccessRate * 100
+        )}%</b> +
+        <b>시너지 합계 ${
+          preview.totalSynergyDelta >= 0 ? '+' : ''
+        }${Math.round(preview.totalSynergyDelta * 100)}%</b> +
+        <b>음식·포션·숙면 버프 +${Math.round(
+          preview.buffSuccessBonus * 100
+        )}%</b> =
         <strong class="gold-highlight">${Math.round(
           preview.finalSuccessRate * 100
         )}%</strong>
@@ -1249,7 +2074,6 @@ class InnAppController {
     `;
     builderPanel.appendChild(synBox);
 
-    // 출정 버튼
     const dispatchBtn = document.createElement('button');
     dispatchBtn.type = 'button';
     dispatchBtn.className = 'primary-action-btn dispatch-submit-btn';
@@ -1259,7 +2083,7 @@ class InnAppController {
       this.game.expeditions.length < this.game.getMaxConcurrentExpeditions();
     dispatchBtn.disabled = !canSend;
     dispatchBtn.innerHTML = `
-      <span class="btn-main-label">🚀 [${dungeon.name}] 원정대 파견하기 (${
+      <span class="btn-main-label">🚀 [${dungeon.name}] 원정대 즉시 파견하기 (${
       preview.heroNames.join(' · ') || '파티원 미선택'
     })</span>
       <span class="btn-sub-label">예상 성공률 ${Math.round(
@@ -1269,18 +2093,17 @@ class InnAppController {
     dispatchBtn.addEventListener('click', () => {
       if (this.game.dispatchParty(dungeon.id, this.selectedPartyHeroIds)) {
         this.autoSelectInitialParty();
-        this.buildTabCards();
+        this.refreshAllUi(true);
       }
     });
     builderPanel.appendChild(dispatchBtn);
 
     this.elUpgradeList.appendChild(builderPanel);
 
-    // 3. 최근 탐험 결과 내역
     if (this.game.recentExpeditionResults.length > 0) {
       const historyBox = document.createElement('div');
       historyBox.className = 'section-panel';
-      historyBox.innerHTML = `<div class="panel-subtitle">📜 최근 던전 원정 결과</div>`;
+      historyBox.innerHTML = `<div class="panel-subtitle">📜 최근 던전 원정 결과 (층별 진행 요약)</div>`;
       for (const res of this.game.recentExpeditionResults.slice(0, 5)) {
         const lootStr = Object.entries(res.lootDropped)
           .map(([mId, cnt]) => `${MATERIAL_MAP[mId]?.name ?? mId} x${cnt}`)
@@ -1289,7 +2112,11 @@ class InnAppController {
         row.className = `history-row ${res.success ? 'win' : 'lose'}`;
         row.innerHTML = `
           <div>
-            <strong>${res.success ? '🏆 성공' : '💥 실패'} — ${res.dungeonName}</strong>
+            <strong>${
+              res.success
+                ? `🏆 전 층(${res.totalFloors ?? 3}F) 공략 성공`
+                : `💥 ${res.reachedFloor ?? 2}층에서 후퇴`
+            } — ${res.dungeonName}</strong>
             <span>(${res.heroNames.join('·')} / 확률 ${Math.round(
           res.successRateUsed * 100
         )}% / ${res.synergySummaryText})</span>
@@ -1311,144 +2138,16 @@ class InnAppController {
   }
 
   // --------------------------------------------------------------------------
-  // 3. 💎 거래 & 플레이어 재료 창고 탭 (전리품 매입 순환)
-  // --------------------------------------------------------------------------
-  private buildTradeTab(): void {
-    const summary = this.game.getPendingLootSummary();
-
-    const tradeTopPanel = document.createElement('div');
-    tradeTopPanel.className = 'section-panel';
-
-    const headerRow = document.createElement('div');
-    headerRow.className = 'trade-header-row';
-    headerRow.innerHTML = `
-      <div>
-        <div class="panel-subtitle">💰 영웅 전리품 매입소 (대기 ${summary.totalCount}개 / 총 ${formatGold(
-      summary.totalCost
-    )} G)</div>
-        <p class="upgrade-desc">영웅이 가져온 전리품을 골드로 매입하면 영웅은 현금을 얻어 여관 음식·포션·대장간 장비를 구매합니다. (45초 미매입 시 행상인에게 저가 자동 매각되어 교착을 방지합니다)</p>
-      </div>
-    `;
-
-    const actionWrap = document.createElement('div');
-    actionWrap.className = 'party-header-btns';
-
-    const buyAllBtn = document.createElement('button');
-    buyAllBtn.type = 'button';
-    buyAllBtn.className = 'buy-btn';
-    buyAllBtn.disabled = summary.totalCount === 0 || this.game.gold < 6;
-    buyAllBtn.innerHTML = `
-      <span class="buy-btn-label">전체 일괄 매입</span>
-      <span class="buy-btn-cost">${formatGold(summary.totalCost)} G</span>
-    `;
-    buyAllBtn.addEventListener('click', () => {
-      this.game.buyAllHeroLoot(0);
-      this.buildTabCards();
-    });
-    actionWrap.appendChild(buyAllBtn);
-
-    const autoBuyBtn = document.createElement('button');
-    autoBuyBtn.type = 'button';
-    autoBuyBtn.className = `care-btn${
-      this.game.autoBuyLoot ? ' active-toggle' : ''
-    }`;
-    autoBuyBtn.textContent = `🤖 자동 매입: ${
-      this.game.autoBuyLoot ? 'ON' : 'OFF'
-    }`;
-    autoBuyBtn.addEventListener('click', () => {
-      this.game.autoBuyLoot = !this.game.autoBuyLoot;
-      this.buildTabCards();
-    });
-    actionWrap.appendChild(autoBuyBtn);
-
-    headerRow.appendChild(actionWrap);
-    tradeTopPanel.appendChild(headerRow);
-
-    if (summary.items.length === 0) {
-      const empty = document.createElement('p');
-      empty.className = 'empty-hint';
-      empty.textContent =
-        '현재 영웅 가방에 매입 대기 중인 전리품이 없습니다. 던전 원정대가 귀환하면 여기에 표시됩니다.';
-      tradeTopPanel.appendChild(empty);
-    } else {
-      for (const item of summary.items) {
-        const rarity =
-          RARITY_INFO[item.rarity as keyof typeof RARITY_INFO] ??
-          RARITY_INFO.common;
-        const row = document.createElement('div');
-        row.className = 'upgrade-card compact-card';
-        row.innerHTML = `
-          <div class="upgrade-info">
-            <div class="upgrade-icon">${item.icon}</div>
-            <div class="upgrade-text-wrap">
-              <div class="upgrade-title-row">
-                <span class="upgrade-name" style="color:${rarity.color}">${
-          item.materialName
-        } x${item.count}</span>
-                <span class="upgrade-level-badge">보유 영웅: ${item.heroName}</span>
-                <span class="upgrade-level-badge">개당 ${item.unitPrice}G (행상인 매각까지 ${Math.max(
-          0,
-          45 - Math.floor(item.ageSeconds)
-        )}초)</span>
-              </div>
-            </div>
-          </div>
-        `;
-        const bBtn = document.createElement('button');
-        bBtn.type = 'button';
-        bBtn.className = 'buy-btn';
-        bBtn.disabled = this.game.gold < item.unitPrice;
-        bBtn.innerHTML = `
-          <span class="buy-btn-label">매입</span>
-          <span class="buy-btn-cost">${formatGold(item.totalPrice)} G</span>
-        `;
-        bBtn.addEventListener('click', () => {
-          this.game.buyHeroLoot(item.heroId, item.materialId);
-          this.buildTabCards();
-        });
-        row.appendChild(bBtn);
-        tradeTopPanel.appendChild(row);
-      }
-    }
-
-    this.elUpgradeList.appendChild(tradeTopPanel);
-
-    // 플레이어 재료 창고 현황
-    const warehousePanel = document.createElement('div');
-    warehousePanel.className = 'section-panel';
-    warehousePanel.innerHTML = `<div class="panel-subtitle">📦 여관 전리품 재료 창고 (행상인 안전 매각 누적: ${this.game.totalPeddlerSales}개)</div>`;
-
-    const matGrid = document.createElement('div');
-    matGrid.className = 'warehouse-grid';
-    for (const m of MATERIALS) {
-      const cnt = this.game.materials[m.id] ?? 0;
-      const rInfo = RARITY_INFO[m.rarity];
-      const dName = DUNGEON_MAP[m.sourceDungeonId]?.name ?? m.sourceDungeonId;
-      const box = document.createElement('div');
-      box.className = 'warehouse-item';
-      box.style.borderColor = cnt > 0 ? rInfo.color : '#3b2820';
-      box.innerHTML = `
-        <div class="wh-top">
-          <span>${m.icon} <b style="color:${rInfo.color}">${m.name}</b></span>
-          <strong class="wh-count">${formatGold(cnt)}개</strong>
-        </div>
-        <div class="wh-sub">[${rInfo.label}] 정가 ${m.buyPrice}G · 획득처: ${dName}</div>
-      `;
-      matGrid.appendChild(box);
-    }
-    warehousePanel.appendChild(matGrid);
-    this.elUpgradeList.appendChild(warehousePanel);
-  }
-
-  // --------------------------------------------------------------------------
-  // 4. ⚗️ 포션 가게 탭 (도구/시설 6종 · 포션 레시피 8종 · 제작 큐 · 재고)
+  // 4. ⚗️ 포션 가게 탭 (판매 등록 토글 + 레시피 조제 + 도구 업그레이드)
   // --------------------------------------------------------------------------
   private buildPotionTab(): void {
-    // 1. 제작 큐 & 포션 재고 현황
     const statusPanel = document.createElement('div');
     statusPanel.className = 'section-panel';
     const maxSlots = this.game.getMaxCraftSlots('potion');
-    statusPanel.innerHTML = `<div class="panel-subtitle">⚗️ 연금 제작대 큐 (${this.game.craftQueues.potion.length}/${maxSlots}슬롯) &amp; 포션 가게 재고</div>`;
+    statusPanel.innerHTML = `
+      <div class="panel-subtitle">⚗️ 연금 제작대 큐 (${this.game.craftQueues.potion.length}/${maxSlots}슬롯) &amp; 포션 가게 판매 진열대</div>
+      <p class="upgrade-desc">포션별 <b>[판매 등록 ON/OFF]</b>를 켜 두면 영웅들이 포션 가게 코너로 걸어와 구매합니다.</p>
+    `;
 
     if (this.game.craftQueues.potion.length > 0) {
       for (const q of this.game.craftQueues.potion) {
@@ -1461,12 +2160,16 @@ class InnAppController {
         );
         row.innerHTML = `
           <div class="exp-row-top">
-            <strong>${rec?.icon ?? '🧪'} ${rec?.name ?? q.recipeId} 조제 중...</strong>
+            <strong>${rec?.icon ?? '🧪'} ${
+          rec?.name ?? q.recipeId
+        } 조제 중...</strong>
             <span>성공 확률 ${Math.round(q.successRate * 100)}%</span>
             <strong>${Math.ceil(q.remainingSec)}초 남음</strong>
           </div>
           <div class="mini-progress-track">
-            <div class="mini-progress-fill" style="width:${pct.toFixed(1)}%"></div>
+            <div class="mini-progress-fill" style="width:${pct.toFixed(
+              1
+            )}%"></div>
           </div>
         `;
         statusPanel.appendChild(row);
@@ -1478,6 +2181,9 @@ class InnAppController {
     for (const pr of POTION_RECIPES) {
       const cnt = this.game.potionStock[pr.id] ?? 0;
       const rInfo = RARITY_INFO[pr.rarity];
+      const effPrice = this.game.getEffectivePotionSellPrice(pr.id);
+      const isSaleOn = this.game.shopConfig.potionSaleEnabled[pr.id] !== false;
+
       const box = document.createElement('div');
       box.className = 'warehouse-item';
       box.innerHTML = `
@@ -1485,17 +2191,38 @@ class InnAppController {
           <span>${pr.icon} <b style="color:${rInfo.color}">${pr.name}</b></span>
           <strong class="wh-count">${cnt}병</strong>
         </div>
-        <div class="wh-sub">영웅 판매가 ${pr.sellPriceToHero}G · ${pr.effectText}</div>
+        <div class="wh-sub">판매가 ${effPrice}G (정가 ${pr.sellPriceToHero}G) · ${
+        pr.effectText
+      }</div>
+        <div class="wh-action-row">
+          <button type="button" class="mc-toggle-btn ${
+            isSaleOn ? 'on' : 'off'
+          }" data-toggle-pot-sale="${pr.id}">
+            ${isSaleOn ? '✅ 판매 등록 ON' : '⛔ 판매 보류 OFF'}
+          </button>
+        </div>
       `;
       stockGrid.appendChild(box);
     }
     statusPanel.appendChild(stockGrid);
     this.elUpgradeList.appendChild(statusPanel);
 
-    // 2. 포션 조제 레시피 목록
+    statusPanel
+      .querySelectorAll<HTMLButtonElement>('[data-toggle-pot-sale]')
+      .forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const pId = btn.dataset.togglePotSale!;
+          this.game.shopConfig.potionSaleEnabled[pId] = !(
+            this.game.shopConfig.potionSaleEnabled[pId] !== false
+          );
+          this.buildTabCards();
+        });
+      });
+
     const recipeHeader = document.createElement('div');
     recipeHeader.className = 'panel-subtitle';
-    recipeHeader.textContent = '📜 포션 조제 레시피 (영웅이 탐험 전 자동 구매하거나 영웅 탭에서 직접 지급)';
+    recipeHeader.textContent =
+      '📜 포션 조제 레시피 (영웅이 포션 가게로 걸어와 구매하거나 직접 지급)';
     this.elUpgradeList.appendChild(recipeHeader);
 
     for (const rec of POTION_RECIPES) {
@@ -1527,11 +2254,15 @@ class InnAppController {
           <div class="upgrade-icon">${rec.icon}</div>
           <div class="upgrade-text-wrap">
             <div class="upgrade-title-row">
-              <span class="upgrade-name" style="color:${rInfo.color}">${rec.name}</span>
+              <span class="upgrade-name" style="color:${rInfo.color}">${
+        rec.name
+      }</span>
               <span class="upgrade-level-badge">성공률 ${Math.round(
                 preview.successRate * 100
               )}% · ${preview.durationSec}초</span>
-              <span class="upgrade-level-badge">판매가 ${rec.sellPriceToHero}G</span>
+              <span class="upgrade-level-badge">판매가 ${this.game.getEffectivePotionSellPrice(
+                rec.id
+              )}G</span>
             </div>
             <p class="upgrade-desc">${rec.description}</p>
             <p class="upgrade-effects">효과: ${rec.effectText}</p>
@@ -1566,7 +2297,6 @@ class InnAppController {
       this.elUpgradeList.appendChild(card);
     }
 
-    // 3. 포션 가게 도구 및 시설 업그레이드
     const toolHeader = document.createElement('div');
     toolHeader.className = 'panel-subtitle';
     toolHeader.textContent = '🔧 연금 도구 · 약초 정원 · 작업실 건설 및 강화';
@@ -1586,7 +2316,7 @@ class InnAppController {
     topPanel.className = 'section-panel';
     topPanel.innerHTML = `
       <div class="panel-subtitle">⚒️ 대장간 단조 큐 (${this.game.craftQueues.blacksmith.length}/${maxSlots}슬롯) &amp; 완성 장비 진열대 (${this.game.equipmentStock.length}개)</div>
-      <p class="upgrade-desc">완성된 장비는 영웅들이 번 골드로 자동 구매·장착하거나, 여기서 직접 영웅에게 입혀 주고 <b>+강화</b>를 시도할 수 있습니다.</p>
+      <p class="upgrade-desc">완성된 장비는 영웅들이 대장간 모루로 걸어와 구매·장착하거나, 여기서 직접 영웅에게 입혀 주고 <b>+강화</b>를 시도할 수 있습니다.</p>
     `;
 
     if (this.game.craftQueues.blacksmith.length > 0) {
@@ -1600,19 +2330,22 @@ class InnAppController {
         );
         row.innerHTML = `
           <div class="exp-row-top">
-            <strong>${def?.icon ?? '⚒️'} ${def?.name ?? q.recipeId} 단조 중...</strong>
+            <strong>${def?.icon ?? '⚒️'} ${
+          def?.name ?? q.recipeId
+        } 단조 중...</strong>
             <span>성공 확률 ${Math.round(q.successRate * 100)}%</span>
             <strong>${Math.ceil(q.remainingSec)}초 남음</strong>
           </div>
           <div class="mini-progress-track">
-            <div class="mini-progress-fill" style="width:${pct.toFixed(1)}%"></div>
+            <div class="mini-progress-fill" style="width:${pct.toFixed(
+              1
+            )}%"></div>
           </div>
         `;
         topPanel.appendChild(row);
       }
     }
 
-    // 완성 장비 진열대
     if (this.game.equipmentStock.length === 0) {
       const empty = document.createElement('p');
       empty.className = 'empty-hint';
@@ -1649,7 +2382,7 @@ class InnAppController {
               </div>
               <p class="upgrade-desc">착용 가능: ${getWearableClassesText(
                 def
-              )} | 영웅 구매가 ${def.buyPriceGold}G</p>
+              )} | 판매가 ${this.game.getEffectiveEquipSellPrice(def.id)}G</p>
             </div>
           </div>
         `;
@@ -1676,7 +2409,6 @@ class InnAppController {
       }
     }
 
-    // +강화 확률 곡선 안내 표 (9.4 필수 요구사항)
     const rateBox = document.createElement('div');
     rateBox.className = 'enhance-rate-table-box';
     const grindLv = this.game.blacksmithTools['smith_grindstone'] ?? 0;
@@ -1684,7 +2416,9 @@ class InnAppController {
       .map((plus) => {
         const base = BASE_ENHANCE_RATES[plus] * 100;
         const pctStr = base < 5 ? base.toFixed(2) : base.toFixed(0);
-        return `<span class="rate-pill">+${plus}→+${plus + 1}: <b>${pctStr}%</b></span>`;
+        return `<span class="rate-pill">+${plus}→+${
+          plus + 1
+        }: <b>${pctStr}%</b></span>`;
       })
       .join(' ');
     rateBox.innerHTML = `
@@ -1695,17 +2429,16 @@ class InnAppController {
 
     this.elUpgradeList.appendChild(topPanel);
 
-    // 2. 대장간 도구 및 시설
     const toolHeader = document.createElement('div');
     toolHeader.className = 'panel-subtitle';
-    toolHeader.textContent = '🔥 대장간 화로 · 모루 · 숫돌 · 담금질 통 · 장인 업그레이드';
+    toolHeader.textContent =
+      '🔥 대장간 화로 · 모루 · 숫돌 · 담금질 통 · 장인 업그레이드';
     this.elUpgradeList.appendChild(toolHeader);
 
     for (const tool of BLACKSMITH_TOOLS) {
       this.elUpgradeList.appendChild(this.createShopToolCard(tool));
     }
 
-    // 3. 장비 단조 레시피
     const recHeader = document.createElement('div');
     recHeader.className = 'panel-subtitle';
     recHeader.textContent = '🗡️ 장비 단조 레시피 (고급 / 희귀 / 영웅 / 전설)';
@@ -1760,9 +2493,9 @@ class InnAppController {
               <span class="upgrade-level-badge">성공률 ${Math.round(
                 preview.successRate * 100
               )}% · ${preview.durationSec}초</span>
-              <span class="upgrade-level-badge">영웅 구매가 ${
-                def.buyPriceGold
-              }G</span>
+              <span class="upgrade-level-badge">판매가 ${this.game.getEffectiveEquipSellPrice(
+                def.id
+              )}G</span>
             </div>
             <p class="upgrade-desc">${def.description}</p>
             <p class="upgrade-effects">기본 스탯: ${stStr} | 착용 가능 직업: ${getWearableClassesText(
@@ -1853,7 +2586,7 @@ class InnAppController {
   }
 
   // --------------------------------------------------------------------------
-  // 6. 기존 여관 업그레이드 탭 (메뉴 · 객실 · 직원 · 시설, 재료 요구량 반영)
+  // 6. 기존 여관 업그레이드 탭 (메뉴 · 객실 · 직원 · 시설)
   // --------------------------------------------------------------------------
   private buildInnUpgradesTab(category: UpgradeCategory): void {
     const items = UPGRADES.filter((u) => u.category === category);

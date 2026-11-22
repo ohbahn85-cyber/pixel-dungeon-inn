@@ -21,11 +21,11 @@ export const RARITY_INFO: Record<
   RarityTier,
   { label: string; color: string; badgeBg: string }
 > = {
-  common: { label: '일반', color: '#cbd5e1', badgeBg: '#334155' },
-  uncommon: { label: '고급', color: '#52b788', badgeBg: '#14532d' },
-  rare: { label: '희귀', color: '#4cc9f0', badgeBg: '#1e3a8a' },
-  epic: { label: '영웅', color: '#c084fc', badgeBg: '#4c1d95' },
-  legendary: { label: '전설', color: '#ffd166', badgeBg: '#78350f' },
+  common: { label: '일반', color: '#d6cfc7', badgeBg: '#423832' },
+  uncommon: { label: '고급', color: '#7eb38a', badgeBg: '#244732' },
+  rare: { label: '희귀', color: '#78b2bf', badgeBg: '#244254' },
+  epic: { label: '영웅', color: '#b592c9', badgeBg: '#442b54' },
+  legendary: { label: '전설', color: '#e6c274', badgeBg: '#5e3c1b' },
 };
 
 export const EQUIP_SLOT_LABELS: Record<EquipSlot, string> = {

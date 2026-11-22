@@ -3,9 +3,9 @@
   "simulatedDurationSec": 14400,
   "simulatedDurationText": "4시간",
   "finalState": {
-    "gold": 17741101,
-    "totalGoldEarned": 18116064,
-    "reputation": 13416,
+    "gold": 18705638,
+    "totalGoldEarned": 19082917,
+    "reputation": 13854,
     "innLevel": 9,
     "innTitle": "Lv.9 왕실 공인 모험가 회관",
     "unlockedHeroesCount": 30,
@@ -13,15 +13,15 @@
     "dungeonClears": {
       "dungeon_slime": 5,
       "dungeon_goblin": 10,
-      "dungeon_shadow_forest": 12,
+      "dungeon_shadow_forest": 13,
       "dungeon_ruined_tower": 15,
-      "dungeon_dwarf_mine": 17,
+      "dungeon_dwarf_mine": 19,
       "dungeon_abyss_sanctum": 19,
-      "dungeon_dragon_lair": 132
+      "dungeon_dragon_lair": 137
     },
     "potionTools": {
       "pot_tool_mortar": 2,
-      "pot_tool_alembic": 3,
+      "pot_tool_alembic": 2,
       "pot_tool_cauldron": 2,
       "pot_fac_garden": 4,
       "pot_fac_lab": 2,
@@ -36,113 +36,122 @@
     },
     "materialsWarehouse": {
       "mat_slime_gel": 0,
-      "mat_herb_leaf": 73,
+      "mat_herb_leaf": 208,
       "mat_goblin_tooth": 0,
-      "mat_iron_scrap": 109,
-      "mat_shadow_herb": 262,
+      "mat_iron_scrap": 99,
+      "mat_shadow_herb": 278,
       "mat_elven_wood": 0,
       "mat_mana_crystal": 0,
-      "mat_arcane_dust": 0,
-      "mat_mithril_ore": 7,
+      "mat_arcane_dust": 1,
+      "mat_mithril_ore": 89,
       "mat_fire_coal": 0,
-      "mat_holy_relic": 104,
+      "mat_holy_relic": 107,
       "mat_world_leaf": 0,
-      "mat_dragon_scale": 127,
-      "mat_dragon_heart": 166
+      "mat_dragon_scale": 119,
+      "mat_dragon_heart": 161
     },
-    "totalPotionsCrafted": 714,
-    "totalEquipCrafted": 78,
-    "totalEnhanceSuccess": 126,
-    "totalEnhanceDestroyed": 11,
-    "totalPeddlerSales": 9
+    "totalPotionsCrafted": 636,
+    "totalEquipCrafted": 45,
+    "totalEnhanceSuccess": 45,
+    "totalEnhanceDestroyed": 9,
+    "totalPeddlerSales": 8,
+    "totalHeroShopTransactions": 1573,
+    "totalHeroesHealed": 31
   },
   "milestones": {
-    "firstDungeonClearSec": 111,
+    "firstDungeonClearSec": 108,
     "dungeonFirstClears": {
       "dungeon_slime": {
-        "timeSec": 111,
-        "timeText": "1분 51초",
+        "timeSec": 108,
+        "timeText": "1분 48초",
         "party": [
           "가릭",
-          "엘레나",
-          "아린"
+          "아린",
+          "엘레나"
         ],
-        "ratePct": 95
+        "ratePct": 95,
+        "reachedFloor": 3
       },
       "dungeon_goblin": {
-        "timeSec": 435,
-        "timeText": "7분 15초",
+        "timeSec": 524,
+        "timeText": "8분 44초",
         "party": [
           "닉스",
           "카엘",
           "아린"
         ],
-        "ratePct": 95
+        "ratePct": 95,
+        "reachedFloor": 3
       },
       "dungeon_shadow_forest": {
-        "timeSec": 934,
-        "timeText": "15분 34초",
+        "timeSec": 1004,
+        "timeText": "16분 44초",
         "party": [
           "슈타인",
-          "닉스",
-          "실비"
+          "실비",
+          "클레어"
         ],
-        "ratePct": 95
+        "ratePct": 95,
+        "reachedFloor": 4
       },
       "dungeon_ruined_tower": {
-        "timeSec": 1521,
-        "timeText": "25분 21초",
+        "timeSec": 1579,
+        "timeText": "26분 19초",
         "party": [
-          "카엘",
-          "리안",
-          "닉스",
-          "아린"
+          "가릭",
+          "실비",
+          "마리엘",
+          "클레어"
         ],
-        "ratePct": 88
+        "ratePct": 95,
+        "reachedFloor": 4
       },
       "dungeon_dwarf_mine": {
-        "timeSec": 2390,
-        "timeText": "39분 50초",
+        "timeSec": 2408,
+        "timeText": "40분 8초",
         "party": [
-          "두린",
-          "엘레나",
-          "카엘",
-          "닉스"
+          "브레나",
+          "보린",
+          "슈타인",
+          "리안"
         ],
-        "ratePct": 95
+        "ratePct": 95,
+        "reachedFloor": 4
       },
       "dungeon_abyss_sanctum": {
-        "timeSec": 3375,
-        "timeText": "56분 15초",
+        "timeSec": 3535,
+        "timeText": "58분 55초",
+        "party": [
+          "세라피나",
+          "두린",
+          "발렌",
+          "엘레나"
+        ],
+        "ratePct": 95,
+        "reachedFloor": 5
+      },
+      "dungeon_dragon_lair": {
+        "timeSec": 4770,
+        "timeText": "1시간 19분 30초",
         "party": [
           "보린",
-          "롤랑",
+          "슈타인",
           "브레나",
           "베네딕트"
         ],
-        "ratePct": 95
-      },
-      "dungeon_dragon_lair": {
-        "timeSec": 4590,
-        "timeText": "1시간 16분 30초",
-        "party": [
-          "발렌",
-          "두린",
-          "테론",
-          "엘레나"
-        ],
-        "ratePct": 95
+        "ratePct": 95,
+        "reachedFloor": 5
       }
     },
     "heroLevel5Sec": {
-      "timeSec": 1360,
-      "timeText": "22분 40초",
+      "timeSec": 1424,
+      "timeText": "23분 44초",
       "heroName": "가릭"
     },
     "heroLevel10Sec": {
-      "timeSec": 3427,
-      "timeText": "57분 7초",
-      "heroName": "엘레나"
+      "timeSec": 3425,
+      "timeText": "57분 5초",
+      "heroName": "가릭"
     },
     "heroJoins": [
       {
@@ -153,53 +162,46 @@
         "className": "광전사"
       },
       {
-        "timeSec": 111,
-        "timeText": "1분 51초",
+        "timeSec": 108,
+        "timeText": "1분 48초",
         "heroId": "hero_marco",
         "heroName": "마르코",
         "className": "유랑 모험가"
       },
       {
-        "timeSec": 136,
-        "timeText": "2분 16초",
+        "timeSec": 146,
+        "timeText": "2분 26초",
         "heroId": "hero_seraphina",
         "heroName": "세라피나",
         "className": "태양 성기사"
       },
       {
-        "timeSec": 185,
-        "timeText": "3분 5초",
+        "timeSec": 206,
+        "timeText": "3분 26초",
         "heroId": "hero_sylvi",
         "heroName": "실비",
         "className": "엘프 명궁"
       },
       {
-        "timeSec": 212,
-        "timeText": "3분 32초",
+        "timeSec": 300,
+        "timeText": "5분",
         "heroId": "hero_nyx",
         "heroName": "닉스",
         "className": "그림자 도적"
       },
       {
-        "timeSec": 300,
-        "timeText": "5분",
+        "timeSec": 402,
+        "timeText": "6분 42초",
         "heroId": "hero_borin",
         "heroName": "보린",
         "className": "난쟁이 중갑병"
       },
       {
-        "timeSec": 435,
-        "timeText": "7분 15초",
+        "timeSec": 524,
+        "timeText": "8분 44초",
         "heroId": "hero_mariel",
         "heroName": "마리엘",
         "className": "별빛 마법사"
-      },
-      {
-        "timeSec": 531,
-        "timeText": "8분 51초",
-        "heroId": "hero_stein",
-        "heroName": "슈타인",
-        "className": "강철 전사"
       },
       {
         "timeSec": 535,
@@ -209,120 +211,127 @@
         "className": "강철 전사"
       },
       {
-        "timeSec": 565,
-        "timeText": "9분 25초",
+        "timeSec": 644,
+        "timeText": "10분 44초",
+        "heroId": "hero_stein",
+        "heroName": "슈타인",
+        "className": "강철 전사"
+      },
+      {
+        "timeSec": 644,
+        "timeText": "10분 44초",
         "heroId": "hero_claire",
         "heroName": "클레어",
         "className": "성전 사제"
       },
       {
-        "timeSec": 825,
-        "timeText": "13분 45초",
+        "timeSec": 925,
+        "timeText": "15분 25초",
         "heroId": "hero_korg",
         "heroName": "코르그",
         "className": "광전사"
       },
       {
-        "timeSec": 934,
-        "timeText": "15분 34초",
+        "timeSec": 1004,
+        "timeText": "16분 44초",
         "heroId": "hero_lian",
         "heroName": "리안",
         "className": "엘프 명궁"
       },
       {
-        "timeSec": 970,
-        "timeText": "16분 10초",
+        "timeSec": 1043,
+        "timeText": "17분 23초",
         "heroId": "hero_viven",
         "heroName": "비벤",
         "className": "그림자 도적"
       },
       {
-        "timeSec": 998,
-        "timeText": "16분 38초",
+        "timeSec": 1070,
+        "timeText": "17분 50초",
         "heroId": "hero_zephyr",
         "heroName": "제피르",
         "className": "별빛 마법사"
       },
       {
-        "timeSec": 1521,
-        "timeText": "25분 21초",
+        "timeSec": 1579,
+        "timeText": "26분 19초",
         "heroId": "hero_roland",
         "heroName": "롤랑",
         "className": "태양 성기사"
       },
       {
-        "timeSec": 1532,
-        "timeText": "25분 32초",
+        "timeSec": 1665,
+        "timeText": "27분 45초",
         "heroId": "hero_raven",
         "heroName": "레이븐",
         "className": "그림자 도적"
       },
       {
-        "timeSec": 1579,
-        "timeText": "26분 19초",
+        "timeSec": 1665,
+        "timeText": "27분 45초",
         "heroId": "hero_lyra",
         "heroName": "라이라",
         "className": "별빛 마법사"
       },
       {
-        "timeSec": 1579,
-        "timeText": "26분 19초",
+        "timeSec": 1665,
+        "timeText": "27분 45초",
         "heroId": "hero_durin",
         "heroName": "두린",
         "className": "난쟁이 중갑병"
       },
       {
-        "timeSec": 1665,
-        "timeText": "27분 45초",
+        "timeSec": 1734,
+        "timeText": "28분 54초",
         "heroId": "hero_benedict",
         "heroName": "베네딕트",
         "className": "성전 사제"
       },
       {
-        "timeSec": 2390,
-        "timeText": "39분 50초",
+        "timeSec": 2408,
+        "timeText": "40분 8초",
         "heroId": "hero_astrid",
         "heroName": "아스트리드",
         "className": "엘프 명궁"
       },
       {
-        "timeSec": 2390,
-        "timeText": "39분 50초",
+        "timeSec": 2416,
+        "timeText": "40분 16초",
         "heroId": "hero_drake",
         "heroName": "드레이크",
         "className": "유랑 모험가"
       },
       {
-        "timeSec": 2480,
-        "timeText": "41분 20초",
+        "timeSec": 2468,
+        "timeText": "41분 8초",
         "heroId": "hero_valen",
         "heroName": "발렌",
         "className": "강철 전사"
       },
       {
-        "timeSec": 2485,
-        "timeText": "41분 25초",
+        "timeSec": 2550,
+        "timeText": "42분 30초",
         "heroId": "hero_freya",
         "heroName": "프레이야",
         "className": "광전사"
       },
       {
-        "timeSec": 3375,
-        "timeText": "56분 15초",
+        "timeSec": 3535,
+        "timeText": "58분 55초",
         "heroId": "hero_theron",
         "heroName": "테론",
         "className": "태양 성기사"
       },
       {
-        "timeSec": 3427,
-        "timeText": "57분 7초",
+        "timeSec": 3611,
+        "timeText": "1시간 11초",
         "heroId": "hero_orion",
         "heroName": "오리온",
         "className": "별빛 마법사"
       },
       {
-        "timeSec": 3545,
-        "timeText": "59분 5초",
+        "timeSec": 3615,
+        "timeText": "1시간 15초",
         "heroId": "hero_thrain",
         "heroName": "스레인",
         "className": "난쟁이 중갑병"
@@ -335,126 +344,137 @@
         "name": "희석된 약초수 (하위)"
       },
       "potion_heal_minor": {
-        "timeSec": 201,
-        "timeText": "3분 21초",
+        "timeSec": 226,
+        "timeText": "3분 46초",
         "name": "초급 치유 물약"
       },
       "potion_cure_injury": {
-        "timeSec": 588,
-        "timeText": "9분 48초",
+        "timeSec": 657,
+        "timeText": "10분 57초",
         "name": "부상 완치 연고"
       },
       "potion_might": {
-        "timeSec": 1019,
-        "timeText": "16분 59초",
+        "timeSec": 924,
+        "timeText": "15분 24초",
         "name": "거인의 괴력 비약"
       },
       "potion_gale": {
-        "timeSec": 1080,
-        "timeText": "18분",
+        "timeSec": 1056,
+        "timeText": "17분 36초",
         "name": "질풍의 민첩 비약"
       },
       "potion_wisdom": {
-        "timeSec": 1537,
-        "timeText": "25분 37초",
+        "timeSec": 1597,
+        "timeText": "26분 37초",
         "name": "별빛 지혜의 비약"
       },
       "potion_ironblood": {
-        "timeSec": 2679,
-        "timeText": "44분 39초",
+        "timeSec": 2430,
+        "timeText": "40분 30초",
         "name": "미스릴 강철피부 영약"
       },
       "potion_dragon_elixir": {
-        "timeSec": 4747,
-        "timeText": "1시간 19분 7초",
+        "timeSec": 4798,
+        "timeText": "1시간 19분 58초",
         "name": "용왕의 불멸 종합 영약"
       }
     },
     "rarityFirstCrafts": {
       "uncommon": {
-        "timeSec": 322,
-        "timeText": "5분 22초",
-        "itemName": "강철 사자문양 방패"
+        "timeSec": 323,
+        "timeText": "5분 23초",
+        "itemName": "은장 마력 주석서"
       },
       "rare": {
-        "timeSec": 1021,
-        "timeText": "17분 1초",
+        "timeSec": 1211,
+        "timeText": "20분 11초",
         "itemName": "은빛 바람의 엘프 장궁"
       },
       "epic": {
-        "timeSec": 3395,
-        "timeText": "56분 35초",
+        "timeSec": 3550,
+        "timeText": "59분 10초",
         "itemName": "세계수의 영원 반지"
       },
       "legendary": {
-        "timeSec": 4613,
-        "timeText": "1시간 16분 53초",
+        "timeSec": 4913,
+        "timeText": "1시간 21분 53초",
         "itemName": "용왕의 불멸 심장 반지"
       }
     },
     "enhanceEvents": {
-      "attempts": 137,
-      "successes": 126,
-      "destructions": 11,
-      "maxPlusReached": 5,
-      "postDestroyClears": 490,
-      "sampleDestructionLog": "[1시간 5분 50초] 테론의 <강철 사자문양 방패 +3> 강화 실패로 완전 파괴 -> 기본 장비로 즉시 복귀"
+      "attempts": 54,
+      "successes": 45,
+      "destructions": 9,
+      "maxPlusReached": 3,
+      "postDestroyClears": 623,
+      "sampleDestructionLog": "[33분 20초] 실비의 <은빛 바람의 엘프 장궁 +2> 강화 실패로 완전 파괴 -> 기본 장비로 즉시 복귀"
+    },
+    "livingInnMetrics": {
+      "heroShopTransactions": 1573,
+      "heroesHealedCount": 31,
+      "playerOrdersIssued": 80,
+      "speechBubblesObserved": 3802
     },
     "snapshots": [
       {
         "hour": 0.5,
         "timeText": "30분",
-        "gold": 371337,
-        "reputation": 460,
+        "gold": 354550,
+        "reputation": 433,
         "innLevel": 5,
         "unlockedHeroes": 23,
         "totalDungeonClears": 32,
-        "potionsCrafted": 103,
-        "equipsCrafted": 12
+        "potionsCrafted": 100,
+        "equipsCrafted": 12,
+        "heroShopTransactions": 251
       },
       {
         "hour": 1,
         "timeText": "1시간",
-        "gold": 1212929,
-        "reputation": 1261,
-        "innLevel": 7,
-        "unlockedHeroes": 30,
+        "gold": 1399232,
+        "reputation": 1159,
+        "innLevel": 6,
+        "unlockedHeroes": 28,
         "totalDungeonClears": 63,
-        "potionsCrafted": 195,
-        "equipsCrafted": 48
+        "potionsCrafted": 197,
+        "equipsCrafted": 42,
+        "heroShopTransactions": 476
       },
       {
         "hour": 2,
         "timeText": "2시간",
-        "gold": 4798479,
-        "reputation": 4596,
+        "gold": 5048143,
+        "reputation": 4922,
         "innLevel": 8,
         "unlockedHeroes": 30,
-        "totalDungeonClears": 109,
-        "potionsCrafted": 364,
-        "equipsCrafted": 72
+        "totalDungeonClears": 116,
+        "potionsCrafted": 331,
+        "equipsCrafted": 45,
+        "heroShopTransactions": 851
       },
       {
         "hour": 3,
         "timeText": "3시간",
-        "gold": 11050748,
-        "reputation": 8973,
+        "gold": 11525732,
+        "reputation": 9389,
         "innLevel": 9,
         "unlockedHeroes": 30,
-        "totalDungeonClears": 159,
-        "potionsCrafted": 543,
-        "equipsCrafted": 75
+        "totalDungeonClears": 167,
+        "potionsCrafted": 483,
+        "equipsCrafted": 45,
+        "heroShopTransactions": 1216
       },
       {
         "hour": 4,
         "timeText": "4시간",
-        "gold": 17741101,
-        "reputation": 13416,
+        "gold": 18705638,
+        "reputation": 13854,
         "innLevel": 9,
         "unlockedHeroes": 30,
-        "totalDungeonClears": 210,
-        "potionsCrafted": 714,
-        "equipsCrafted": 78
+        "totalDungeonClears": 218,
+        "potionsCrafted": 636,
+        "equipsCrafted": 45,
+        "heroShopTransactions": 1573
       }
     ],
     "deadlockDetected": false,

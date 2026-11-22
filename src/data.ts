@@ -600,27 +600,32 @@ export const RANDOM_EVENTS: RandomEventDef[] = [
 ];
 
 export const SEAT_SLOTS: SeatSlot[] = [
-  // 테이블 1 (좌상단 식탁)
-  { id: 't1_l', x: 48, y: 108, tableX: 64, tableY: 108, facing: 'right', type: 'table' },
-  { id: 't1_r', x: 84, y: 108, tableX: 68, tableY: 108, facing: 'left', type: 'table' },
-  // 테이블 2 (중앙 식탁)
-  { id: 't2_l', x: 122, y: 108, tableX: 138, tableY: 108, facing: 'right', type: 'table' },
-  { id: 't2_r', x: 158, y: 108, tableX: 142, tableY: 108, facing: 'left', type: 'table' },
-  // 테이블 3 (좌하단 식탁)
-  { id: 't3_l', x: 64, y: 150, tableX: 80, tableY: 150, facing: 'right', type: 'table' },
-  { id: 't3_r', x: 100, y: 150, tableX: 84, tableY: 150, facing: 'left', type: 'table' },
-  // 테이블 4 (우하단 식탁)
-  { id: 't4_l', x: 154, y: 150, tableX: 170, tableY: 150, facing: 'right', type: 'table' },
-  { id: 't4_r', x: 190, y: 150, tableX: 174, tableY: 150, facing: 'left', type: 'table' },
-  // 카운터 바 스툴
-  { id: 'bar_1', x: 184, y: 84, tableX: 184, tableY: 70, facing: 'left', type: 'counter' },
-  { id: 'bar_2', x: 206, y: 84, tableX: 206, tableY: 70, facing: 'left', type: 'counter' },
-  { id: 'bar_3', x: 226, y: 84, tableX: 226, tableY: 70, facing: 'left', type: 'counter' },
-  // 2층 객실 침대 구역
-  { id: 'room_1', x: 266, y: 58, tableX: 266, tableY: 54, facing: 'left', type: 'room' },
-  { id: 'room_2', x: 292, y: 58, tableX: 292, tableY: 54, facing: 'left', type: 'room' },
-  // 드워프 간이 대장간 구역
-  { id: 'smithy_1', x: 256, y: 122, tableX: 274, tableY: 120, facing: 'right', type: 'smithy' },
+  // 1층 식당 홀 테이블 1~6 (좌하단 및 중하단 식탁 12석)
+  { id: 't1_l', x: 52, y: 138, tableX: 68, tableY: 138, facing: 'right', type: 'table' },
+  { id: 't1_r', x: 88, y: 138, tableX: 72, tableY: 138, facing: 'left', type: 'table' },
+  { id: 't2_l', x: 132, y: 138, tableX: 148, tableY: 138, facing: 'right', type: 'table' },
+  { id: 't2_r', x: 168, y: 138, tableX: 152, tableY: 138, facing: 'left', type: 'table' },
+  { id: 't3_l', x: 52, y: 186, tableX: 68, tableY: 186, facing: 'right', type: 'table' },
+  { id: 't3_r', x: 88, y: 186, tableX: 72, tableY: 186, facing: 'left', type: 'table' },
+  { id: 't4_l', x: 132, y: 186, tableX: 148, tableY: 186, facing: 'right', type: 'table' },
+  { id: 't4_r', x: 168, y: 186, tableX: 152, tableY: 186, facing: 'left', type: 'table' },
+  { id: 't5_l', x: 52, y: 234, tableX: 68, tableY: 234, facing: 'right', type: 'table' },
+  { id: 't5_r', x: 88, y: 234, tableX: 72, tableY: 234, facing: 'left', type: 'table' },
+  { id: 't6_l', x: 132, y: 234, tableX: 148, tableY: 234, facing: 'right', type: 'table' },
+  { id: 't6_r', x: 168, y: 234, tableX: 152, tableY: 234, facing: 'left', type: 'table' },
+  // 중상단 바 카운터 스툴 4석
+  { id: 'bar_1', x: 184, y: 88, tableX: 184, tableY: 74, facing: 'left', type: 'counter' },
+  { id: 'bar_2', x: 216, y: 88, tableX: 216, tableY: 74, facing: 'left', type: 'counter' },
+  { id: 'bar_3', x: 248, y: 88, tableX: 248, tableY: 74, facing: 'left', type: 'counter' },
+  { id: 'bar_4', x: 278, y: 88, tableX: 278, tableY: 74, facing: 'left', type: 'counter' },
+  // 우상단 2층 객실 침대 구역
+  { id: 'room_1', x: 344, y: 58, tableX: 344, tableY: 52, facing: 'left', type: 'room' },
+  { id: 'room_2', x: 376, y: 58, tableX: 376, tableY: 52, facing: 'left', type: 'room' },
+  { id: 'room_3', x: 408, y: 58, tableX: 408, tableY: 52, facing: 'left', type: 'room' },
+  { id: 'room_4', x: 440, y: 58, tableX: 440, tableY: 52, facing: 'left', type: 'room' },
+  // 우중단 드워프 대장간 구역
+  { id: 'smithy_1', x: 344, y: 158, tableX: 364, tableY: 154, facing: 'right', type: 'smithy' },
+  { id: 'smithy_2', x: 392, y: 158, tableX: 372, tableY: 154, facing: 'left', type: 'smithy' },
 ];
 
 export function getUpgradeCost(def: UpgradeDef, currentLevel: number): number {

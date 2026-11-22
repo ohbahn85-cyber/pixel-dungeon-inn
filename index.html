@@ -6,16 +6,16 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover"
     />
-    <meta name="theme-color" content="#1e1410" />
+    <meta name="theme-color" content="#261b15" />
     <meta
       name="description"
-      content="판타지 던전 옆 여관을 운영하며 고유 영웅 파티 파견, 전리품 거래, 포션 조제, 대장간 단조와 +강화를 즐기는 도트 방치형 경영 RPG"
+      content="카이로소프트풍 살아있는 여관 전체 맵에서 30명의 고유 영웅이 스스로 걸어다니며 식사·거래·쇼핑·파티 결성을 하고 층별 던전 자동 전투를 펼치는 도트 경영 시뮬레이션 RPG"
     />
     <link
       rel="icon"
-      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%233b2216'/><rect x='4' y='5' width='7' height='8' fill='%23ffd166'/><rect x='3' y='3' width='9' height='3' fill='%23ffffff'/><rect x='11' y='6' width='2' height='5' fill='%23ffd166'/></svg>"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23453024'/><rect x='4' y='5' width='7' height='8' fill='%23e6c274'/><rect x='3' y='3' width='9' height='3' fill='%23f6efe2'/><rect x='11' y='6' width='2' height='5' fill='%23e6c274'/></svg>"
     />
-    <title>던전 여관: 모험가의 쉼터 — 순환 경제 &amp; 영웅 원정대</title>
+    <title>던전 여관: 살아있는 모험가의 쉼터 — 생활 시뮬 &amp; 층별 원정</title>
   </head>
   <body>
     <div id="app" class="app-shell">
@@ -25,7 +25,7 @@
           <div class="inn-brand">
             <span class="brand-icon" aria-hidden="true">🍻</span>
             <div>
-              <h1 class="inn-title">던전 여관: 모험가의 쉼터</h1>
+              <h1 class="inn-title">던전 여관: 살아있는 모험가의 쉼터</h1>
               <div class="inn-rank-row">
                 <span id="inn-level-badge" class="inn-level-badge">Lv.1 변두리 작은 여관</span>
                 <span id="inn-rep-text" class="inn-rep-text">평판 0</span>
@@ -98,8 +98,8 @@
 
       <!-- 메인 콘텐츠 영역 -->
       <main class="inn-main">
-        <!-- 좌측/상단: 픽셀 캔버스 장면 및 빠른 조작/소식 로그 -->
-        <section class="scene-column" aria-label="여관 내부 장면">
+        <!-- 좌측/상단: 여관 전체 픽셀 맵 + 영웅 상태/지시 패널 + 카이로소프트풍 던전 층별 탐험 뷰 -->
+        <section class="scene-column" aria-label="살아있는 여관 전체 맵 및 던전 탐험 장면">
           <!-- 활성 랜덤 이벤트 배너 -->
           <div id="active-event-banner" class="event-banner hidden" role="status">
             <div class="event-banner-header">
@@ -109,16 +109,58 @@
             <p id="event-banner-desc" class="event-desc"></p>
           </div>
 
-          <!-- 픽셀 캔버스 컨테이너 -->
-          <div class="canvas-stage">
-            <canvas
-              id="inn-canvas"
-              width="320"
-              height="192"
-              aria-label="던전 여관 내부 픽셀 장면. 대기 중인 모험가나 카운터를 탭하여 서빙할 수 있습니다."
-            ></canvas>
+          <!-- 여관 전체 맵 캔버스 컨테이너 (480x288) -->
+          <div class="canvas-stage" id="inn-canvas-stage">
+            <div class="canvas-stage-toolbar">
+              <span class="stage-title-pill">🏠 여관 전체 맵 (영웅 탭 → 상태·지시 / 구역 탭 → 상점 이동)</span>
+              <button
+                id="btn-toggle-map-zoom"
+                type="button"
+                class="stage-mini-btn"
+                title="모바일/태블릿에서 맵 확대 팬/스크롤 전환"
+              >
+                🔍 전체 맞춤 보기
+              </button>
+            </div>
+            <div class="canvas-scroll-viewport" id="inn-canvas-viewport">
+              <canvas
+                id="inn-canvas"
+                width="480"
+                height="288"
+                aria-label="던전 여관 전체 픽셀 맵. 걸어다니는 영웅을 클릭해 상태를 확인하고 행동을 지시하거나, 대기 손님을 탭해 서빙할 수 있습니다."
+              ></canvas>
+            </div>
             <div class="canvas-hint-overlay" id="canvas-hint">
-              💡 손님을 탭해 서빙하고, 영웅들을 던전에 파견해 전리품·포션·대장간 경제를 순환시키세요!
+              💡 맵 위의 <b>영웅을 클릭/탭</b>하면 상태 확인 및 행동 지시 패널이 열립니다! 판매·매입 설정을 바꾸면 영웅이 걸어가 거래합니다.
+            </div>
+          </div>
+
+          <!-- 영웅 클릭 시 열리는 상태 확인 + 행동 직접 지시 패널 -->
+          <div id="hero-inspector-panel" class="hero-inspector-panel" aria-live="polite"></div>
+
+          <!-- 카이로소프트풍 층별 던전 탐험 실시간 뷰 (480x136) -->
+          <div class="dungeon-expedition-panel" id="dungeon-expedition-panel">
+            <div class="dungeon-view-header">
+              <div class="dungeon-view-title-wrap">
+                <span class="stage-title-pill">⚔️ 실시간 던전 층별 탐험 뷰</span>
+                <div id="dungeon-party-tabs" class="dungeon-party-tabs"></div>
+              </div>
+              <button
+                id="btn-toggle-dungeon-size"
+                type="button"
+                class="stage-mini-btn"
+              >
+                🔽 접기/펼치기
+              </button>
+            </div>
+            <div id="dungeon-view-body" class="dungeon-view-body">
+              <canvas
+                id="dungeon-canvas"
+                width="480"
+                height="136"
+                aria-label="카이로소프트풍 층별 던전 탐험 및 몬스터 자동 전투 화면"
+              ></canvas>
+              <ul id="dungeon-floor-log-list" class="dungeon-floor-log-list"></ul>
             </div>
           </div>
 
@@ -174,19 +216,19 @@
               type="button"
               role="tab"
               aria-selected="false"
-              data-tab="dungeon"
+              data-tab="trade"
               class="tab-btn"
             >
-              🗺️ 던전
+              💎 상점·거래
             </button>
             <button
               type="button"
               role="tab"
               aria-selected="false"
-              data-tab="trade"
+              data-tab="dungeon"
               class="tab-btn"
             >
-              💎 거래
+              🗺️ 던전
             </button>
             <button
               type="button"
@@ -254,7 +296,7 @@
           </nav>
 
           <div class="category-summary-bar" id="category-summary-bar">
-            고유 이름을 가진 30명의 영웅 명단입니다. 성격·출신·장비와 현재 버프를 확인하고 식사나 휴식을 제공하세요.
+            고유 이름을 가진 30명의 영웅 명단입니다. 맵이나 카드에서 영웅을 선택해 행동을 지시하거나 자율 행동을 지켜보세요.
           </div>
 
           <div
@@ -279,7 +321,7 @@
         <div class="modal-badge">🌙 오프라인 영업 &amp; 원정 정산</div>
         <h2 id="offline-modal-title" class="modal-title">다녀왔습니다, 주인장님!</h2>
         <p class="modal-desc">
-          자리를 비우신 동안에도 여관 영업과 던전 탐험, 포션 조제, 대장간 단조가 진행되었습니다.
+          자리를 비우신 동안에도 영웅들이 여관 각 구역을 오가며 거래·식사·치료를 하고 던전 탐험을 이어갔습니다.
         </p>
         <div class="offline-report-box">
           <div class="report-row">
@@ -299,8 +341,8 @@
             <strong id="offline-craft-text">포션 0병 / 장비 0개</strong>
           </div>
           <div class="report-row">
-            <span>행상인 안전 매각 / 부상 영웅</span>
-            <strong id="offline-extra-text">안전 매각 0건 / 부상 0명</strong>
+            <span>상점 거래 / 치료·매각 요약</span>
+            <strong id="offline-extra-text">거래 0건 / 회복 0회</strong>
           </div>
           <div class="report-row highlight-row">
             <span>총 정산 획득 골드</span>
@@ -362,7 +404,7 @@
       </div>
     </div>
 
-    <!-- 모달 3: v1 구세이브 마이그레이션 확인 대화상자 -->
+    <!-- 모달 3: 구세이브 마이그레이션 확인 대화상자 -->
     <div
       id="migration-modal"
       class="modal-backdrop hidden"
@@ -371,11 +413,11 @@
       aria-labelledby="migration-modal-title"
     >
       <div class="modal-card">
-        <div class="modal-badge">✨ v2 대규모 순환 시스템 업데이트</div>
+        <div class="modal-badge">✨ v3 카이로소프트풍 살아있는 여관 업데이트</div>
         <h2 id="migration-modal-title" class="modal-title">기존 여관 진행을 이어받을까요?</h2>
         <p class="modal-desc">
-          고유 영웅 30명과 던전 원정, 전리품 거래, 포션 가게, 대장간(+강화) 순환 시스템이 추가되었습니다!
-          기존에 모아둔 골드·평판·업그레이드를 유지한 채 시작 영웅단을 합류시킬 수 있습니다.
+          여관 전체 맵과 걸어다니는 영웅 에이전트, 상점/거래 시세 설정, 영웅 직접 행동 지시, 층별 던전 자동 전투 뷰가 추가되었습니다!
+          기존에 모아둔 골드·평판·업그레이드·영웅 성장을 그대로 이어받을 수 있습니다.
         </p>
         <div class="modal-actions dual-actions">
           <button id="btn-migrate-continue" type="button" class="modal-primary-btn">
@@ -397,38 +439,37 @@
       aria-labelledby="help-modal-title"
     >
       <div class="modal-card">
-        <div class="modal-badge">📖 여관 순환 경제 &amp; 원정 가이드</div>
-        <h2 id="help-modal-title" class="modal-title">「던전 여관: 모험가의 쉼터」 안내</h2>
+        <div class="modal-badge">📖 살아있는 여관 &amp; 층별 원정 가이드</div>
+        <h2 id="help-modal-title" class="modal-title">「던전 여관: 살아있는 모험가의 쉼터」 안내</h2>
         <div class="help-content">
           <div class="help-item">
-            <strong>1. 골드와 전리품의 순환 경제</strong>
+            <strong>1. 🏠 한눈에 보이는 여관 전체 맵 &amp; 걸어다니는 영웅</strong>
             <p>
-              영웅들이 <b>🗺️ 던전</b>에서 전리품 재료와 개인 골드를 가져오면, 주인장이 <b>💎 거래</b> 탭에서 전리품을 골드로 매입합니다. 현금을 얻은 영웅들은 여관 요리·숙박·포션·대장간 장비를 구매하여 여관 수입을 올려 주고, 주인장은 매입한 재료로 여관과 포션 가게·대장간을 업그레이드합니다!
+              영웅들은 격자 경로탐색으로 <b>1층 식당·바 카운터·2층 객실·포션 가게·대장간·거래 가판대·의뢰 게시판·던전 입구</b>를 스스로 걸어다니며 상호작용하고, 상황과 성격에 맞는 <b>한국어 말풍선</b>을 띄웁니다.
             </p>
           </div>
           <div class="help-item">
-            <strong>2. 9직업 30명의 고정 고유 영웅 &amp; 파티 시너지</strong>
+            <strong>2. 💎 플레이어는 무대를 꾸리고, 영웅은 반응합니다</strong>
             <p>
-              익명 고용 없이 고유 이름과 배경을 지닌 <b>30명의 영웅</b>이 평판과 던전 공략에 따라 합류합니다.
-              각 영웅은 <b>역할(탱커·딜러·힐러·지원), 성격(1~2개), 출신 배경 패시브</b>를 지니며, 출발 전 미리보기에서 <b>역할 삼각 진형(+10%), 성격 호궁합/충돌, 출신 세트 시너지</b>를 확인할 수 있습니다.
+              <b>💎 상점·거래</b> 탭에서 <b>요리·포션·장비 판매 가격(할인/정가/할증) 및 품목 등록</b>과 <b>전리품 매입 시세/품목 켜기·끄기</b>를 설정하세요. 설정에 따라 영웅이 해당 구역으로 걸어가 거래하며, 가격이 너무 비싸거나 매입가가 낮으면 말풍선으로 불평하기도 합니다.
             </p>
           </div>
           <div class="help-item">
-            <strong>3. ⚗️ 포션 가게 &amp; ⚒️ 대장간 단조</strong>
+            <strong>3. 🎯 영웅 클릭 → 상태 확인 &amp; 특정 행동 직접 지시</strong>
             <p>
-              전리품 재료로 절구·증류기·가마솥·약초 정원·화로·모루를 업그레이드하고 <b>포션 8종</b>과 <b>일반~전설 장비</b>를 제작하세요. 제작 실패 시에도 하위 등급 포션/장비나 고철을 일부 건집니다.
+              맵 위의 영웅을 클릭/탭하면 <b>HP·허기·피로·개인 골드·4슬롯 장비·현재 의도·소속 파티</b>를 확인하고, <b>식사·포션 구매·객실 휴식·장비/강화·파티 결성·특정 던전 출발</b>을 직접 지시할 수 있습니다. 지시가 끝나거나 <b>[지시 취소]</b>를 누르면 다시 자율 AI로 돌아갑니다.
             </p>
           </div>
           <div class="help-item">
-            <strong>4. 🔥 장비 +강화 (실패 시 완전 파괴 주의!)</strong>
+            <strong>4. ⚔️ 카이로소프트풍 층별 던전 탐험 &amp; 자동 전투 뷰</strong>
             <p>
-              제작 장비에 <b>+1 ~ +15 강화</b>를 시도해 스탯을 대폭 높일 수 있습니다. 단, 성공 확률은 <b>+1(95%)에서 +10(2%), +15(0.2%)</b>로 가파르게 하락하며, <b>실패 시 장비가 완전히 파괴</b>되고 파괴 불가 기본 장비로 돌아갑니다.
+              파티가 던전으로 출발하면 하단 <b>실시간 던전 탐험 뷰</b>에서 복도 전진, 층별 몬스터/보스와의 자동 전투(HP바·공격 모션·데미지 숫자), 가시적 전리품 드랍, 부상 후퇴 및 귀환 루프를 실시간으로 감상할 수 있습니다.
             </p>
           </div>
           <div class="help-item">
-            <strong>5. 교착 방지 안전장치 &amp; 오프라인 8시간 정산</strong>
+            <strong>5. 🔥 대장간 +강화 (실패 시 완전 파괴 &amp; 기본 장비 복귀)</strong>
             <p>
-              주인장 골드가 부족해 전리품을 45초간 매입하지 못하면 영웅이 행상인에게 자동 매각해 현금을 확보하고 여관에 수수료와 샘플 재료를 남깁니다. 게임을 껐다 켜도 최대 <b>8시간</b>까지 오프라인 영업·탐험·제작이 정산됩니다.
+              제작 장비에 <b>+1 ~ +15 강화</b>를 시도할 수 있으며, 실패 시 장비가 완전 파괴되더라도 즉시 파괴 불가 기본 장비로 대체되어 탐험이 절대 멈추지 않습니다.
             </p>
           </div>
         </div>
