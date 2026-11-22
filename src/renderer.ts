@@ -1,6 +1,7 @@
 import { GUEST_TYPES, SEAT_SLOTS } from './data';
 import {
   drawGuestCharacter,
+  drawHeroCharacter,
   drawOrderBubble,
   drawStaffCharacter,
 } from './sprites';
@@ -14,12 +15,24 @@ import {
 export const CANVAS_WIDTH = 320;
 export const CANVAS_HEIGHT = 192;
 
+export interface HeroCanvasEntity {
+  heroId: string;
+  name: string;
+  status: 'idle' | 'exploring' | 'resting' | 'injured' | 'fatigued';
+  x: number;
+  y: number;
+  facing: 'left' | 'right';
+}
+
 export interface RenderContextState {
   time: number;
   guests: GuestEntity[];
   floatingTexts: FloatingText[];
   particles: CoinParticle[];
   upgrades: Record<string, number>;
+  potionTools?: Record<string, number>;
+  blacksmithTools?: Record<string, number>;
+  heroEntities?: HeroCanvasEntity[];
   activeEvent: ActiveEvent | null;
   maidPos: { x: number; y: number; facing: 'left' | 'right' };
   innkeeperWaveTimer: number;
@@ -486,8 +499,12 @@ export class InnRenderer {
       ctx.fillRect(mx + 5, noteY - 3, 1, 3);
     }
 
-    // 6. 드워프 간이 대장간 (fac_smithy 해금 시 우측 하단 구역: x=262, y=106)
-    if ((upgrades['fac_smithy'] ?? 0) > 0) {
+    // 6. 드워프 간이 대장간 및 전문 대장간 (fac_smithy 또는 smith_forge 해금 시 우측 하단 구역)
+    const smithyLv =
+      (upgrades['fac_smithy'] ?? 0) +
+      (state.blacksmithTools?.['smith_forge'] ?? 0) +
+      (state.blacksmithTools?.['smith_anvil'] ?? 0);
+    if (smithyLv > 0) {
       const smX = 266;
       const smY = 104;
       // 대장간 돌 바닥 패드
@@ -502,12 +519,21 @@ export class InnRenderer {
       ctx.fillStyle = Math.floor(t * 8) % 2 === 0 ? '#f97316' : '#ef4444';
       ctx.fillRect(smX + 24, smY + 8, 10, 8);
 
-      // 강철 모루 (Anvil)
+      // 강철/미스릴 모루 (Anvil)
       ctx.fillStyle = '#1e293b';
       ctx.fillRect(smX + 2, smY + 18, 12, 4);
-      ctx.fillStyle = '#94a3b8';
+      ctx.fillStyle =
+        (state.blacksmithTools?.['smith_anvil'] ?? 0) >= 2 ? '#38bdf8' : '#94a3b8';
       ctx.fillRect(smX, smY + 13, 16, 5);
       ctx.fillRect(smX - 3, smY + 14, 4, 3);
+
+      // 담금질 통 / 숫돌
+      if ((state.blacksmithTools?.['smith_quench'] ?? 0) > 0) {
+        ctx.fillStyle = '#78350f';
+        ctx.fillRect(smX - 5, smY + 26, 10, 10);
+        ctx.fillStyle = '#38bdf8';
+        ctx.fillRect(smX - 3, smY + 27, 6, 3);
+      }
 
       // 무기 걸이
       ctx.fillStyle = '#78350f';
@@ -515,6 +541,43 @@ export class InnRenderer {
       ctx.fillStyle = '#cbd5e1';
       ctx.fillRect(smX + 25, smY + 22, 2, 12);
       ctx.fillRect(smX + 31, smY + 22, 2, 12);
+    }
+
+    // 7. 포션 가게 연금 작업대 & 약초 정원 (좌하단 및 창가)
+    const potLv =
+      (state.potionTools?.['pot_tool_mortar'] ?? 0) +
+      (state.potionTools?.['pot_tool_alembic'] ?? 0) +
+      (state.potionTools?.['pot_tool_cauldron'] ?? 0);
+    if (potLv > 0) {
+      const px = 18;
+      const py = 74;
+      // 연금 작업 선반
+      ctx.fillStyle = '#3b2216';
+      ctx.fillRect(px, py, 34, 14);
+      ctx.fillStyle = '#7f4f24';
+      ctx.fillRect(px - 1, py - 2, 36, 4);
+      // 증류기 플라스크 (초록/보라/하늘빛 포션)
+      ctx.fillStyle = '#52b788';
+      ctx.fillRect(px + 4, py - 7, 5, 5);
+      ctx.fillStyle = '#4cc9f0';
+      ctx.fillRect(px + 13, py - 8, 5, 6);
+      if ((state.potionTools?.['pot_tool_cauldron'] ?? 0) > 0) {
+        ctx.fillStyle = '#311042';
+        ctx.fillRect(px + 22, py - 9, 9, 7);
+        ctx.fillStyle = Math.floor(t * 6) % 2 === 0 ? '#c084fc' : '#a855f7';
+        ctx.fillRect(px + 24, py - 10, 5, 2);
+      }
+    }
+    if ((state.potionTools?.['pot_fac_garden'] ?? 0) > 0) {
+      // 약초 화분 정원
+      const gx = 16;
+      const gy = 166;
+      ctx.fillStyle = '#5c3a21';
+      ctx.fillRect(gx, gy, 36, 14);
+      ctx.fillStyle = '#2a9d8f';
+      for (let i = 0; i < 5; i++) {
+        ctx.fillRect(gx + 3 + i * 6, gy - 4, 4, 5);
+      }
     }
   }
 
@@ -652,6 +715,33 @@ export class InnRenderer {
           this.drawSingleGuest(ctx, t, guest);
         },
       });
+    }
+
+    // 소속 영웅들 추가 (여관 체류 또는 던전 출정 연출)
+    if (state.heroEntities) {
+      for (const hEnt of state.heroEntities) {
+        drawables.push({
+          y: hEnt.y,
+          draw: () => {
+            ctx.fillStyle = 'rgba(82, 183, 136, 0.35)';
+            ctx.fillRect(Math.round(hEnt.x - 6), Math.round(hEnt.y - 2), 12, 3);
+            drawHeroCharacter(
+              ctx,
+              hEnt.heroId,
+              hEnt.x,
+              hEnt.y,
+              hEnt.facing,
+              hEnt.status === 'exploring' ? t * 10 : t * 2
+            );
+            // 영웅 이름 미니 태그
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.8)';
+            ctx.fillRect(Math.round(hEnt.x - 13), Math.round(hEnt.y - 24), 26, 8);
+            ctx.fillStyle = hEnt.status === 'exploring' ? '#4cc9f0' : '#ffd166';
+            ctx.font = '6px sans-serif';
+            ctx.fillText(hEnt.name, Math.round(hEnt.x - 11), Math.round(hEnt.y - 18));
+          },
+        });
+      }
     }
 
     // Y좌표 오름차순 정렬 후 렌더링

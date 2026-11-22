@@ -1,3 +1,4 @@
+import { HERO_CLASSES, HERO_ROSTER_MAP } from './loopData';
 import { GuestId, OrderType } from './types';
 
 export type PixelGrid = string[];
@@ -513,10 +514,12 @@ export function drawOrderBubble(
 }
 
 const portraitCache: Partial<Record<GuestId, string>> = {};
+const heroPortraitCache: Record<string, string> = {};
 
 export function getGuestPortraitDataUrl(typeId: GuestId): string {
   const cached = portraitCache[typeId];
   if (cached) return cached;
+  if (typeof document === 'undefined') return '';
 
   const canvas = document.createElement('canvas');
   canvas.width = 48;
@@ -529,6 +532,55 @@ export function getGuestPortraitDataUrl(typeId: GuestId): string {
   }
   const url = canvas.toDataURL();
   portraitCache[typeId] = url;
+  return url;
+}
+
+export function drawHeroCharacter(
+  ctx: CanvasRenderingContext2D,
+  heroId: string,
+  x: number,
+  y: number,
+  facing: 'left' | 'right',
+  walkPhase: number
+): void {
+  const roster = HERO_ROSTER_MAP[heroId];
+  if (!roster) return;
+  const cls = HERO_CLASSES[roster.classId];
+  const baseDef = GUEST_SPRITES[cls.baseSpriteId] ?? GUEST_SPRITES.warrior;
+  const palette = { ...baseDef.palette, ...roster.paletteOverrides };
+  const bobY = Math.sin(walkPhase) > 0.3 ? -1 : 0;
+  drawPixelSprite(
+    ctx,
+    baseDef.grid,
+    palette,
+    x,
+    y + bobY,
+    1,
+    facing === 'left'
+  );
+}
+
+export function getHeroPortraitDataUrl(heroId: string): string {
+  const cached = heroPortraitCache[heroId];
+  if (cached) return cached;
+  if (typeof document === 'undefined') return '';
+
+  const roster = HERO_ROSTER_MAP[heroId];
+  if (!roster) return '';
+  const cls = HERO_CLASSES[roster.classId];
+  const baseDef = GUEST_SPRITES[cls.baseSpriteId] ?? GUEST_SPRITES.warrior;
+  const palette = { ...baseDef.palette, ...roster.paletteOverrides };
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 48;
+  canvas.height = 48;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    ctx.imageSmoothingEnabled = false;
+    drawPixelSprite(ctx, baseDef.grid, palette, 24, 44, 2, false);
+  }
+  const url = canvas.toDataURL();
+  heroPortraitCache[heroId] = url;
   return url;
 }
 
