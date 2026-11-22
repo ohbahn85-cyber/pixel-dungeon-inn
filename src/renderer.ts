@@ -1,5 +1,10 @@
 import { GUEST_TYPES, SEAT_SLOTS } from './data';
-import { MAP_HEIGHT, MAP_WIDTH } from './innMap';
+import {
+  CLASS_COMBAT_SKILLS,
+  MAP_HEIGHT,
+  MAP_WIDTH,
+  ROOM_TYPE_META,
+} from './innMap';
 import { DUNGEON_MAP, HERO_CLASSES, HERO_ROSTER_MAP } from './loopData';
 import {
   drawGuestCharacter,
@@ -13,11 +18,13 @@ import {
   ActiveEvent,
   ActiveExpedition,
   CoinParticle,
+  DayPhase,
   ExpeditionResultSummary,
   FloatingText,
   GuestEntity,
   HeroActivityState,
   HeroInteractionEffect,
+  HeroRole,
   HeroStatus,
 } from './types';
 
@@ -25,11 +32,14 @@ export const CANVAS_WIDTH = MAP_WIDTH; // 480
 export const CANVAS_HEIGHT = MAP_HEIGHT; // 288
 
 export const DUNGEON_CANVAS_WIDTH = 480;
-export const DUNGEON_CANVAS_HEIGHT = 136;
+export const DUNGEON_CANVAS_HEIGHT = 176;
 
 export interface HeroCanvasEntity {
   heroId: string;
   name: string;
+  classIcon: string;
+  role: HeroRole;
+  personalityIcon: string;
   status: HeroStatus;
   activity: HeroActivityState;
   x: number;
@@ -44,6 +54,9 @@ export interface HeroCanvasEntity {
 
 export interface RenderContextState {
   time: number;
+  dayNumber?: number;
+  dayPhase?: DayPhase;
+  dayProgressRatio?: number;
   guests: GuestEntity[];
   floatingTexts: FloatingText[];
   particles: CoinParticle[];
@@ -61,7 +74,22 @@ export interface RenderContextState {
   pendingLootCount?: number;
   potionStockTotal?: number;
   equipStockTotal?: number;
+  unpaidWages?: number;
 }
+
+const ROLE_RING_COLORS: Record<HeroRole, string> = {
+  tank: 'rgba(98, 132, 171, 0.72)', // 강철 블루
+  dps: 'rgba(199, 99, 91, 0.72)', // 코랄 레드
+  healer: 'rgba(109, 166, 122, 0.72)', // 에메랄드 그린
+  support: 'rgba(217, 154, 78, 0.72)', // 허니 골드
+};
+
+const ROLE_BADGE_COLORS: Record<HeroRole, string> = {
+  tank: '#6284ab',
+  dps: '#c7635b',
+  healer: '#6da67a',
+  support: '#d99a4e',
+};
 
 export class InnRenderer {
   private canvas: HTMLCanvasElement;
@@ -84,7 +112,7 @@ export class InnRenderer {
     const t = state.time;
     ctx.imageSmoothingEnabled = false;
 
-    // 1. 전체 여관 바닥 및 상단 벽면, 구역 카펫
+    // 1. 전체 여관 바닥 및 상단 벽면, 낮/밤 창문
     this.drawFloorAndWalls(ctx, t, state);
 
     // 2. 상단 3개 구역: [좌] 포션 가게 코너 / [중] 주방 화덕 & 바 카운터 / [우] 2층 객실·침대 & 온천
@@ -98,19 +126,22 @@ export class InnRenderer {
     this.drawBlacksmithZone(ctx, t, state);
     this.drawDungeonGateZone(ctx, t, state);
 
-    // 4. 구역 표지판 배지 (카이로소프트풍 아늑한 구역 라벨)
+    // 4. 구역 표지판 배지
     this.drawZoneSignboards(ctx, state);
 
-    // 5. 고정 NPC 직원들 (주인장, 바텐더, 요리사, 음유시인, 연금술사, 대장장이, 상인)
+    // 5. 고정 NPC 직원들
     this.drawStationaryStaff(ctx, t, state);
 
     // 6. 식당 홀 테이블 + 방문 손님 + 메이드 + 걸어다니는 영웅 에이전트 (Y좌표 깊이 정렬)
     this.drawHallAndHeroAgents(ctx, t, state);
 
-    // 7. 영웅 말풍선 레이어 (겹침 방지 처리된 한국어 말구름)
+    // 7. 낮/밤 조명 분위기 오버레이 및 촛불·화덕·창문 불빛 효과
+    this.drawDayNightLighting(ctx, t, state);
+
+    // 8. 영웅 말풍선 레이어
     this.drawHeroSpeechBubbles(ctx, state);
 
-    // 8. 코인 파티클 & 떠오르는 텍스트
+    // 9. 코인 파티클 & 떠오르는 텍스트
     this.drawParticlesAndFloatingTexts(ctx, state);
   }
 
@@ -119,7 +150,7 @@ export class InnRenderer {
     t: number,
     state: RenderContextState
   ): void {
-    // 상단 벽면 (따뜻하고 채도를 낮춘 회벽과 원목 기둥)
+    // 상단 벽면
     ctx.fillStyle = '#4e382c';
     ctx.fillRect(0, 0, CANVAS_WIDTH, 52);
 
@@ -134,7 +165,10 @@ export class InnRenderer {
     ctx.fillRect(0, 0, CANVAS_WIDTH, 6);
     ctx.fillRect(0, 46, CANVAS_WIDTH, 6);
 
-    // 메인 1층 따뜻한 원목 마루 바닥 (y: 52..288)
+    // 상단 벽면 여관 창문 (낮/밤 하늘과 불빛 표현)
+    this.drawWallWindows(ctx, t, state.dayPhase ?? 'day');
+
+    // 메인 1층 따뜻한 원목 마루 바닥
     ctx.fillStyle = '#876040';
     ctx.fillRect(0, 52, CANVAS_WIDTH, CANVAS_HEIGHT - 52);
 
@@ -148,7 +182,7 @@ export class InnRenderer {
       }
     }
 
-    // 2층 객실 구역 마루 바닥 (우상단 x: 308..472, y: 16..94)
+    // 2층 객실 구역 마루 바닥
     ctx.fillStyle = '#7a5438';
     ctx.fillRect(308, 16, 164, 78);
     ctx.fillStyle = '#69462d';
@@ -156,7 +190,7 @@ export class InnRenderer {
       ctx.fillRect(308, y, 164, 1);
     }
 
-    // 좌측 하단 손님 출입문 (x: 0..12, y: 168..210)
+    // 좌측 하단 손님 출입문
     ctx.fillStyle = '#3b2920';
     ctx.fillRect(0, 168, 10, 42);
     ctx.fillStyle = '#9c6b43';
@@ -171,7 +205,7 @@ export class InnRenderer {
     ctx.fillRect(14, 180, 26, 1);
     ctx.fillRect(14, 197, 26, 1);
 
-    // 좌하단 약초 정원 화단 (x: 16..108, y: 256..278)
+    // 좌하단 약초 정원 화단
     const gardenLv = state.potionTools?.['pot_fac_garden'] ?? 0;
     ctx.fillStyle = '#5c402c';
     ctx.fillRect(18, 258, 86, 18);
@@ -197,27 +231,130 @@ export class InnRenderer {
     }
   }
 
+  private drawWallWindows(
+    ctx: CanvasRenderingContext2D,
+    t: number,
+    phase: DayPhase
+  ): void {
+    const winPositions = [118, 204, 280];
+    const skyColors: Record<DayPhase, { top: string; bot: string }> = {
+      morning: { top: '#86b4cf', bot: '#ebd186' },
+      day: { top: '#78b2bf', bot: '#b5d8e6' },
+      evening: { top: '#7d608a', bot: '#d68a54' },
+      night: { top: '#1e2436', bot: '#2c354d' },
+    };
+    const sky = skyColors[phase] ?? skyColors.day;
+
+    for (const wx of winPositions) {
+      const wy = 16;
+      // 창문 나무 틀
+      ctx.fillStyle = '#3b261b';
+      ctx.fillRect(wx - 2, wy - 2, 20, 24);
+      // 창밖 하늘
+      ctx.fillStyle = sky.top;
+      ctx.fillRect(wx, wy, 16, 10);
+      ctx.fillStyle = sky.bot;
+      ctx.fillRect(wx, wy + 10, 16, 10);
+
+      if (phase === 'night') {
+        // 별빛 또는 달빛
+        const twinkle = Math.floor(t * 3 + wx) % 2 === 0;
+        ctx.fillStyle = twinkle ? '#ebd186' : '#f6efe2';
+        ctx.fillRect(wx + 3, wy + 3, 2, 2);
+        ctx.fillRect(wx + 11, wy + 5, 2, 2);
+      } else if (phase === 'day' || phase === 'morning') {
+        // 뭉게구름
+        ctx.fillStyle = '#f6efe2';
+        ctx.fillRect(wx + 3, wy + 5, 6, 3);
+        ctx.fillRect(wx + 9, wy + 11, 5, 2);
+      } else if (phase === 'evening') {
+        // 노을 해
+        ctx.fillStyle = '#ebd186';
+        ctx.fillRect(wx + 6, wy + 12, 4, 4);
+      }
+
+      // 창문 십자 격자
+      ctx.fillStyle = '#4e3526';
+      ctx.fillRect(wx + 7, wy, 2, 20);
+      ctx.fillRect(wx, wy + 9, 16, 2);
+    }
+  }
+
+  private drawDayNightLighting(
+    ctx: CanvasRenderingContext2D,
+    t: number,
+    state: RenderContextState
+  ): void {
+    const phase = state.dayPhase ?? 'day';
+    if (phase === 'day') return;
+
+    ctx.save();
+    if (phase === 'morning') {
+      ctx.fillStyle = 'rgba(235, 209, 134, 0.06)';
+      ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    } else if (phase === 'evening') {
+      // 따뜻한 노을 색조
+      ctx.fillStyle = 'rgba(180, 95, 55, 0.14)';
+      ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    } else if (phase === 'night') {
+      // 아늑한 밤 색조
+      ctx.fillStyle = 'rgba(18, 24, 42, 0.28)';
+      ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    }
+
+    // 저녁·밤에는 창문 바닥 불빛과 화덕·식탁 촛불·용광로·횃불 주변 따뜻한 조명 후광 표시
+    if (phase === 'evening' || phase === 'night') {
+      const pulse = Math.sin(t * 5) * 1.5;
+      const glowColor =
+        phase === 'night'
+          ? 'rgba(235, 200, 115, 0.18)'
+          : 'rgba(235, 190, 110, 0.12)';
+      ctx.fillStyle = glowColor;
+
+      // 창문 아래로 드리우는 은은한 달빛/창문 불빛
+      for (const wx of [118, 204, 280]) {
+        ctx.fillRect(wx - 2, 52, 20, 14);
+      }
+
+      // 화덕, 가마솥, 대장간 화로, 던전 아치 횃불 조명
+      const lightSpots = [
+        { x: 175, y: 36, r: 26 + pulse }, // 주방 화덕
+        { x: 110, y: 44, r: 18 + pulse }, // 연금 가마솥
+        { x: 376, y: 126, r: 26 + pulse }, // 대장간 용광로
+        { x: 456, y: 224, r: 22 + pulse }, // 던전 입구 횃불
+        { x: 70, y: 130, r: 16 }, // 식탁 1
+        { x: 150, y: 130, r: 16 }, // 식탁 2
+        { x: 70, y: 178, r: 16 }, // 식탁 3
+        { x: 150, y: 178, r: 16 }, // 식탁 4
+        { x: 70, y: 226, r: 16 }, // 식탁 5
+        { x: 150, y: 226, r: 16 }, // 식탁 6
+      ];
+      for (const ls of lightSpots) {
+        ctx.beginPath();
+        ctx.arc(ls.x, ls.y, ls.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
   private drawPotionShopZone(
     ctx: CanvasRenderingContext2D,
     t: number,
     state: RenderContextState
   ): void {
-    // 좌상단 포션 가게 코너 (x: 14..140, y: 14..90)
-    // 포션 구역 바닥 세이지 러그
     ctx.fillStyle = '#546e60';
     ctx.fillRect(18, 54, 118, 34);
     ctx.fillStyle = '#789c86';
     ctx.fillRect(20, 56, 114, 1);
     ctx.fillRect(20, 85, 114, 1);
 
-    // 뒷벽 약초/포션 진열 선반
     ctx.fillStyle = '#452f23';
     ctx.fillRect(20, 12, 74, 34);
     ctx.fillStyle = '#73503a';
     ctx.fillRect(22, 22, 70, 3);
     ctx.fillRect(22, 34, 70, 3);
 
-    // 선반 위 알록달록 포션 병들
     const bottleColors = ['#7eb38a', '#78b2bf', '#d47a72', '#e6c274', '#b592c9'];
     for (let i = 0; i < 10; i++) {
       const bx = 26 + (i % 5) * 13;
@@ -228,13 +365,11 @@ export class InnRenderer {
       ctx.fillRect(bx + 1, by - 1, 3, 1);
     }
 
-    // 연금 제작대 카운터 (x: 24..116, y: 46..60)
     ctx.fillStyle = '#4e3526';
     ctx.fillRect(24, 46, 92, 14);
     ctx.fillStyle = '#8c6240';
     ctx.fillRect(22, 44, 96, 4);
 
-    // 약초 절구 & 마력 증류기
     ctx.fillStyle = '#b8c0c7';
     ctx.fillRect(32, 39, 7, 5);
     if ((state.potionTools?.['pot_tool_alembic'] ?? 0) > 0) {
@@ -244,15 +379,12 @@ export class InnRenderer {
       ctx.fillRect(56, 34, 3, 2);
     }
 
-    // 룬 무쇠 가마솥 (보글보글)
     const cauldronX = 102;
     const cauldronY = 38;
     ctx.fillStyle = '#3b3d4a';
     ctx.fillRect(cauldronX, cauldronY, 16, 12);
-    ctx.fillStyle =
-      Math.floor(t * 5) % 2 === 0 ? '#9c78b8' : '#7eb38a';
+    ctx.fillStyle = Math.floor(t * 5) % 2 === 0 ? '#9c78b8' : '#7eb38a';
     ctx.fillRect(cauldronX + 2, cauldronY + 1, 12, 3);
-    // 방울 이펙트
     const bOff = Math.floor(t * 6) % 5;
     ctx.fillStyle = '#d8c2e8';
     ctx.fillRect(cauldronX + 5, cauldronY - 2 - bOff, 2, 2);
@@ -264,17 +396,14 @@ export class InnRenderer {
     t: number,
     state: RenderContextState
   ): void {
-    // 중상단 주방 화덕 & 바 카운터 (x: 152..296, y: 12..90)
     const fx = 156;
     const fy = 10;
 
-    // 따뜻한 벽돌 화덕
     ctx.fillStyle = '#6b4c3e';
     ctx.fillRect(fx, fy, 38, 42);
     ctx.fillStyle = '#2e201b';
     ctx.fillRect(fx + 6, fy + 16, 26, 24);
 
-    // 부드럽게 타오르는 모닥불
     const frame = Math.floor(t * 8) % 3;
     ctx.fillStyle = '#c7635b';
     ctx.fillRect(fx + 9, fy + 26 + (frame % 2), 20, 12);
@@ -283,13 +412,11 @@ export class InnRenderer {
     ctx.fillStyle = '#ebd186';
     ctx.fillRect(fx + 15, fy + 31, 8, 6);
 
-    // 화덕 옆 스튜 가마솥
     ctx.fillStyle = '#3d404d';
     ctx.fillRect(fx + 42, fy + 28, 14, 11);
     ctx.fillStyle = '#d68a54';
     ctx.fillRect(fx + 44, fy + 29, 10, 2);
 
-    // 오크 술통과 비밀 금고
     for (let i = 0; i < 2; i++) {
       const kx = 258 + i * 16;
       const ky = 18;
@@ -306,7 +433,6 @@ export class InnRenderer {
       ctx.fillRect(238, 24, 5, 5);
     }
 
-    // 바 카운터 본체 (x: 168..292, y: 56..74)
     const cx = 168;
     const cy = 56;
     ctx.fillStyle = '#543824';
@@ -316,7 +442,6 @@ export class InnRenderer {
     ctx.fillStyle = '#b3835b';
     ctx.fillRect(cx - 1, cy - 1, 126, 2);
 
-    // 카운터 위 맥주잔과 요리 접시
     ctx.fillStyle = '#e6c274';
     ctx.fillRect(cx + 22, cy - 6, 4, 4);
     ctx.fillStyle = '#f6efe2';
@@ -324,7 +449,6 @@ export class InnRenderer {
     ctx.fillStyle = '#78b2bf';
     ctx.fillRect(cx + 64, cy - 6, 4, 5);
 
-    // 태엽 오르골
     if ((state.upgrades['fac_musicbox'] ?? 0) > 0) {
       const mx = cx + 106;
       const my = cy - 9;
@@ -334,7 +458,6 @@ export class InnRenderer {
       ctx.fillRect(mx + 2, my, 6, 4);
     }
 
-    // 카운터 앞 바 스툴 4개
     for (const sx of [184, 216, 248, 278]) {
       ctx.fillStyle = '#5c3c24';
       ctx.fillRect(sx - 4, 80, 8, 6);
@@ -348,8 +471,6 @@ export class InnRenderer {
     t: number,
     state: RenderContextState
   ): void {
-    // 우상단 2층 객실·침대 구역 (x: 308..472, y: 14..94)
-    // 1층-2층 연결 나무 계단 (x: 298..324, y: 66..98)
     for (let step = 0; step < 6; step++) {
       ctx.fillStyle = '#8f623d';
       ctx.fillRect(300 + step * 3, 92 - step * 5, 22, 5);
@@ -357,7 +478,6 @@ export class InnRenderer {
       ctx.fillRect(300 + step * 3, 96 - step * 5, 22, 1);
     }
 
-    // 2층 객실 난간 (x: 326..472, y: 90)
     ctx.fillStyle = '#5e3f26';
     ctx.fillRect(324, 90, 148, 4);
     ctx.fillStyle = '#996b45';
@@ -366,27 +486,22 @@ export class InnRenderer {
       ctx.fillRect(rx, 80, 2, 10);
     }
 
-    // 아늑한 침대 4개 (x: 334, 366, 398, 430, y: 28..56)
     const isRoyal = (state.upgrades['room_royal'] ?? 0) > 0;
     const quiltColor = isRoyal ? '#9e4b46' : '#658c75';
     const bedXs = [332, 364, 396, 428];
     for (const bx of bedXs) {
-      // 침대 나무 프레임
       ctx.fillStyle = '#4f3522';
       ctx.fillRect(bx, 26, 22, 32);
-      // 매트리스 & 베개
       ctx.fillStyle = '#f2e8d5';
       ctx.fillRect(bx + 2, 29, 18, 26);
       ctx.fillStyle = '#fff9ed';
       ctx.fillRect(bx + 4, 31, 14, 6);
-      // 따뜻한 이불
       ctx.fillStyle = quiltColor;
       ctx.fillRect(bx + 2, 39, 18, 16);
       ctx.fillStyle = '#e6c274';
       ctx.fillRect(bx + 2, 39, 18, 2);
     }
 
-    // 지하 마력 온천탕 해금 시 우측 온천 코너 표시
     if ((state.upgrades['fac_hotspring'] ?? 0) > 0) {
       ctx.fillStyle = '#4b6375';
       ctx.fillRect(436, 62, 32, 22);
@@ -404,17 +519,14 @@ export class InnRenderer {
     _t: number,
     state: RenderContextState
   ): void {
-    // 중앙 거래/시장 가판대 (x: 224..304, y: 120..180)
     const tx = 228;
     const ty = 126;
 
-    // 가판대 바닥 러그
     ctx.fillStyle = '#6e4d3b';
     ctx.fillRect(tx - 4, ty + 16, 78, 38);
     ctx.fillStyle = '#c99b5b';
     ctx.fillRect(tx - 2, ty + 18, 74, 1);
 
-    // 줄무늬 천막 지붕 (따뜻한 크림 & 테라코타)
     for (let i = 0; i < 7; i++) {
       ctx.fillStyle = i % 2 === 0 ? '#c7635b' : '#f2e5d0';
       ctx.fillRect(tx + i * 10, ty, 10, 11);
@@ -422,13 +534,11 @@ export class InnRenderer {
     ctx.fillStyle = '#4e3524';
     ctx.fillRect(tx, ty + 11, 70, 2);
 
-    // 가판대 나무 매대
     ctx.fillStyle = '#5c3e28';
     ctx.fillRect(tx + 2, ty + 24, 66, 14);
     ctx.fillStyle = '#996b45';
     ctx.fillRect(tx, ty + 22, 70, 4);
 
-    // 황금 저울과 보석/전리품 상자
     ctx.fillStyle = '#e6c274';
     ctx.fillRect(tx + 10, ty + 17, 7, 5);
     ctx.fillStyle = '#7eb38a';
@@ -436,7 +546,6 @@ export class InnRenderer {
     ctx.fillStyle = '#78b2bf';
     ctx.fillRect(tx + 40, ty + 18, 6, 4);
 
-    // 매입 대기 전리품이 있으면 반짝이는 보따리 표시
     if ((state.pendingLootCount ?? 0) > 0) {
       ctx.fillStyle = '#ebd186';
       ctx.fillRect(tx + 54, ty + 16, 8, 6);
@@ -448,24 +557,20 @@ export class InnRenderer {
     _t: number,
     state: RenderContextState
   ): void {
-    // 중하단 의뢰 게시판 집결 광장 (x: 226..322, y: 194..268)
     const bx = 246;
     const by = 194;
 
-    // 파티 집결 원형/사각 양탄자
     ctx.fillStyle = '#4b5e6e';
     ctx.fillRect(bx - 16, by + 22, 86, 42);
     ctx.fillStyle = '#89a7bd';
     ctx.fillRect(bx - 14, by + 24, 82, 1);
     ctx.fillRect(bx - 14, by + 61, 82, 1);
 
-    // 대형 원목 의뢰 게시판
     ctx.fillStyle = '#3d291d';
     ctx.fillRect(bx, by, 54, 28);
     ctx.fillStyle = '#7d5538';
     ctx.fillRect(bx + 3, by + 3, 48, 22);
 
-    // 붙어 있는 의뢰서 양피지들
     const boardLv = state.upgrades['fac_board'] ?? 0;
     const count = Math.min(6, 3 + boardLv);
     const coords = [
@@ -490,17 +595,14 @@ export class InnRenderer {
     t: number,
     state: RenderContextState
   ): void {
-    // 우중단 드워프 대장간 (x: 326..436, y: 108..186)
     const sx = 332;
     const sy = 112;
 
-    // 대장간 석재 타일 패드
     ctx.fillStyle = '#5a6069';
     ctx.fillRect(sx, sy + 8, 96, 64);
     ctx.fillStyle = '#494e57';
     ctx.fillRect(sx + 3, sy + 11, 90, 58);
 
-    // 드워프 고열 용광로(화로)
     ctx.fillStyle = '#635954';
     ctx.fillRect(sx + 32, sy, 28, 26);
     ctx.fillStyle = '#362d2a';
@@ -510,7 +612,6 @@ export class InnRenderer {
     ctx.fillStyle = '#ebd186';
     ctx.fillRect(sx + 42, sy + 16, 8, 6);
 
-    // 강철·미스릴 모루 (Anvil)
     const isMithril = (state.blacksmithTools?.['smith_anvil'] ?? 0) >= 2;
     ctx.fillStyle = '#333840';
     ctx.fillRect(sx + 14, sy + 34, 14, 5);
@@ -518,7 +619,6 @@ export class InnRenderer {
     ctx.fillRect(sx + 11, sy + 28, 20, 6);
     ctx.fillRect(sx + 8, sy + 29, 4, 4);
 
-    // 담금질 오일 통 & 룬 숫돌
     ctx.fillStyle = '#6e492d';
     ctx.fillRect(sx + 6, sy + 46, 12, 12);
     ctx.fillStyle = '#78b2bf';
@@ -531,7 +631,6 @@ export class InnRenderer {
       ctx.fillRect(sx + 71, sy + 12, 10, 10);
     }
 
-    // 완성 장비 무기 진열대
     ctx.fillStyle = '#6e492d';
     ctx.fillRect(sx + 60, sy + 42, 28, 16);
     const stockCnt = Math.min(4, Math.max(2, state.equipStockTotal ?? 2));
@@ -546,27 +645,22 @@ export class InnRenderer {
     t: number,
     state: RenderContextState
   ): void {
-    // 우하단 던전으로 가는 입구 아치 (x: 416..478, y: 192..274)
     const gx = 424;
     const gy = 196;
 
-    // 게시판에서 던전 입구로 이어지는 돌길
     ctx.fillStyle = '#686b73';
     for (let i = 0; i < 6; i++) {
       ctx.fillRect(322 + i * 17, 220 + (i % 2) * 4, 13, 18);
     }
 
-    // 석조 던전 출입 아치문
     ctx.fillStyle = '#555b66';
     ctx.fillRect(gx + 16, gy, 36, 62);
     ctx.fillStyle = '#6d7482';
     ctx.fillRect(gx + 12, gy - 4, 44, 8);
 
-    // 아치 내부 신비로운 던전 통로
     ctx.fillStyle = '#20242e';
     ctx.fillRect(gx + 22, gy + 8, 24, 52);
 
-    // 원정 중인 파티가 있으면 포털 룬이 은은하게 빛남
     const hasExpedition = (state.expeditions?.length ?? 0) > 0;
     if (hasExpedition) {
       const glow = Math.floor(t * 5) % 2 === 0 ? '#5c859e' : '#47687d';
@@ -574,7 +668,6 @@ export class InnRenderer {
       ctx.fillRect(gx + 26, gy + 14, 16, 42);
     }
 
-    // 양옆 횃불
     const torchColor = Math.floor(t * 7) % 2 === 0 ? '#d68a54' : '#ebd186';
     ctx.fillStyle = '#4e3524';
     ctx.fillRect(gx + 17, gy + 24, 3, 7);
@@ -629,11 +722,9 @@ export class InnRenderer {
     const upgrades = state.upgrades;
     const bob = Math.sin(t * 4) > 0 ? -1 : 0;
 
-    // 1. 여관 주인 (바 카운터 중앙)
     const waveBob = state.innkeeperWaveTimer > 0 ? -2 : bob;
     drawStaffCharacter(ctx, 'innkeeper', 210, 55, 'left', waveBob);
 
-    // 2. 포션 가게 연금술사 벨라
     drawStaffCharacter(
       ctx,
       'alchemist',
@@ -643,7 +734,6 @@ export class InnRenderer {
       Math.cos(t * 5) > 0 ? -1 : 0
     );
 
-    // 3. 거래 가판대 상인
     drawStaffCharacter(
       ctx,
       'merchant',
@@ -653,7 +743,6 @@ export class InnRenderer {
       Math.sin(t * 4.5) > 0 ? -1 : 0
     );
 
-    // 4. 대장간 장인 토르가
     drawStaffCharacter(
       ctx,
       'blacksmith',
@@ -663,7 +752,6 @@ export class InnRenderer {
       Math.cos(t * 6) > 0 ? -1 : 0
     );
 
-    // 5. 바텐더 브롬
     if ((upgrades['staff_bartender'] ?? 0) > 0) {
       drawStaffCharacter(
         ctx,
@@ -675,7 +763,6 @@ export class InnRenderer {
       );
     }
 
-    // 6. 수석 요리사 고든
     if ((upgrades['staff_chef'] ?? 0) > 0) {
       drawStaffCharacter(
         ctx,
@@ -687,7 +774,6 @@ export class InnRenderer {
       );
     }
 
-    // 7. 음유시인 엘리
     if ((upgrades['staff_bard'] ?? 0) > 0) {
       drawStaffCharacter(
         ctx,
@@ -708,7 +794,6 @@ export class InnRenderer {
     t: number,
     state: RenderContextState
   ): void {
-    // 1층 식당 식탁 6개
     const tables = [
       { x: 58, y: 128 },
       { x: 138, y: 128 },
@@ -728,16 +813,13 @@ export class InnRenderer {
       drawables.push({
         y: tb.y + 10,
         draw: () => {
-          // 부드러운 바닥 그림자
           ctx.fillStyle = 'rgba(42, 28, 18, 0.22)';
           ctx.fillRect(tb.x - 10, tb.y + 12, 44, 4);
 
-          // 의자
           ctx.fillStyle = '#5e3f26';
           ctx.fillRect(tb.x - 9, tb.y + 3, 7, 10);
           ctx.fillRect(tb.x + 26, tb.y + 3, 7, 10);
 
-          // 식탁 상판
           ctx.fillStyle = '#543824';
           ctx.fillRect(tb.x, tb.y + 4, 24, 11);
           ctx.fillStyle = '#996b45';
@@ -745,7 +827,6 @@ export class InnRenderer {
           ctx.fillStyle = '#b3835b';
           ctx.fillRect(tb.x - 1, tb.y + 1, 26, 5);
 
-          // 따뜻한 촛불
           ctx.fillStyle = '#f6efe2';
           ctx.fillRect(tb.x + 11, tb.y - 2, 2, 4);
           ctx.fillStyle =
@@ -755,7 +836,6 @@ export class InnRenderer {
       });
     }
 
-    // 견습 메이드 리나
     if ((state.upgrades['staff_maid'] ?? 0) > 0) {
       drawables.push({
         y: state.maidPos.y,
@@ -772,7 +852,6 @@ export class InnRenderer {
       });
     }
 
-    // 일반 방문 손님
     for (const guest of state.guests) {
       drawables.push({
         y: guest.y,
@@ -782,29 +861,25 @@ export class InnRenderer {
       });
     }
 
-    // 살아있는 여관 영웅 에이전트들
+    // 살아있는 여관 영웅 에이전트들 (발밑 역할 고유 색 링 + 머리 위 직업 아이콘 & 성격 배지)
     if (state.heroEntities) {
       for (const hEnt of state.heroEntities) {
-        if (hEnt.status === 'exploring') continue; // 던전 탐험 중에는 여관 맵에서 사라짐
+        if (hEnt.status === 'exploring') continue;
         drawables.push({
           y: hEnt.y,
           draw: () => {
             const rx = Math.round(hEnt.x);
             const ry = Math.round(hEnt.y);
 
-            // 선택된 영웅 하이라이트 링 또는 기본 그림자
+            // 발밑 역할별 고유 색 링 + 선택 하이라이트
+            const roleRingColor =
+              ROLE_RING_COLORS[hEnt.role] ?? 'rgba(120, 178, 191, 0.65)';
             if (hEnt.isSelected) {
-              ctx.fillStyle = 'rgba(235, 209, 134, 0.85)';
-              ctx.fillRect(rx - 8, ry - 3, 16, 5);
-              ctx.fillStyle = '#5c3c24';
-              ctx.fillRect(rx - 6, ry - 2, 12, 3);
-            } else if (hEnt.hasPlayerOrder) {
-              ctx.fillStyle = 'rgba(126, 179, 138, 0.7)';
-              ctx.fillRect(rx - 7, ry - 3, 14, 4);
-            } else {
-              ctx.fillStyle = 'rgba(38, 24, 16, 0.28)';
-              ctx.fillRect(rx - 5, ry - 2, 10, 3);
+              ctx.fillStyle = 'rgba(235, 209, 134, 0.92)';
+              ctx.fillRect(rx - 9, ry - 3, 18, 5);
             }
+            ctx.fillStyle = roleRingColor;
+            ctx.fillRect(rx - 7, ry - 2, 14, 3);
 
             const walkPhase =
               hEnt.activity === 'walking' ? t * 13 + rx * 0.2 : t * 2;
@@ -819,18 +894,24 @@ export class InnRenderer {
               t
             );
 
-            // 영웅 미니 HP 바 & 이름표
-            const tagW = 26;
+            // 머리 위 직업 아이콘 + 이름표 + 미니 체력바
+            const roleAccent = ROLE_BADGE_COLORS[hEnt.role] ?? '#78b2bf';
+            const tagW = 36;
             const tagX = rx - Math.floor(tagW / 2);
-            const tagY = ry - 24;
+            const tagY = ry - 25;
+
             ctx.fillStyle = hEnt.isSelected
-              ? 'rgba(92, 60, 36, 0.92)'
-              : 'rgba(42, 30, 23, 0.82)';
-            ctx.fillRect(tagX, tagY, tagW, 9);
+              ? 'rgba(72, 48, 28, 0.95)'
+              : 'rgba(36, 26, 20, 0.86)';
+            ctx.fillRect(tagX, tagY, tagW, 10);
+
+            // 좌측 역할 색상 포인트 바
+            ctx.fillStyle = roleAccent;
+            ctx.fillRect(tagX, tagY, 2, 10);
 
             // 미니 체력바
-            ctx.fillStyle = '#33241b';
-            ctx.fillRect(tagX + 2, tagY + 7, tagW - 4, 2);
+            ctx.fillStyle = '#261b15';
+            ctx.fillRect(tagX + 3, tagY + 8, tagW - 5, 2);
             ctx.fillStyle =
               hEnt.hpPct < 0.45
                 ? '#c7635b'
@@ -838,9 +919,9 @@ export class InnRenderer {
                 ? '#e6c274'
                 : '#7eb38a';
             ctx.fillRect(
-              tagX + 2,
-              tagY + 7,
-              Math.max(2, Math.round((tagW - 4) * hEnt.hpPct)),
+              tagX + 3,
+              tagY + 8,
+              Math.max(2, Math.round((tagW - 5) * hEnt.hpPct)),
               2
             );
 
@@ -849,14 +930,18 @@ export class InnRenderer {
               : hEnt.hasPlayerOrder
               ? '#a8e0b4'
               : '#f6efe2';
-            ctx.font = '6px sans-serif';
-            ctx.fillText(hEnt.name, tagX + 3, tagY + 6);
+            ctx.font = 'bold 6px sans-serif';
+            ctx.fillText(
+              `${hEnt.classIcon}${hEnt.name}`,
+              tagX + 3,
+              tagY + 6
+            );
 
             // 상호작용 시 짧은 아이템/골드 이펙트
             if (hEnt.interactionEffect) {
               const eff = hEnt.interactionEffect;
-              const floatY = ry - 28 - Math.round((1.4 - eff.timer) * 6);
-              ctx.fillStyle = 'rgba(42, 30, 23, 0.88)';
+              const floatY = ry - 30 - Math.round((1.4 - eff.timer) * 6);
+              ctx.fillStyle = 'rgba(42, 30, 23, 0.9)';
               ctx.fillRect(rx - 18, floatY - 7, 38, 10);
               ctx.fillStyle = eff.color;
               ctx.font = 'bold 7px sans-serif';
@@ -878,18 +963,16 @@ export class InnRenderer {
     state: RenderContextState
   ): void {
     if (!state.heroEntities) return;
-    // 화면에 동시에 최대 2~3개만, 서로 너무 가깝지 않게 말풍선 표시
     const candidates = state.heroEntities.filter(
       (h) => h.status !== 'exploring' && Boolean(h.speechText)
     );
-    // 선택된 영웅을 최우선으로 정렬
     candidates.sort((a, b) => (b.isSelected ? 1 : 0) - (a.isSelected ? 1 : 0));
 
     const placed: { x: number; y: number }[] = [];
     for (const h of candidates) {
-      if (placed.length >= 2 && !h.isSelected) break;
+      if (placed.length >= 3 && !h.isSelected) break;
       const tooClose = placed.some(
-        (p) => Math.abs(p.x - h.x) < 76 && Math.abs(p.y - h.y) < 34
+        (p) => Math.abs(p.x - h.x) < 72 && Math.abs(p.y - h.y) < 32
       );
       if (tooClose && !h.isSelected) continue;
 
@@ -995,7 +1078,7 @@ export class InnRenderer {
 }
 
 // ============================================================================
-// 카이로소프트풍 층별 던전 탐험 & 자동 전투 전용 렌더러 (480x136)
+// 카이로소프트풍 갈래 방 · 테마별 배경 · 직업 기술 이펙트 던전 탐험 렌더러 (480x176)
 // ============================================================================
 
 export class DungeonExpeditionRenderer {
@@ -1033,31 +1116,36 @@ export class DungeonExpeditionRenderer {
     const currentFloor = activeExp.currentFloor ?? 1;
     const phase = activeExp.floorPhase ?? 'marching';
 
-    // 1. 던전 태그별 배경 복도 & 바닥 타일
-    this.drawDungeonCorridor(
+    // 1. 던전 7종 고유 시각 테마 배경 및 바닥
+    this.drawDungeonThemedEnvironment(
       ctx,
       t,
+      dungeon?.id ?? 'dungeon_slime',
       dungeon?.tag ?? 'cave',
-      phase === 'marching' ? activeExp.marchProgress ?? 0 : 0
+      phase === 'marching' ? activeExp.marchProgress ?? 0 : 0,
+      activeExp.currentRoomType ?? 'combat'
     );
 
-    // 2. 상단 층 진행 미니맵 바 (1F -> 2F -> 3F BOSS)
-    this.drawFloorProgressHeader(
+    // 2. 상단 층/갈래 방 미니맵 헤더 (갈래 노드 그래프 표시)
+    this.drawBranchingRoomHeader(
       ctx,
       dungeon?.name ?? '던전',
       currentFloor,
       totalFloors,
       phase,
-      activeExp.remainingSec
+      activeExp
     );
 
-    // 3. 좌측: 원정 파티 영웅 대열 + 공격 모션 + HP바
+    // 3. 좌측: 원정 파티 영웅 진형 + 성격 돌진/방어 위치 + 직업 기술 배지 + 전투 말풍선
     this.drawPartyFormation(ctx, t, activeExp);
 
-    // 4. 우측: 현재 층 몬스터 / 보스 + 공격 모션 + HP바 + 드랍 아이템
-    this.drawMonstersAndDrops(ctx, t, activeExp);
+    // 4. 우측: 현재 방 몬스터(행동 특성 배지 포함) 또는 보물/함정/휴식/이벤트 오브젝트
+    this.drawMonstersAndRoomProps(ctx, t, activeExp);
 
-    // 5. 데미지 숫자 및 전투 플로팅 텍스트
+    // 5. 직업 기술 시각 이펙트 (방패막, 치유 빛기둥, 범위 화염구, 관통 화살, 치명타 참격 등)
+    this.drawSkillEffects(ctx, t, activeExp);
+
+    // 6. 데미지/회복 숫자 플로팅 텍스트
     this.drawCombatFloats(ctx, activeExp);
   }
 
@@ -1069,31 +1157,31 @@ export class DungeonExpeditionRenderer {
     ctx.fillStyle = '#26232b';
     ctx.fillRect(0, 0, DUNGEON_CANVAS_WIDTH, DUNGEON_CANVAS_HEIGHT);
 
-    // 돌바닥
     ctx.fillStyle = '#38343f';
-    ctx.fillRect(0, 94, DUNGEON_CANVAS_WIDTH, 42);
+    ctx.fillRect(0, 126, DUNGEON_CANVAS_WIDTH, 50);
     for (let x = 0; x < DUNGEON_CANVAS_WIDTH; x += 32) {
       ctx.fillStyle = '#2d2933';
-      ctx.fillRect(x, 94, 2, 42);
+      ctx.fillRect(x, 126, 2, 50);
     }
 
-    // 횃불
     const flicker = Math.floor(t * 6) % 2 === 0 ? '#d68a54' : '#ebd186';
     for (const tx of [90, 240, 390]) {
       ctx.fillStyle = '#5c402c';
-      ctx.fillRect(tx, 52, 4, 12);
+      ctx.fillRect(tx, 72, 4, 12);
       ctx.fillStyle = flicker;
-      ctx.fillRect(tx - 1, 46, 6, 6);
+      ctx.fillRect(tx - 1, 66, 6, 6);
     }
 
     ctx.fillStyle = '#ebd186';
     ctx.font = 'bold 10px sans-serif';
     if (lastResult) {
-      const statusStr = lastResult.success ? '🏆 공략 성공 귀환!' : '💥 부상 후퇴 귀환';
+      const statusStr = lastResult.success
+        ? '🏆 공략 성공 귀환!'
+        : '💥 부상 후퇴 귀환';
       ctx.fillText(
         `${statusStr} [${lastResult.dungeonName}] — 파티: ${lastResult.heroNames.join(' · ')}`,
         24,
-        42
+        56
       );
       ctx.fillStyle = '#d4bfa8';
       ctx.font = '9px sans-serif';
@@ -1106,119 +1194,307 @@ export class DungeonExpeditionRenderer {
           lootText ? `| 드랍: ${lootText}` : ''
         } (여관에서 정비 후 다음 원정을 준비합니다)`,
         24,
-        62
+        78
       );
     } else {
-      ctx.fillText(
-        '🗺️ 현재 던전을 탐험 중인 파티가 없습니다.',
-        24,
-        50
-      );
+      ctx.fillText('🗺️ 현재 던전을 탐험 중인 파티가 없습니다.', 24, 62);
       ctx.fillStyle = '#d4bfa8';
       ctx.font = '9px sans-serif';
       ctx.fillText(
-        '영웅들이 여관에서 식사·휴식·쇼핑을 마치고 의뢰 게시판에 모이면 던전으로 출발합니다!',
+        '영웅들이 여관에서 식사·휴식·쇼핑을 마치고 의뢰 게시판에 모이면 갈래 방 던전으로 출발합니다!',
         24,
-        68
+        82
       );
     }
   }
 
-  private drawDungeonCorridor(
+  private drawDungeonThemedEnvironment(
     ctx: CanvasRenderingContext2D,
     t: number,
+    dungeonId: string,
     tag: string,
-    marchOffset: number
+    marchOffset: number,
+    roomType: string
   ): void {
-    const themes: Record<string, { wall: string; brick: string; floor: string }> = {
-      cave: { wall: '#2b303a', brick: '#39414f', floor: '#474f5e' },
-      camp: { wall: '#382b24', brick: '#4d3b31', floor: '#5e493d' },
-      forest: { wall: '#25362e', brick: '#334a3f', floor: '#435e51' },
-      magic: { wall: '#2e2640', brick: '#3f3457', floor: '#52456e' },
-      mine: { wall: '#36322e', brick: '#4a453f', floor: '#5c564f' },
-      sanctum: { wall: '#332e3d', brick: '#474054', floor: '#5b536b' },
-      volcano: { wall: '#3d2220', brick: '#54302c', floor: '#693c37' },
+    const themes: Record<
+      string,
+      { wall: string; brick: string; floor: string; accent: string }
+    > = {
+      cave: {
+        wall: '#263330',
+        brick: '#344742',
+        floor: '#425952',
+        accent: '#6da67a',
+      },
+      camp: {
+        wall: '#382921',
+        brick: '#4d382d',
+        floor: '#5e4639',
+        accent: '#d68a54',
+      },
+      forest: {
+        wall: '#1f332c',
+        brick: '#2d473e',
+        floor: '#3b594e',
+        accent: '#82b88e',
+      },
+      magic: {
+        wall: '#2b223d',
+        brick: '#3c3054',
+        floor: '#4e3f6b',
+        accent: '#b592c9',
+      },
+      mine: {
+        wall: '#332e2a',
+        brick: '#47403a',
+        floor: '#595149',
+        accent: '#78b2bf',
+      },
+      sanctum: {
+        wall: '#2d2838',
+        brick: '#40394f',
+        floor: '#534b66',
+        accent: '#ebd186',
+      },
+      volcano: {
+        wall: '#3d1f1d',
+        brick: '#542b28',
+        floor: '#663531',
+        accent: '#e07a5f',
+      },
     };
     const th = themes[tag] ?? themes.cave;
 
+    // 배경 벽
     ctx.fillStyle = th.wall;
-    ctx.fillRect(0, 0, DUNGEON_CANVAS_WIDTH, 94);
+    ctx.fillRect(0, 34, DUNGEON_CANVAS_WIDTH, 96);
 
     const scrollPx = Math.floor(marchOffset * 64) % 32;
     ctx.fillStyle = th.brick;
     for (let x = -scrollPx; x < DUNGEON_CANVAS_WIDTH; x += 32) {
-      ctx.fillRect(x, 28, 28, 16);
-      ctx.fillRect(x + 12, 48, 28, 16);
-      ctx.fillRect(x, 68, 28, 18);
-    }
-
-    // 횃불
-    const flicker = Math.floor(t * 8) % 2 === 0 ? '#d68a54' : '#ebd186';
-    for (let x = 48 - scrollPx; x < DUNGEON_CANVAS_WIDTH; x += 96) {
-      ctx.fillStyle = '#5c402c';
-      ctx.fillRect(x, 48, 3, 9);
-      ctx.fillStyle = flicker;
-      ctx.fillRect(x - 1, 43, 5, 5);
+      ctx.fillRect(x, 42, 28, 18);
+      ctx.fillRect(x + 12, 66, 28, 18);
+      ctx.fillRect(x, 90, 28, 20);
     }
 
     // 바닥
     ctx.fillStyle = th.floor;
-    ctx.fillRect(0, 94, DUNGEON_CANVAS_WIDTH, 42);
+    ctx.fillRect(0, 128, DUNGEON_CANVAS_WIDTH, 48);
     ctx.fillStyle = th.wall;
-    ctx.fillRect(0, 94, DUNGEON_CANVAS_WIDTH, 2);
+    ctx.fillRect(0, 128, DUNGEON_CANVAS_WIDTH, 2);
     for (let x = -scrollPx; x < DUNGEON_CANVAS_WIDTH; x += 24) {
-      ctx.fillRect(x, 96, 2, 40);
+      ctx.fillRect(x, 130, 2, 46);
     }
+
+    // 던전별 고유 시각 테마 디테일
+    if (dungeonId === 'dungeon_slime' || tag === 'cave') {
+      // 천장 종유석 & 바닥 발광 슬라임 점액 웅덩이
+      ctx.fillStyle = '#4f6b61';
+      for (let x = 20 - scrollPx; x < DUNGEON_CANVAS_WIDTH; x += 56) {
+        ctx.fillRect(x, 34, 8, 10);
+        ctx.fillRect(x + 2, 44, 4, 6);
+      }
+      ctx.fillStyle =
+        Math.floor(t * 4) % 2 === 0 ? '#6da67a' : '#558b73';
+      for (let x = 60 - scrollPx; x < DUNGEON_CANVAS_WIDTH; x += 110) {
+        ctx.fillRect(x, 152, 24, 6);
+      }
+    } else if (dungeonId === 'dungeon_goblin' || tag === 'camp') {
+      // 고블린 통나무 목책 & 해골 깃발
+      for (let x = 36 - scrollPx; x < DUNGEON_CANVAS_WIDTH; x += 84) {
+        ctx.fillStyle = '#6b482e';
+        ctx.fillRect(x, 54, 6, 74);
+        ctx.fillRect(x + 8, 58, 6, 70);
+        ctx.fillStyle = '#c7635b';
+        ctx.fillRect(x - 2, 62, 18, 12);
+        ctx.fillStyle = '#f6efe2';
+        ctx.fillRect(x + 5, 65, 4, 5);
+      }
+    } else if (dungeonId === 'dungeon_shadow_forest' || tag === 'forest') {
+      // 고대 거목 기둥 & 자욱하게 흐르는 안개 레이어 & 반딧불이
+      for (let x = 24 - scrollPx; x < DUNGEON_CANVAS_WIDTH; x += 76) {
+        ctx.fillStyle = '#25382f';
+        ctx.fillRect(x, 34, 16, 94);
+        ctx.fillStyle = '#476e5b';
+        ctx.fillRect(x - 6, 34, 28, 16);
+      }
+      ctx.fillStyle = 'rgba(210, 232, 222, 0.14)';
+      const mistShift = Math.floor(t * 14) % 48;
+      ctx.fillRect(-mistShift, 108, DUNGEON_CANVAS_WIDTH + 48, 16);
+      ctx.fillStyle = '#ebd186';
+      for (let i = 0; i < 6; i++) {
+        const fx = (i * 83 + Math.floor(t * 18)) % DUNGEON_CANVAS_WIDTH;
+        const fy = 64 + Math.floor(Math.sin(t * 3 + i) * 14);
+        ctx.fillRect(fx, fy, 2, 2);
+      }
+    } else if (dungeonId === 'dungeon_ruined_tower' || tag === 'magic') {
+      // 부유하는 비전 마력 수정 기둥 & 별빛 아치 창문
+      for (let x = 52 - scrollPx; x < DUNGEON_CANVAS_WIDTH; x += 96) {
+        ctx.fillStyle = '#1c162b';
+        ctx.fillRect(x, 48, 18, 34);
+        ctx.fillStyle = '#ebd186';
+        ctx.fillRect(x + 5, 56, 2, 2);
+        ctx.fillRect(x + 11, 66, 2, 2);
+        const bob = Math.floor(Math.sin(t * 4 + x) * 3);
+        ctx.fillStyle = '#78b2bf';
+        ctx.fillRect(x + 28, 68 + bob, 8, 14);
+      }
+    } else if (dungeonId === 'dungeon_dwarf_mine' || tag === 'mine') {
+      // 광산 나무 버팀목, 미스릴 광맥, 바닥 광차 레일
+      for (let x = 32 - scrollPx; x < DUNGEON_CANVAS_WIDTH; x += 88) {
+        ctx.fillStyle = '#6b482e';
+        ctx.fillRect(x, 36, 8, 92);
+        ctx.fillRect(x - 10, 36, 28, 6);
+        ctx.fillStyle = '#78b2bf';
+        ctx.fillRect(x + 24, 78, 6, 6);
+        ctx.fillRect(x + 30, 84, 5, 4);
+      }
+      ctx.fillStyle = '#8c969e';
+      ctx.fillRect(0, 148, DUNGEON_CANVAS_WIDTH, 2);
+      ctx.fillRect(0, 158, DUNGEON_CANVAS_WIDTH, 2);
+    } else if (dungeonId === 'dungeon_abyss_sanctum' || tag === 'sanctum') {
+      // 성소 스테인드글라스 아치와 푸른 영혼 불꽃
+      for (let x = 44 - scrollPx; x < DUNGEON_CANVAS_WIDTH; x += 92) {
+        ctx.fillStyle = '#6284ab';
+        ctx.fillRect(x, 46, 12, 36);
+        ctx.fillStyle = '#b592c9';
+        ctx.fillRect(x + 12, 46, 12, 36);
+        ctx.fillStyle = '#78b2bf';
+        ctx.fillRect(x + 42, 68, 6, 8);
+      }
+    } else if (dungeonId === 'dungeon_dragon_lair' || tag === 'volcano') {
+      // 화산 둥지 끓어오르는 마그마 강 & 불티
+      ctx.fillStyle = Math.floor(t * 6) % 2 === 0 ? '#c7635b' : '#d68a54';
+      ctx.fillRect(0, 164, DUNGEON_CANVAS_WIDTH, 12);
+      ctx.fillStyle = '#ebd186';
+      for (let x = (Math.floor(t * 25) % 40); x < DUNGEON_CANVAS_WIDTH; x += 40) {
+        ctx.fillRect(x, 167, 14, 4);
+      }
+      for (let i = 0; i < 8; i++) {
+        const ex = (i * 67 + Math.floor(t * 22)) % DUNGEON_CANVAS_WIDTH;
+        const ey = 120 - ((Math.floor(t * 30) + i * 19) % 70);
+        ctx.fillStyle = i % 2 === 0 ? '#ebd186' : '#d68a54';
+        ctx.fillRect(ex, ey, 2, 2);
+      }
+    }
+
+    // 현재 방 타입 표시 배너 (전투/보물/함정/휴식/이벤트/정예/보스)
+    const rMeta =
+      ROOM_TYPE_META[roomType as keyof typeof ROOM_TYPE_META] ??
+      ROOM_TYPE_META.combat;
+    ctx.fillStyle = 'rgba(32, 23, 19, 0.82)';
+    ctx.fillRect(10, 40, 118, 15);
+    ctx.strokeStyle = rMeta.color;
+    ctx.strokeRect(10.5, 40.5, 117, 14);
+    ctx.fillStyle = rMeta.color;
+    ctx.font = 'bold 8px sans-serif';
+    ctx.fillText(`${rMeta.icon} 현재 방: ${rMeta.label}`, 15, 50);
   }
 
-  private drawFloorProgressHeader(
+  private drawBranchingRoomHeader(
     ctx: CanvasRenderingContext2D,
     dungeonName: string,
     currentFloor: number,
     totalFloors: number,
     phase: string,
-    remainingSec: number
+    exp: ActiveExpedition
   ): void {
-    ctx.fillStyle = 'rgba(32, 23, 19, 0.86)';
-    ctx.fillRect(0, 0, DUNGEON_CANVAS_WIDTH, 22);
+    ctx.fillStyle = 'rgba(28, 20, 16, 0.94)';
+    ctx.fillRect(0, 0, DUNGEON_CANVAS_WIDTH, 34);
+    ctx.fillStyle = '#5c4333';
+    ctx.fillRect(0, 33, DUNGEON_CANVAS_WIDTH, 1);
 
+    const rMeta =
+      ROOM_TYPE_META[exp.currentRoomType ?? 'combat'] ?? ROOM_TYPE_META.combat;
     const phaseLabel =
       phase === 'marching'
-        ? '🏃 복도 전진 중'
+        ? '🏃 갈래길 이동 중'
         : phase === 'fighting'
-        ? '⚔️ 몬스터 교전 중!'
+        ? `${rMeta.icon} ${rMeta.label} 진행 중`
         : phase === 'floor_clear'
-        ? '✨ 층 클리어! 전리품 획득'
+        ? '✨ 방 돌파 완료!'
         : '🗺️ 탐험 중';
 
     ctx.fillStyle = '#ebd186';
     ctx.font = 'bold 9px sans-serif';
     ctx.fillText(
-      `${dungeonName} — [${currentFloor}/${totalFloors}층] ${phaseLabel} (${Math.ceil(
-        remainingSec
-      )}초)`,
+      `${dungeonName} [${currentFloor}/${totalFloors}층]`,
       10,
       14
     );
+    ctx.fillStyle = '#d4bfa8';
+    ctx.font = '8px sans-serif';
+    ctx.fillText(
+      `${phaseLabel} (남은 시간 ${Math.ceil(exp.remainingSec)}초)`,
+      10,
+      27
+    );
 
-    // 우측 층별 노드 표시
-    const startX = 330;
+    // 우측: 갈래 방 노드 그래프 미니맵 (1F ~ 5F, 중간층은 위/아래 2갈래 표시)
+    const graph = exp.roomGraph ?? [];
+    const visited = new Set(exp.visitedRoomIds ?? []);
+    const curId = exp.currentRoomId ?? `f${currentFloor}_b0`;
+
+    const startX = 225;
+    const stepX = Math.min(52, Math.floor(230 / Math.max(1, totalFloors - 1)));
+
+    // 1. 노드 간 연결선 그리기
+    const nodePos = new Map<string, { x: number; y: number }>();
     for (let f = 1; f <= totalFloors; f++) {
-      const nx = startX + (f - 1) * 28;
-      if (f < totalFloors) {
-        ctx.fillStyle = f < currentFloor ? '#7eb38a' : '#5c4a3e';
-        ctx.fillRect(nx + 16, 10, 12, 2);
+      const nodes = graph[f - 1] ?? [];
+      const nx = startX + (f - 1) * stepX;
+      if (nodes.length === 1) {
+        nodePos.set(nodes[0].id, { x: nx, y: 17 });
+      } else if (nodes.length >= 2) {
+        nodePos.set(nodes[0].id, { x: nx, y: 9 });
+        nodePos.set(nodes[1].id, { x: nx, y: 25 });
       }
-      ctx.fillStyle =
-        f < currentFloor
-          ? '#4a7856'
-          : f === currentFloor
+    }
+
+    ctx.lineWidth = 1;
+    for (const floorNodes of graph) {
+      for (const node of floorNodes) {
+        const from = nodePos.get(node.id);
+        if (!from) continue;
+        for (const nextId of node.nextIds) {
+          const to = nodePos.get(nextId);
+          if (!to) continue;
+          const isPathTaken =
+            visited.has(node.id) && (visited.has(nextId) || curId === nextId);
+          ctx.strokeStyle = isPathTaken ? '#ebd186' : '#4e3b2e';
+          ctx.beginPath();
+          ctx.moveTo(from.x + 8, from.y);
+          ctx.lineTo(to.x - 8, to.y);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // 2. 각 방 노드 박스 및 아이콘 그리기
+    for (const floorNodes of graph) {
+      for (const node of floorNodes) {
+        const pos = nodePos.get(node.id);
+        if (!pos) continue;
+        const isCur = node.id === curId;
+        const isVis = visited.has(node.id);
+
+        ctx.fillStyle = isCur
           ? '#c9934b'
-          : '#3d3028';
-      ctx.fillRect(nx, 5, 18, 12);
-      ctx.fillStyle = '#f6efe2';
-      ctx.font = 'bold 7px monospace';
-      ctx.fillText(f === totalFloors ? 'BOSS' : `${f}F`, nx + 2, 14);
+          : isVis
+          ? '#3f6e4d'
+          : '#33261e';
+        ctx.fillRect(pos.x - 10, pos.y - 6, 20, 12);
+        ctx.strokeStyle = isCur
+          ? '#fff9ed'
+          : isVis
+          ? '#7eb38a'
+          : '#594335';
+        ctx.strokeRect(pos.x - 9.5, pos.y - 5.5, 19, 11);
+
+        ctx.fillStyle = '#f6efe2';
+        ctx.font = '8px sans-serif';
+        ctx.fillText(node.icon, pos.x - 5, pos.y + 3);
+      }
     }
   }
 
@@ -1230,22 +1506,21 @@ export class DungeonExpeditionRenderer {
     const heroIds = exp.heroIds;
     const phase = exp.floorPhase ?? 'marching';
 
-    // 전열(탱커)이 오른쪽(몬스터 쪽, x=176)에 서고 후열이 왼쪽(x=76)에 서도록 배치
-    const count = heroIds.length;
     heroIds.forEach((hId, idx) => {
       const roster = HERO_ROSTER_MAP[hId];
       if (!roster) return;
       const cls = HERO_CLASSES[roster.classId];
+      const skillDef = CLASS_COMBAT_SKILLS[roster.classId];
       const cState = exp.partyCombatState?.[hId];
-      const lunge = (cState?.lungeTimer ?? 0) > 0 ? 10 : 0;
-      const baseX = 175 - idx * 38 + lunge;
-      const baseY = 108 + (idx % 2) * 8;
+      const lunge = (cState?.lungeTimer ?? 0) > 0 ? 12 : 0;
+      const stance = cState?.stanceOffset ?? 0;
+      const baseX = 178 - idx * 40 + lunge + stance;
+      const baseY = 144 + (idx % 2) * 9;
 
-      // 그림자
-      ctx.fillStyle = 'rgba(20, 14, 10, 0.35)';
-      ctx.fillRect(baseX - 7, baseY - 2, 14, 4);
+      // 역할별 발밑 링
+      ctx.fillStyle = ROLE_RING_COLORS[cls.role] ?? 'rgba(20, 14, 10, 0.35)';
+      ctx.fillRect(baseX - 8, baseY - 2, 16, 4);
 
-      // 캐릭터 (2배 크기 대신 선명하게 1배 + 전투 모션, 또는 scale 1.5 대신 정수 1배/2배: 1배가 주변 비율과 딱 맞음)
       const walkPhase =
         phase === 'marching' ? t * 14 + idx : (cState?.lungeTimer ?? 0) * 20;
       drawHeroCharacter(
@@ -1259,57 +1534,105 @@ export class DungeonExpeditionRenderer {
         t
       );
 
-      // 공격 이펙트 (검기 / 마법탄)
-      if ((cState?.lungeTimer ?? 0) > 0) {
-        ctx.fillStyle =
-          cls.role === 'healer'
-            ? '#7eb38a'
-            : cls.id === 'mage'
-            ? '#78b2bf'
-            : '#ebd186';
-        ctx.fillRect(baseX + 10, baseY - 12, 8, 3);
-        ctx.fillRect(baseX + 14, baseY - 15, 3, 9);
-      }
-
-      // 영웅 HP 바 & 이름
+      // 영웅 HP 바 & 직업 아이콘 이름표
       const hpPct = cState
         ? Math.max(0, Math.min(1, cState.currentHp / Math.max(1, cState.maxHp)))
         : 1;
-      const bx = baseX - 15;
-      const by = baseY - 27;
-      ctx.fillStyle = 'rgba(32, 23, 19, 0.85)';
-      ctx.fillRect(bx, by, 30, 10);
+      const bx = baseX - 18;
+      const by = baseY - 28;
+      ctx.fillStyle = 'rgba(32, 23, 19, 0.88)';
+      ctx.fillRect(bx, by, 36, 10);
       ctx.fillStyle = '#f6efe2';
-      ctx.font = '6px sans-serif';
-      ctx.fillText(roster.name, bx + 2, by + 6);
+      ctx.font = 'bold 6px sans-serif';
+      ctx.fillText(`${cls.icon}${roster.name}`, bx + 2, by + 6);
 
       ctx.fillStyle = '#2b1e17';
-      ctx.fillRect(bx + 2, by + 7, 26, 2);
+      ctx.fillRect(bx + 2, by + 7, 32, 2);
       ctx.fillStyle = hpPct < 0.4 ? '#c7635b' : '#7eb38a';
-      ctx.fillRect(bx + 2, by + 7, Math.round(26 * hpPct), 2);
-    });
+      ctx.fillRect(bx + 2, by + 7, Math.round(32 * hpPct), 2);
 
-    if (count > 0 && phase === 'marching') {
-      ctx.fillStyle = '#ebd186';
-      ctx.font = 'bold 8px sans-serif';
-      ctx.fillText('▶ 전진 중...', 198, 86);
-    }
+      // 발동 중인 직업 기술 배지
+      if ((cState?.skillTimer ?? 0) > 0 && skillDef) {
+        ctx.fillStyle = 'rgba(38, 26, 20, 0.92)';
+        ctx.fillRect(baseX - 20, by - 11, 42, 10);
+        ctx.fillStyle = skillDef.color;
+        ctx.font = 'bold 7px sans-serif';
+        ctx.fillText(skillDef.shortLabel, baseX - 18, by - 3);
+      }
+
+      // 성격 전투 말풍선 (겹치지 않게 상단에 표시)
+      if ((cState?.combatSpeechTimer ?? 0) > 0 && cState?.combatSpeech) {
+        drawPixelSpeechBubble(
+          ctx,
+          cState.combatSpeech,
+          baseX,
+          baseY - 12,
+          DUNGEON_CANVAS_WIDTH
+        );
+      }
+    });
   }
 
-  private drawMonstersAndDrops(
+  private drawMonstersAndRoomProps(
     ctx: CanvasRenderingContext2D,
     t: number,
     exp: ActiveExpedition
   ): void {
-    const monsters = exp.monsters ?? [];
+    const roomType = exp.currentRoomType ?? 'combat';
     const phase = exp.floorPhase ?? 'marching';
 
-    if (phase !== 'marching') {
+    // 비전투 특수 방 오브젝트 연출 (보물상자 / 함정 기어 / 휴식 모닥불 / 이벤트 석상)
+    if (roomType === 'treasure') {
+      const cx = 310;
+      const cy = 140;
+      ctx.fillStyle = '#5c3c24';
+      ctx.fillRect(cx - 12, cy - 14, 24, 14);
+      ctx.fillStyle = '#e6c274';
+      ctx.fillRect(cx - 12, cy - 16, 24, 4);
+      ctx.fillRect(cx - 2, cy - 10, 4, 5);
+      ctx.fillStyle = '#ebd186';
+      ctx.font = 'bold 8px sans-serif';
+      ctx.fillText('🎁 고대 보물상자', cx - 28, cy - 22);
+    } else if (roomType === 'trap') {
+      const cx = 285;
+      const cy = 144;
+      ctx.fillStyle = '#8c969e';
+      for (let i = 0; i < 4; i++) {
+        ctx.fillRect(cx + i * 12, cy - 8, 4, 8);
+      }
+      ctx.fillStyle = '#e09f67';
+      ctx.font = 'bold 8px sans-serif';
+      ctx.fillText('⚙️ 고대 톱니 함정', cx - 10, cy - 16);
+    } else if (roomType === 'rest') {
+      const cx = 300;
+      const cy = 144;
+      ctx.fillStyle = '#6b482e';
+      ctx.fillRect(cx - 10, cy - 4, 20, 4);
+      ctx.fillStyle = Math.floor(t * 7) % 2 === 0 ? '#d68a54' : '#ebd186';
+      ctx.fillRect(cx - 6, cy - 14, 12, 10);
+      ctx.fillStyle = '#7eb38a';
+      ctx.font = 'bold 8px sans-serif';
+      ctx.fillText('🏕️ 안식의 모닥불', cx - 26, cy - 20);
+    } else if (roomType === 'event') {
+      const cx = 310;
+      const cy = 144;
+      ctx.fillStyle = '#7c858e';
+      ctx.fillRect(cx - 8, cy - 26, 16, 26);
+      ctx.fillStyle = '#78b2bf';
+      ctx.fillRect(cx - 4, cy - 20, 8, 8);
+      ctx.fillStyle = '#78b2bf';
+      ctx.font = 'bold 8px sans-serif';
+      ctx.fillText('❓ 신비한 유적 제단', cx - 30, cy - 32);
+    }
+
+    // 전투 / 정예 / 보스 몬스터 렌더링
+    const monsters = exp.monsters ?? [];
+    if (phase !== 'marching' && monsters.length > 0) {
       monsters.forEach((m, idx) => {
         if (m.currentHp <= 0) return;
-        const lunge = m.lungeTimer > 0 ? -10 : 0;
-        const mx = 290 + idx * 58 + lunge;
-        const my = m.isBoss ? 114 : 108 + (idx % 2) * 7;
+        const lunge = m.lungeTimer > 0 ? -12 : 0;
+        const mx = 294 + idx * 62 + lunge;
+        const my = m.isBoss ? 148 : 142 + (idx % 2) * 8;
 
         ctx.fillStyle = 'rgba(20, 14, 10, 0.38)';
         ctx.fillRect(mx - (m.isBoss ? 12 : 7), my - 2, m.isBoss ? 24 : 14, 4);
@@ -1324,36 +1647,119 @@ export class DungeonExpeditionRenderer {
           t * 6 + idx
         );
 
-        // 몬스터 HP바
-        const hpPct = Math.max(0, Math.min(1, m.currentHp / Math.max(1, m.maxHp)));
-        const barW = m.isBoss ? 46 : 34;
+        // 몬스터 이름 + 행동 특성 배지 + HP바
+        const hpPct = Math.max(
+          0,
+          Math.min(1, m.currentHp / Math.max(1, m.maxHp))
+        );
+        const barW = m.isBoss ? 56 : 46;
         const bx = mx - Math.floor(barW / 2);
-        const by = my - (m.isBoss ? 32 : 22);
+        const by = my - (m.isBoss ? 36 : 26);
 
-        ctx.fillStyle = 'rgba(32, 23, 19, 0.88)';
-        ctx.fillRect(bx, by, barW, 10);
+        ctx.fillStyle = 'rgba(28, 20, 16, 0.9)';
+        ctx.fillRect(bx, by, barW, 14);
         ctx.fillStyle = m.isBoss ? '#ebd186' : '#f6efe2';
+        ctx.font = 'bold 6px sans-serif';
+        ctx.fillText(m.name.slice(0, 8), bx + 2, by + 6);
+
+        // 행동 특성 라벨 (돌진/원거리/맹독/무리/브레스)
+        ctx.fillStyle = '#e09f67';
         ctx.font = '6px sans-serif';
-        ctx.fillText(m.name.slice(0, 7), bx + 2, by + 6);
+        ctx.fillText(m.behaviorLabel ?? '⚔️일반', bx + 2, by + 11);
 
         ctx.fillStyle = '#2b1e17';
-        ctx.fillRect(bx + 2, by + 7, barW - 4, 2);
+        ctx.fillRect(bx + 2, by + 12, barW - 4, 2);
         ctx.fillStyle = '#c7635b';
-        ctx.fillRect(bx + 2, by + 7, Math.round((barW - 4) * hpPct), 2);
+        ctx.fillRect(bx + 2, by + 12, Math.round((barW - 4) * hpPct), 2);
       });
     }
 
-    // 승리/처치 시 눈에 보이는 전리품 드랍 아이콘 연출
+    // 드랍 전리품 연출
     for (const drop of exp.dropVisuals ?? []) {
       const dx = Math.round(drop.x);
       const dy = Math.round(drop.y);
-      ctx.fillStyle = 'rgba(42, 30, 23, 0.92)';
-      ctx.fillRect(dx - 24, dy - 10, 62, 13);
+      ctx.fillStyle = 'rgba(42, 30, 23, 0.94)';
+      ctx.fillRect(dx - 26, dy - 10, 68, 13);
       ctx.strokeStyle = '#e6c274';
-      ctx.strokeRect(dx - 23.5, dy - 9.5, 61, 12);
+      ctx.strokeRect(dx - 25.5, dy - 9.5, 67, 12);
       ctx.fillStyle = '#ebd186';
       ctx.font = 'bold 8px sans-serif';
-      ctx.fillText(`${drop.icon} ${drop.name} +${drop.count}`, dx - 21, dy - 1);
+      ctx.fillText(`${drop.icon} ${drop.name} +${drop.count}`, dx - 23, dy - 1);
+    }
+  }
+
+  private drawSkillEffects(
+    ctx: CanvasRenderingContext2D,
+    _t: number,
+    exp: ActiveExpedition
+  ): void {
+    const effects = exp.skillEffects ?? [];
+    for (const eff of effects) {
+      const progress = 1 - Math.max(0, Math.min(1, eff.life / eff.maxLife));
+      const curX = Math.round(
+        eff.startX + (eff.targetX - eff.startX) * progress
+      );
+      const curY = Math.round(
+        eff.startY + (eff.targetY - eff.startY) * progress
+      );
+
+      ctx.save();
+      if (
+        eff.kind === 'shield_taunt' ||
+        eff.kind === 'holy_barrier' ||
+        eff.kind === 'iron_wall'
+      ) {
+        // 탱커 전열 방패막 & 도발 파동
+        ctx.strokeStyle = eff.color;
+        ctx.lineWidth = 2;
+        ctx.strokeRect(eff.startX + 8, eff.startY - 22, 6, 22);
+        ctx.fillStyle = 'rgba(120, 178, 191, 0.32)';
+        ctx.fillRect(eff.startX + 8, eff.startY - 22, 6, 22);
+      } else if (eff.kind === 'heal_light') {
+        // 사제 치유의 빛기둥
+        ctx.fillStyle = 'rgba(126, 179, 138, 0.38)';
+        ctx.fillRect(eff.targetX - 8, eff.targetY - 38, 16, 38);
+        ctx.fillStyle = '#a8e0b4';
+        ctx.fillRect(eff.targetX - 2, eff.targetY - 28, 4, 12);
+        ctx.fillRect(eff.targetX - 6, eff.targetY - 24, 12, 4);
+      } else if (eff.kind === 'aoe_magic') {
+        // 마법사 범위 마법 구체 & 폭발
+        ctx.fillStyle = eff.color;
+        ctx.beginPath();
+        ctx.arc(curX, curY, 4 + progress * 10, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#ebd186';
+        ctx.fillRect(curX - 3, curY - 3, 6, 6);
+      } else if (eff.kind === 'arrow_shot') {
+        // 궁수 관통 화살 투사체
+        ctx.fillStyle = '#ebd186';
+        ctx.fillRect(curX - 6, curY, 12, 2);
+        ctx.fillStyle = '#7eb38a';
+        ctx.fillRect(curX + 4, curY - 1, 3, 4);
+      } else if (eff.kind === 'crit_slash' || eff.kind === 'cleave_axe') {
+        // 도적 급소 치명타 X자 참격 / 광전사 도끼 참격
+        ctx.strokeStyle = eff.color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(eff.targetX - 10, eff.targetY - 22);
+        ctx.lineTo(eff.targetX + 10, eff.targetY - 2);
+        ctx.moveTo(eff.targetX + 10, eff.targetY - 22);
+        ctx.lineTo(eff.targetX - 10, eff.targetY - 2);
+        ctx.stroke();
+      } else if (eff.kind === 'trap_disarm' || eff.kind === 'rally_buff') {
+        ctx.fillStyle = '#ebd186';
+        ctx.fillRect(curX - 4, curY - 18, 8, 8);
+      } else if (
+        eff.kind === 'monster_projectile' ||
+        eff.kind === 'poison_cloud' ||
+        eff.kind === 'fire_breath'
+      ) {
+        ctx.fillStyle = eff.color;
+        ctx.beginPath();
+        ctx.arc(curX, curY, eff.kind === 'fire_breath' ? 9 : 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
     }
   }
 

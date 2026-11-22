@@ -1,6 +1,8 @@
 import { SoundManager } from './audio';
 import {
   GUEST_TYPES,
+  INN_LEVELS,
+  OPTIONAL_QUESTS,
   RANDOM_EVENTS,
   SEAT_SLOTS,
   UPGRADES,
@@ -10,15 +12,22 @@ import {
 } from './data';
 import { formatGold } from './format';
 import {
+  CLASS_COMBAT_SKILLS,
+  DUNGEON_ROOM_EVENTS,
   MAP_WIDTH,
+  ROOM_TYPE_META,
   SpeechSituation,
   ZONE_LABELS,
   ZONE_SPOTS,
+  createDungeonRoomGraph,
   createFloorMonsters,
   detectZoneAtPixel,
   findGridPath,
+  generateCombatPersonalitySpeech,
   generateHeroSpeech,
   getDungeonTotalFloors,
+  getPersonalitySpeechCooldownMultiplier,
+  getPersonalityWalkSpeedMultiplier,
   pixelToTile,
   tileToPixel,
 } from './innMap';
@@ -35,6 +44,7 @@ import {
   MATERIALS,
   MATERIAL_MAP,
   MAX_ENHANCE_LEVEL,
+  PERSONALITIES,
   POTION_RECIPES,
   POTION_RECIPE_MAP,
   POTION_TOOLS,
@@ -56,9 +66,13 @@ import {
   ActiveExpedition,
   CoinParticle,
   CraftQueueItem,
+  DailyFinancialReport,
+  DayPhase,
+  DungeonRoomNode,
   EnhanceAttemptResult,
   EquipSlot,
   EquipmentInstance,
+  ExpenseCategory,
   ExpeditionFloorLog,
   ExpeditionResultSummary,
   FloatingText,
@@ -67,6 +81,9 @@ import {
   HeroBuff,
   HeroPlayerOrder,
   HeroState,
+  IncomeCategory,
+  InnLevelDef,
+  InnRankGoalCondition,
   InnZoneId,
   LogEntry,
   OrderType,
@@ -78,7 +95,8 @@ import {
 } from './types';
 
 export const SAVE_STORAGE_KEY = 'pixel_dungeon_inn_save_v1';
-export const CURRENT_SAVE_VERSION = 3;
+export const CURRENT_SAVE_VERSION = 4;
+export const DAY_DURATION_SEC = 240; // 게임 내 하루 = 실시간 4분 (240초)
 export const MAX_OFFLINE_SECONDS = 8 * 3600; // 8시간 상한
 export const PEDDLER_AUTO_SELL_AGE_SEC = 45; // 45초간 미매입 시 행상인 안전 매각
 
@@ -116,8 +134,10 @@ export interface OfflineReport {
   elapsedSeconds: number;
   cappedSeconds: number;
   wasCapped: boolean;
-  earnedGold: number;
-  gpsUsed: number;
+  simulatedDays: number;
+  totalIncome: number;
+  totalExpense: number;
+  earnedGold: number; // 순이익 합계
   expeditionsCompleted: number;
   potionsCrafted: number;
   equipsCrafted: number;
@@ -127,10 +147,19 @@ export interface OfflineReport {
   heroesHealedCount: number;
 }
 
+export interface RankGoalStatusItem {
+  condition: InnRankGoalCondition;
+  current: number;
+  target: number;
+  completed: boolean;
+  pct: number;
+}
+
 export class DungeonInnGame {
-  public gold = 35;
-  public totalGoldEarned = 35;
+  public gold = 45;
+  public totalGoldEarned = 45;
   public reputation = 0;
+  public innRank = 1;
   public totalServed = 0;
   public totalLootFound = 0;
   public upgrades: Record<string, number> = {};
@@ -139,7 +168,26 @@ export class DungeonInnGame {
     warrior: 1,
   };
   public tutorialSeen = false;
-  public migratedFromV1 = false;
+  public migratedFromLegacy = false;
+  public legacyVersionDetected: number | null = null;
+
+  // 하루 주기 & 일일 장부 상태
+  public dayNumber = 1;
+  public dayTimeSec = 0;
+  public currentDayLedger!: DailyFinancialReport;
+  public dayHistory: DailyFinancialReport[] = [];
+  public unpaidWages = 0;
+  public maxDailyNetProfitReached = 0;
+  public lastSettledDayReport: DailyFinancialReport | null = null;
+
+  // 목표 및 선택 퀘스트 상태
+  public completedQuests: Record<string, boolean> = {};
+  public rankMilestones: Record<
+    number,
+    { timeSec: number; day: number; title: string }
+  > = {
+    1: { timeSec: 0, day: 1, title: INN_LEVELS[0].title },
+  };
 
   // 순환 경제 & 살아있는 여관 상태
   public heroes: Record<string, HeroState> = {};
@@ -164,7 +212,8 @@ export class DungeonInnGame {
   public autoDispatch = true;
   public shopConfig!: ShopMarketConfig;
 
-  public selectedHeroId: string | null = 'hero_garrick';
+  // 영웅 상태/지시 패널은 기본적으로 닫혀 있으며(null), 영웅을 탭했을 때만 열림
+  public selectedHeroId: string | null = null;
   public focusedExpeditionId: string | null = null;
 
   public totalPotionsCrafted = 0;
@@ -196,9 +245,10 @@ export class DungeonInnGame {
   private nextCraftUid = 1;
   private nextExpeditionUid = 1;
   private nextFloorLogId = 1;
-  private spawnTimer = 0.6;
+  private nextSkillEffectId = 1;
+  private spawnTimer = 0.5;
   private autoServeTimer = 0;
-  private autoEventTimer = 38;
+  private autoEventTimer = 42;
   private saveTimer = 0;
   private heroAiTimer = 0;
   private agentDecisionTimer = 0;
@@ -218,6 +268,7 @@ export class DungeonInnGame {
   private onZoneTapped?: (
     zone: 'potion' | 'blacksmith' | 'trade' | 'dungeon' | 'menu' | 'room'
   ) => void;
+  private onDaySettled?: (report: DailyFinancialReport) => void;
 
   constructor(
     onUiUpdate: () => void = () => {},
@@ -225,12 +276,14 @@ export class DungeonInnGame {
     customStorage?: StorageAdapter,
     onZoneTapped?: (
       zone: 'potion' | 'blacksmith' | 'trade' | 'dungeon' | 'menu' | 'room'
-    ) => void
+    ) => void,
+    onDaySettled?: (report: DailyFinancialReport) => void
   ) {
     this.sound = new SoundManager(false);
     this.onUiUpdate = onUiUpdate;
     this.onLevelUp = onLevelUp;
     this.onZoneTapped = onZoneTapped;
+    this.onDaySettled = onDaySettled;
     this.storage = customStorage ?? getDefaultStorageAdapter();
 
     this.initFreshState();
@@ -251,6 +304,43 @@ export class DungeonInnGame {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   }
 
+  private createEmptyDailyLedger(day: number): DailyFinancialReport {
+    const rankDef = this.getCurrentInnRankDef();
+    return {
+      day,
+      income: {
+        foodAndDrink: 0,
+        guestServing: 0,
+        roomAndRest: 0,
+        potionSales: 0,
+        blacksmithSales: 0,
+        lootMargin: 0,
+        totalIncome: 0,
+      },
+      expense: {
+        wages: 0,
+        upkeep: 0,
+        craftCost: 0,
+        lootPurchase: 0,
+        facilityInvest: 0,
+        totalOperatingExpense: 0,
+        totalWithInvest: 0,
+      },
+      netProfit: 0,
+      netCashFlow: 0,
+      endGold: Math.floor(this.gold),
+      innRank: this.innRank,
+      innRankTitle: rankDef.title,
+      servedCount: 0,
+      heroTransactions: 0,
+      dungeonWins: 0,
+      dungeonFails: 0,
+      newHeroesJoined: [],
+      injuredHeroes: [],
+      wageArrears: this.unpaidWages,
+    };
+  }
+
   private createDefaultShopConfig(): ShopMarketConfig {
     const potionSaleEnabled: Record<string, boolean> = {};
     for (const pr of POTION_RECIPES) {
@@ -267,7 +357,7 @@ export class DungeonInnGame {
       potionPriceMultiplier: 1.0,
       lootBuyEnabled,
       lootBuyRatePct: 100,
-      lootReserveGold: 15,
+      lootReserveGold: 20,
       blacksmithSaleEnabled: true,
       blacksmithPriceMultiplier: 1.0,
       blacksmithAutoEnhanceEnabled: false,
@@ -275,11 +365,13 @@ export class DungeonInnGame {
   }
 
   private initFreshState(): void {
-    this.gold = 35;
-    this.totalGoldEarned = 35;
+    this.gold = 45;
+    this.totalGoldEarned = 45;
     this.reputation = 0;
+    this.innRank = 1;
     this.totalServed = 0;
     this.totalLootFound = 0;
+    this.elapsedTime = 0;
 
     for (const u of UPGRADES) {
       this.upgrades[u.id] = 0;
@@ -314,7 +406,7 @@ export class DungeonInnGame {
     this.autoBuyLoot = true;
     this.autoDispatch = true;
     this.shopConfig = this.createDefaultShopConfig();
-    this.selectedHeroId = 'hero_garrick';
+    this.selectedHeroId = null;
     this.focusedExpeditionId = null;
 
     this.totalPotionsCrafted = 0;
@@ -326,6 +418,18 @@ export class DungeonInnGame {
     this.totalHeroesHealed = 0;
     this.craftedByPotionId = {};
     this.craftedByRarity = {};
+
+    this.dayNumber = 1;
+    this.dayTimeSec = 0;
+    this.unpaidWages = 0;
+    this.maxDailyNetProfitReached = 0;
+    this.dayHistory = [];
+    this.completedQuests = {};
+    this.rankMilestones = {
+      1: { timeSec: 0, day: 1, title: INN_LEVELS[0].title },
+    };
+    this.currentDayLedger = this.createEmptyDailyLedger(1);
+    this.lastSettledDayReport = null;
 
     this.initHeroRoster();
   }
@@ -368,7 +472,7 @@ export class DungeonInnGame {
         level: 1,
         xp: 0,
         currentHp: cls.baseStats.hp,
-        gold: isStarter ? 24 : 20,
+        gold: isStarter ? 28 : 24,
         status: 'idle',
         restTimerSec: 0,
         expeditionId: null,
@@ -378,7 +482,7 @@ export class DungeonInnGame {
         totalRuns: 0,
         totalWins: 0,
         lastMealTimer: 0,
-        hunger: isStarter ? 35 + (idx % 3) * 10 : 25,
+        hunger: isStarter ? 42 + (idx % 3) * 10 : 25,
         fatigue: 10,
         morale: 80,
         tileX: spot.col,
@@ -392,6 +496,7 @@ export class DungeonInnGame {
         targetZone: isStarter ? 'board' : 'hall',
         activity: 'idle',
         activityTimer: 0,
+        hesitateTimer: 0,
         intentText: '의뢰 게시판 근처에서 대기 중',
         partyId: null,
         rallyDungeonId: null,
@@ -411,7 +516,8 @@ export class DungeonInnGame {
       hero.hunger = 25;
     }
     if (typeof hero.fatigue !== 'number' || !Number.isFinite(hero.fatigue)) {
-      hero.fatigue = hero.status === 'fatigued' ? 75 : hero.status === 'injured' ? 85 : 12;
+      hero.fatigue =
+        hero.status === 'fatigued' ? 75 : hero.status === 'injured' ? 85 : 12;
     }
     if (typeof hero.morale !== 'number' || !Number.isFinite(hero.morale)) {
       hero.morale = 80;
@@ -430,6 +536,7 @@ export class DungeonInnGame {
       hero.activity = hero.status === 'exploring' ? 'exploring' : 'idle';
     }
     if (typeof hero.activityTimer !== 'number') hero.activityTimer = 0;
+    if (typeof hero.hesitateTimer !== 'number') hero.hesitateTimer = 0;
     if (!hero.intentText) {
       hero.intentText =
         hero.status === 'exploring' ? '던전 원정 탐험 중' : '여관 홀에서 대기 중';
@@ -439,6 +546,458 @@ export class DungeonInnGame {
     if (typeof hero.speechTimer !== 'number') hero.speechTimer = 0;
     if (typeof hero.speechCooldown !== 'number') hero.speechCooldown = 0;
     if (hero.interactionEffect === undefined) hero.interactionEffect = null;
+  }
+
+  // ==========================================================================
+  // 하루 주기(Day Cycle) · 수입/지출 장부 기록 · 급료 및 유지비 정산
+  // ==========================================================================
+
+  public getDayProgressRatio(): number {
+    return Math.max(0, Math.min(1, this.dayTimeSec / DAY_DURATION_SEC));
+  }
+
+  public getDayPhase(): DayPhase {
+    const r = this.getDayProgressRatio();
+    if (r < 0.22) return 'morning';
+    if (r < 0.58) return 'day';
+    if (r < 0.78) return 'evening';
+    return 'night';
+  }
+
+  public getDayPhaseLabel(): { icon: string; label: string; clockText: string } {
+    const r = this.getDayProgressRatio();
+    // 06:00부터 다음날 06:00까지 24시간 매핑
+    const totalMinutes = Math.floor(r * 24 * 60) + 6 * 60;
+    const hh = Math.floor(totalMinutes / 60) % 24;
+    const mm = Math.floor((totalMinutes % 60) / 10) * 10;
+    const clockText = `${String(hh).padStart(2, '0')}:${String(mm).padStart(
+      2,
+      '0'
+    )}`;
+
+    const phase = this.getDayPhase();
+    const map: Record<DayPhase, { icon: string; label: string }> = {
+      morning: { icon: '🌅', label: '아침' },
+      day: { icon: '☀️', label: '낮' },
+      evening: { icon: '🌆', label: '저녁' },
+      night: { icon: '🌙', label: '밤' },
+    };
+    return { ...map[phase], clockText };
+  }
+
+  public recordIncome(category: IncomeCategory, amount: number): void {
+    const rounded = Math.round(amount);
+    if (rounded <= 0) return;
+    this.addGold(rounded);
+    if (!this.currentDayLedger) {
+      this.currentDayLedger = this.createEmptyDailyLedger(this.dayNumber);
+    }
+    this.currentDayLedger.income[category] += rounded;
+    this.currentDayLedger.income.totalIncome += rounded;
+    this.recomputeCurrentDayNetProfit();
+  }
+
+  public recordExpense(category: ExpenseCategory, amount: number): void {
+    const rounded = Math.round(amount);
+    if (rounded <= 0) return;
+    if (!this.currentDayLedger) {
+      this.currentDayLedger = this.createEmptyDailyLedger(this.dayNumber);
+    }
+    this.currentDayLedger.expense[category] += rounded;
+    if (category !== 'facilityInvest') {
+      this.currentDayLedger.expense.totalOperatingExpense += rounded;
+    }
+    this.currentDayLedger.expense.totalWithInvest += rounded;
+    this.recomputeCurrentDayNetProfit();
+  }
+
+  private recomputeCurrentDayNetProfit(): void {
+    if (!this.currentDayLedger) return;
+    this.currentDayLedger.netProfit =
+      this.currentDayLedger.income.totalIncome -
+      this.currentDayLedger.expense.totalOperatingExpense;
+    this.currentDayLedger.netCashFlow =
+      this.currentDayLedger.income.totalIncome -
+      this.currentDayLedger.expense.totalWithInvest;
+    this.currentDayLedger.endGold = Math.floor(this.gold);
+    if (this.currentDayLedger.netProfit > this.maxDailyNetProfitReached) {
+      this.maxDailyNetProfitReached = this.currentDayLedger.netProfit;
+    }
+  }
+
+  /**
+   * 고용된 직원별 일당/급료 상세 내역
+   */
+  public getDailyWagesBreakdown(): {
+    items: { id: string; name: string; icon: string; level: number; wage: number }[];
+    totalWages: number;
+  } {
+    const items: {
+      id: string;
+      name: string;
+      icon: string;
+      level: number;
+      wage: number;
+    }[] = [];
+    let totalWages = 0;
+
+    for (const u of UPGRADES) {
+      if (u.category === 'staff' && u.dailyWagePerLevel) {
+        const lv = this.upgrades[u.id] ?? 0;
+        if (lv > 0) {
+          const wage = lv * u.dailyWagePerLevel;
+          totalWages += wage;
+          items.push({
+            id: u.id,
+            name: u.name,
+            icon: u.icon,
+            level: lv,
+            wage,
+          });
+        }
+      }
+    }
+
+    for (const pt of POTION_TOOLS) {
+      if (pt.kind === 'staff' && pt.dailyWagePerLevel) {
+        const lv = this.potionTools[pt.id] ?? 0;
+        if (lv > 0) {
+          const wage = lv * pt.dailyWagePerLevel;
+          totalWages += wage;
+          items.push({
+            id: pt.id,
+            name: pt.name,
+            icon: pt.icon,
+            level: lv,
+            wage,
+          });
+        }
+      }
+    }
+
+    for (const bt of BLACKSMITH_TOOLS) {
+      if (bt.kind === 'staff' && bt.dailyWagePerLevel) {
+        const lv = this.blacksmithTools[bt.id] ?? 0;
+        if (lv > 0) {
+          const wage = lv * bt.dailyWagePerLevel;
+          totalWages += wage;
+          items.push({
+            id: bt.id,
+            name: bt.name,
+            icon: bt.icon,
+            level: lv,
+            wage,
+          });
+        }
+      }
+    }
+
+    return { items, totalWages };
+  }
+
+  /**
+   * 일일 기본 유지비 (화덕 연료, 기본 식자재, 객실 침구 및 시설 유지)
+   */
+  public getDailyUpkeepCost(): number {
+    let upkeep = 6; // 여관 기본 촛불·화덕 연료비
+    for (const u of UPGRADES) {
+      const lv = this.upgrades[u.id] ?? 0;
+      if (lv > 0 && u.dailyUpkeepPerLevel) {
+        upkeep += lv * u.dailyUpkeepPerLevel;
+      }
+    }
+    return upkeep;
+  }
+
+  public getStaffEfficiencyMultiplier(): number {
+    return this.unpaidWages > 0 ? 0.7 : 1.0;
+  }
+
+  /**
+   * 하루가 끝났을 때 호출되어 급료·유지비를 정산하고 일일 결산 리포트를 확정합니다.
+   */
+  public settleEndOfDay(): DailyFinancialReport {
+    const { totalWages } = this.getDailyWagesBreakdown();
+    const upkeep = this.getDailyUpkeepCost();
+
+    // 1. 유지비 및 급료 지출 기록
+    this.recordExpense('upkeep', upkeep);
+    this.recordExpense('wages', totalWages);
+
+    const totalNeed = upkeep + totalWages + this.unpaidWages;
+    if (this.gold >= totalNeed) {
+      this.gold -= totalNeed;
+      if (this.unpaidWages > 0) {
+        this.addLog(
+          `✅ 밀린 직원 급료(${formatGold(this.unpaidWages)}G)를 모두 상환하여 직원 효율이 100%로 정상화되었습니다!`,
+          'unlock'
+        );
+      }
+      this.unpaidWages = 0;
+    } else {
+      // 파산·교착 방지: 보유 골드 한도 내에서만 차감하고 나머지는 체불(미지급금)로 이월, 기본 영업은 계속 유지!
+      const paid = Math.floor(this.gold);
+      this.gold = 0;
+      const shortfall = Math.max(0, totalNeed - paid);
+      const maxCap = Math.max(40, (totalWages + upkeep) * 3);
+      this.unpaidWages = Math.min(maxCap, shortfall);
+      this.addLog(
+        `⚠️ [${this.dayNumber}일차 결산] 골드가 부족해 급료·유지비 중 ${formatGold(
+          this.unpaidWages
+        )}G가 체불되었습니다. (직원 효율 70%, 기본 수프·침대 영업은 계속됩니다)`,
+        'event'
+      );
+    }
+
+    this.recomputeCurrentDayNetProfit();
+    const rankDef = this.getCurrentInnRankDef();
+    this.currentDayLedger.innRank = this.innRank;
+    this.currentDayLedger.innRankTitle = rankDef.title;
+    this.currentDayLedger.endGold = Math.floor(this.gold);
+    this.currentDayLedger.wageArrears = this.unpaidWages;
+
+    const settledReport: DailyFinancialReport = JSON.parse(
+      JSON.stringify(this.currentDayLedger)
+    );
+    this.dayHistory.push(settledReport);
+    if (this.dayHistory.length > 30) {
+      this.dayHistory.shift();
+    }
+    this.lastSettledDayReport = settledReport;
+
+    const sign = settledReport.netProfit >= 0 ? '+' : '';
+    this.addLog(
+      `📊 [${settledReport.day}일차 일일 결산] 수입 +${formatGold(
+        settledReport.income.totalIncome
+      )}G | 운영지출 -${formatGold(
+        settledReport.expense.totalOperatingExpense
+      )}G (급료 ${settledReport.expense.wages}G·유지비 ${
+        settledReport.expense.upkeep
+      }G·매입 ${settledReport.expense.lootPurchase}G) | 순이익 ${sign}${formatGold(
+        settledReport.netProfit
+      )}G`,
+      settledReport.netProfit >= 0 ? 'loot' : 'event'
+    );
+
+    this.checkOptionalQuests();
+    this.checkInnRankProgression();
+
+    // 다음 날 시작
+    this.dayNumber += 1;
+    this.dayTimeSec = 0;
+    this.currentDayLedger = this.createEmptyDailyLedger(this.dayNumber);
+
+    this.onDaySettled?.(settledReport);
+    this.onUiUpdate();
+    return settledReport;
+  }
+
+  // ==========================================================================
+  // 여관 등급(Inn Rank) 목표 평가 및 선택 퀘스트/업적 체크
+  // ==========================================================================
+
+  public getCurrentInnRankDef(): InnLevelDef {
+    return getCurrentInnLevel(this.innRank, true);
+  }
+
+  public getNextInnRankDef(): InnLevelDef | null {
+    return getNextInnLevel(this.innRank, true);
+  }
+
+  public getTotalNonStaffUpgradeLevels(): number {
+    let sum = 0;
+    for (const u of UPGRADES) {
+      if (u.category !== 'staff') {
+        sum += this.upgrades[u.id] ?? 0;
+      }
+    }
+    return sum;
+  }
+
+  public getTotalStaffLevels(): number {
+    let sum =
+      (this.upgrades['staff_maid'] ?? 0) +
+      (this.upgrades['staff_bartender'] ?? 0) +
+      (this.upgrades['staff_chef'] ?? 0) +
+      (this.upgrades['staff_bard'] ?? 0) +
+      (this.potionTools['pot_fac_circle'] ?? 0) +
+      (this.blacksmithTools['smith_master'] ?? 0);
+    return sum;
+  }
+
+  public evaluateGoalCondition(cond: InnRankGoalCondition): RankGoalStatusItem {
+    let current = 0;
+    switch (cond.kind) {
+      case 'reputation':
+        current = this.reputation;
+        break;
+      case 'dungeon_clear':
+        current = cond.dungeonId
+          ? this.dungeonClears[cond.dungeonId] ?? 0
+          : Object.values(this.dungeonClears).reduce((a, b) => a + b, 0);
+        break;
+      case 'hero_count':
+        current = this.getUnlockedHeroCount();
+        break;
+      case 'upgrade_total_levels':
+        current = this.getTotalNonStaffUpgradeLevels();
+        break;
+      case 'staff_total_levels':
+        current = this.getTotalStaffLevels();
+        break;
+      case 'daily_net_profit':
+        current = Math.max(
+          this.maxDailyNetProfitReached,
+          this.currentDayLedger?.netProfit ?? 0
+        );
+        break;
+      case 'potions_crafted':
+        current = this.totalPotionsCrafted;
+        break;
+      case 'equips_crafted':
+        current = this.totalEquipCrafted;
+        break;
+      case 'enhance_success':
+        current = this.totalEnhanceSuccess;
+        break;
+    }
+    const completed = current >= cond.target;
+    const pct = Math.max(
+      0,
+      Math.min(100, (Math.max(0, current) / Math.max(1, cond.target)) * 100)
+    );
+    return {
+      condition: cond,
+      current,
+      target: cond.target,
+      completed,
+      pct,
+    };
+  }
+
+  public getNextRankGoalsProgress(): {
+    nextRank: InnLevelDef | null;
+    items: RankGoalStatusItem[];
+    overallPct: number;
+    completedCount: number;
+  } {
+    const nextRank = this.getNextInnRankDef();
+    if (!nextRank) {
+      return {
+        nextRank: null,
+        items: [],
+        overallPct: 100,
+        completedCount: 0,
+      };
+    }
+    const items = nextRank.goals.map((g) => this.evaluateGoalCondition(g));
+    const completedCount = items.filter((i) => i.completed).length;
+    const overallPct =
+      items.length > 0
+        ? items.reduce((acc, it) => acc + it.pct, 0) / items.length
+        : 100;
+    return {
+      nextRank,
+      items,
+      overallPct,
+      completedCount,
+    };
+  }
+
+  public checkInnRankProgression(): boolean {
+    let promoted = false;
+    while (true) {
+      const { nextRank, items } = this.getNextRankGoalsProgress();
+      if (!nextRank || items.length === 0) break;
+      if (items.every((it) => it.completed)) {
+        this.innRank = nextRank.level;
+        promoted = true;
+
+        if (!this.rankMilestones[nextRank.level]) {
+          this.rankMilestones[nextRank.level] = {
+            timeSec: Math.floor(this.elapsedTime),
+            day: this.dayNumber,
+            title: nextRank.title,
+          };
+        }
+
+        if (nextRank.rewardGold > 0) {
+          this.recordIncome('lootMargin', nextRank.rewardGold);
+        }
+
+        this.sound.playLevelUp();
+        this.addLog(
+          `🎊 [여관 등급 승급!] 모든 목표를 달성하여 [${nextRank.title}](으)로 승급했습니다! (${nextRank.rewardText})`,
+          'unlock'
+        );
+        this.spawnFloatingText(
+          CANVAS_WIDTH / 2 - 48,
+          50,
+          `★ 승급: ${nextRank.title}!`,
+          '#ebd186'
+        );
+        this.onLevelUp(nextRank.title, nextRank.rewardText);
+      } else {
+        break;
+      }
+    }
+    return promoted;
+  }
+
+  public checkOptionalQuests(): void {
+    for (const q of OPTIONAL_QUESTS) {
+      if (this.completedQuests[q.id]) continue;
+      let done = false;
+      switch (q.id) {
+        case 'q_first_meal':
+          done = this.totalServed + this.totalHeroShopTransactions >= 3;
+          break;
+        case 'q_first_slime':
+          done = (this.dungeonClears['dungeon_slime'] ?? 0) >= 1;
+          break;
+        case 'q_first_potion':
+          done =
+            this.totalPotionsCrafted >= 1 ||
+            (this.currentDayLedger?.income.potionSales ?? 0) > 0;
+          break;
+        case 'q_first_craft_equip':
+          done = this.totalEquipCrafted >= 1;
+          break;
+        case 'q_first_enhance':
+          done = this.totalEnhanceSuccess >= 1;
+          break;
+        case 'q_first_profit_day':
+          done = this.dayHistory.some((d) => d.netProfit > 0);
+          break;
+        case 'q_heroes_12':
+          done = this.getUnlockedHeroCount() >= 12;
+          break;
+        case 'q_legendary_craft':
+          done =
+            (this.craftedByRarity['legendary']?.count ?? 0) >= 1 ||
+            (this.craftedByPotionId['potion_dragon_elixir'] ?? 0) >= 1;
+          break;
+        case 'q_dragon_slayer':
+          done = (this.dungeonClears['dungeon_dragon_lair'] ?? 0) >= 1;
+          break;
+      }
+
+      if (done) {
+        this.completedQuests[q.id] = true;
+        this.recordIncome('lootMargin', q.rewardGold);
+        this.addReputation(q.rewardRep);
+        this.addLog(
+          `🏅 [업적 달성: ${q.icon} ${q.title}] 보상 +${q.rewardGold}G, 평판 +${q.rewardRep}!`,
+          'unlock'
+        );
+        this.spawnFloatingText(
+          CANVAS_WIDTH / 2 - 42,
+          68,
+          `🏅 ${q.title} (+${q.rewardGold}G)`,
+          '#7eb38a'
+        );
+      }
+    }
   }
 
   // ==========================================================================
@@ -456,20 +1015,29 @@ export class DungeonInnGame {
     const rec = POTION_RECIPE_MAP[potionId];
     if (!rec) return 10;
     const mult = this.shopConfig?.potionPriceMultiplier ?? 1.0;
-    return Math.max(2, Math.round(rec.sellPriceToHero * mult));
+    return Math.max(
+      2,
+      Math.round(rec.sellPriceToHero * mult * this.getGlobalGoldMultiplier())
+    );
   }
 
   public getEffectiveMealPrice(mealUpgradeId: string): number {
     const base = this.getMealEffectiveBuff(mealUpgradeId).price;
     const mult = this.shopConfig?.mealPriceMultiplier ?? 1.0;
-    return Math.max(2, Math.round(base * mult));
+    return Math.max(
+      2,
+      Math.round(base * mult * this.getGlobalGoldMultiplier())
+    );
   }
 
   public getEffectiveEquipSellPrice(equipDefId: string): number {
     const def = EQUIPMENT_DEF_MAP[equipDefId];
     if (!def) return 20;
     const mult = this.shopConfig?.blacksmithPriceMultiplier ?? 1.0;
-    return Math.max(5, Math.round(def.buyPriceGold * mult));
+    return Math.max(
+      5,
+      Math.round(def.buyPriceGold * mult * this.getGlobalGoldMultiplier())
+    );
   }
 
   public triggerHeroSpeech(
@@ -489,7 +1057,8 @@ export class DungeonInnGame {
       extraLabel
     );
     hero.speechTimer = 3.2;
-    hero.speechCooldown = force ? 2.0 : 5.5 + this.random() * 3.5;
+    const cdMult = getPersonalitySpeechCooldownMultiplier(roster.personalities);
+    hero.speechCooldown = (force ? 1.8 : 5.0 + this.random() * 3.0) * cdMult;
   }
 
   public setHeroInteractionEffect(
@@ -536,8 +1105,7 @@ export class DungeonInnGame {
         this.ensureHeroAgentFields(state, this.getUnlockedHeroCount());
         const bd = getHeroStatBreakdown(state);
         state.currentHp = bd.totalStats.hp;
-        state.gold = Math.max(state.gold, 25 + this.getUnlockedHeroCount() * 8);
-        // 여관 입구에서 걸어 들어오게 배치
+        state.gold = Math.max(state.gold, 28 + this.getUnlockedHeroCount() * 6);
         const entryPx = tileToPixel(2, 11);
         state.tileX = 2;
         state.tileY = 11;
@@ -547,6 +1115,12 @@ export class DungeonInnGame {
         this.triggerHeroSpeech(state, 'pre_dungeon', true);
 
         newlyJoined.push(def.id);
+        if (
+          this.currentDayLedger &&
+          !this.currentDayLedger.newHeroesJoined.includes(def.name)
+        ) {
+          this.currentDayLedger.newHeroesJoined.push(def.name);
+        }
 
         const cls = HERO_CLASSES[def.classId];
         this.addLog(
@@ -560,6 +1134,10 @@ export class DungeonInnGame {
           '#7eb38a'
         );
       }
+    }
+    if (newlyJoined.length > 0) {
+      this.checkOptionalQuests();
+      this.checkInnRankProgression();
     }
     return newlyJoined;
   }
@@ -575,14 +1153,14 @@ export class DungeonInnGame {
   }
 
   /**
-   * 저장 데이터를 불러오고 v1/v2 → v3 마이그레이션 및 오프라인 정산 결과를 반환합니다.
+   * 저장 데이터를 불러오고 v1~v3 → v4 마이그레이션 감지 및 날짜 단위 오프라인 요약 정산 결과를 반환합니다.
    */
   public loadFromStorage(): OfflineReport | null {
     try {
       const raw = this.storage.getItem(SAVE_STORAGE_KEY);
       if (!raw) {
         this.addLog(
-          '던전 입구 옆 여관의 문을 열었습니다! 시작 파티 4명(가릭·엘레나·카엘·아린)이 여관 안에서 움직이기 시작합니다.',
+          '던전 입구 옆 여관의 문을 열었습니다! 골드는 영웅과 손님의 식사·숙박·쇼핑 행동에서만 획득하며, 하루(4분)마다 일일 결산이 진행됩니다.',
           'normal'
         );
         this.spawnGuest();
@@ -594,19 +1172,22 @@ export class DungeonInnGame {
         !data.version || data.version < CURRENT_SAVE_VERSION || !data.heroes;
 
       if (typeof data.gold === 'number' && Number.isFinite(data.gold)) {
-        this.gold = Math.max(0, data.gold);
+        this.gold = Math.max(0, Math.floor(data.gold));
       }
       if (
         typeof data.totalGoldEarned === 'number' &&
         Number.isFinite(data.totalGoldEarned)
       ) {
-        this.totalGoldEarned = Math.max(this.gold, data.totalGoldEarned);
+        this.totalGoldEarned = Math.max(this.gold, Math.floor(data.totalGoldEarned));
       }
       if (
         typeof data.reputation === 'number' &&
         Number.isFinite(data.reputation)
       ) {
         this.reputation = Math.max(0, Math.floor(data.reputation));
+      }
+      if (typeof data.innRank === 'number' && data.innRank >= 1) {
+        this.innRank = Math.min(INN_LEVELS.length, Math.floor(data.innRank));
       }
       if (typeof data.totalServed === 'number') {
         this.totalServed = Math.max(0, Math.floor(data.totalServed));
@@ -773,20 +1354,59 @@ export class DungeonInnGame {
         });
       }
 
+      // v4 하루 장부 & 등급 데이터 복원
+      if (typeof data.dayNumber === 'number' && data.dayNumber >= 1) {
+        this.dayNumber = Math.floor(data.dayNumber);
+      }
+      if (typeof data.dayTimeSec === 'number' && data.dayTimeSec >= 0) {
+        this.dayTimeSec = Math.min(DAY_DURATION_SEC - 1, data.dayTimeSec);
+      }
+      if (typeof data.unpaidWages === 'number' && data.unpaidWages >= 0) {
+        this.unpaidWages = Math.floor(data.unpaidWages);
+      }
+      if (
+        typeof data.maxDailyNetProfitReached === 'number' &&
+        Number.isFinite(data.maxDailyNetProfitReached)
+      ) {
+        this.maxDailyNetProfitReached = data.maxDailyNetProfitReached;
+      }
+      if (Array.isArray(data.dayHistory)) {
+        this.dayHistory = data.dayHistory.slice(-30);
+      }
+      if (data.currentDayLedger && typeof data.currentDayLedger === 'object') {
+        this.currentDayLedger = {
+          ...this.createEmptyDailyLedger(this.dayNumber),
+          ...data.currentDayLedger,
+        };
+      } else {
+        this.currentDayLedger = this.createEmptyDailyLedger(this.dayNumber);
+      }
+      if (data.completedQuests && typeof data.completedQuests === 'object') {
+        this.completedQuests = { ...data.completedQuests };
+      }
+
       if (isLegacy) {
-        this.migratedFromV1 = true;
-        this.gold = Math.max(35, this.gold);
-        this.autoDispatch = true;
-        this.autoBuyLoot = true;
+        // v1~v3 구버전 세이브 감지: GPS 필드 무시, 하루 장부는 빈 값으로 초기화, 모달에서 이어받기/새로 시작 선택 안내
+        this.migratedFromLegacy = true;
+        this.legacyVersionDetected = data.version ?? 1;
+        this.gold = Math.max(45, Math.min(25000, Math.floor(this.gold)));
+        this.dayNumber = 1;
+        this.dayTimeSec = 0;
+        this.dayHistory = [];
+        this.unpaidWages = 0;
+        this.currentDayLedger = this.createEmptyDailyLedger(1);
         this.checkHeroUnlocks();
+        this.checkInnRankProgression();
         this.saveToStorage();
         this.addLog(
-          '🔄 기존 세이브 데이터를 v3 살아있는 여관 & 층별 던전 탐험 시스템으로 안전하게 이전했습니다!',
+          `🔄 v${this.legacyVersionDetected} 세이브를 감지하여 v4 하루 경제 & 등급 목표 시스템으로 변환했습니다. (초당 자동 골드가 제거되었으므로 새로 시작을 권장합니다)`,
           'unlock'
         );
-      } else {
-        this.checkHeroUnlocks();
+        return null;
       }
+
+      this.checkHeroUnlocks();
+      this.checkInnRankProgression();
 
       for (const g of GUEST_TYPES) {
         if (this.reputation >= g.unlockRep && !this.discoveredGuests[g.id]) {
@@ -803,7 +1423,7 @@ export class DungeonInnGame {
           : now;
       const elapsedSec = Math.floor((now - lastSaved) / 1000);
 
-      if (elapsedSec >= 10) {
+      if (elapsedSec >= 30) {
         const cappedSec = Math.min(MAX_OFFLINE_SECONDS, elapsedSec);
         const report = this.settleOfflineProgress(elapsedSec, cappedSec);
         this.saveToStorage();
@@ -811,7 +1431,7 @@ export class DungeonInnGame {
       }
 
       this.addLog(
-        '여관 장부를 불러왔습니다. 영웅들이 여관 각 구역을 오가며 다음 원정을 준비합니다!',
+        `여관 ${this.dayNumber}일차 장부를 불러왔습니다. 영웅들이 여관 각 구역을 오가며 다음 원정을 준비합니다!`,
         'normal'
       );
       return null;
@@ -823,51 +1443,73 @@ export class DungeonInnGame {
     }
   }
 
+  /**
+   * 오프라인 정산: 초당 골드(GPS)×시간이 아니라,
+   * 하루 루프(손님 서빙 + 영웅 던전 원정 + 상점 소비 + 급료·유지비 차감)를 날짜 단위로 요약 시뮬레이션합니다.
+   */
   private settleOfflineProgress(
     elapsedSec: number,
     cappedSec: number
   ): OfflineReport {
-    const gps = this.getGoldPerSecond();
-    const vaultLv = this.upgrades['fac_vault'] ?? 0;
-    const offlineEfficiency = 0.85 + vaultLv * 0.1;
-    const earnedGold = Math.floor(cappedSec * gps * offlineEfficiency);
-    if (earnedGold > 0) {
-      this.addGold(earnedGold);
-    }
-
     const beforePotions = this.totalPotionsCrafted;
     const beforeEquips = this.totalEquipCrafted;
     const beforePeddler = this.totalPeddlerSales;
     const beforeShopTx = this.totalHeroShopTransactions;
     const beforeHealed = this.totalHeroesHealed;
-    let expeditionsCompleted = 0;
-
-    let remaining = cappedSec;
-    const step = Math.max(1, Math.min(5, Math.floor(cappedSec / 120) || 1));
+    const startDay = this.dayNumber;
     const prevGold = this.gold;
+
+    let expeditionsCompleted = 0;
+    let totalIncome = 0;
+    let totalExpense = 0;
+
+    // 너무 긴 오프라인 시간도 빠르게 요약 시뮬레이션하도록 최대 20일분(4,800초) 루프로 압축 시뮬레이션
+    const effectiveSimSec = Math.min(cappedSec, DAY_DURATION_SEC * 20);
+    const step = Math.max(4, Math.min(12, Math.floor(effectiveSimSec / 240) || 4));
+    let remaining = effectiveSimSec;
 
     while (remaining > 0) {
       const dt = Math.min(step, remaining);
       remaining -= dt;
 
+      const dayBefore = this.dayNumber;
       const expBefore = this.expeditions.length;
+
+      // 오프라인 중 방문 손님 자동 서빙 요약
+      if (this.guests.length < this.getMaxGuests()) {
+        this.spawnGuest();
+      }
+      const waiting = this.guests.find((g) => g.state === 'waiting');
+      if (waiting) {
+        this.serveGuest(waiting, false);
+      }
+
       this.updateCraftQueues(dt);
       this.updateExpeditions(dt);
       this.updateHeroesRestAndLootAge(dt);
+      this.updateHeroAgents(dt);
+
       if (this.expeditions.length < expBefore) {
         expeditionsCompleted += expBefore - this.expeditions.length;
       }
-      if (
-        this.autoDispatch &&
-        expeditionsCompleted < 25 &&
-        this.expeditions.length === 0
-      ) {
+      if (this.autoDispatch && this.expeditions.length === 0) {
         this.tryAutoDispatch();
+      }
+
+      // 하루 경과 진행
+      this.dayTimeSec += dt;
+      if (this.dayTimeSec >= DAY_DURATION_SEC) {
+        const rep = this.settleEndOfDay();
+        totalIncome += rep.income.totalIncome;
+        totalExpense += rep.expense.totalOperatingExpense;
+      } else if (this.dayNumber > dayBefore && this.lastSettledDayReport) {
+        totalIncome += this.lastSettledDayReport.income.totalIncome;
+        totalExpense += this.lastSettledDayReport.expense.totalOperatingExpense;
       }
     }
 
-    const extraLoopGold = Math.max(0, Math.floor(this.gold - prevGold));
-    const totalOfflineGold = earnedGold + extraLoopGold;
+    const simulatedDays = Math.max(1, this.dayNumber - startDay);
+    const earnedGold = Math.floor(this.gold - prevGold);
     const injuredCount = this.getUnlockedHeroes().filter(
       (h) => h.status === 'injured'
     ).length;
@@ -877,21 +1519,23 @@ export class DungeonInnGame {
     );
     const heroesHealedCount = Math.max(0, this.totalHeroesHealed - beforeHealed);
 
-    if (totalOfflineGold > 0 || expeditionsCompleted > 0) {
-      this.addLog(
-        `🌙 오프라인 정산: +${formatGold(
-          totalOfflineGold
-        )}G, 탐험 완료 ${expeditionsCompleted}회, 상점 거래 ${heroShopTransactions}건!`,
-        'event'
-      );
-    }
+    this.addLog(
+      `🌙 오프라인 ${simulatedDays}일분 정산: 순수익 ${
+        earnedGold >= 0 ? '+' : ''
+      }${formatGold(
+        earnedGold
+      )}G, 원정 ${expeditionsCompleted}회, 상점 거래 ${heroShopTransactions}건!`,
+      'event'
+    );
 
     return {
       elapsedSeconds: elapsedSec,
       cappedSeconds: cappedSec,
       wasCapped: elapsedSec > MAX_OFFLINE_SECONDS,
-      earnedGold: totalOfflineGold,
-      gpsUsed: gps,
+      simulatedDays,
+      totalIncome,
+      totalExpense,
+      earnedGold,
       expeditionsCompleted,
       potionsCrafted: this.totalPotionsCrafted - beforePotions,
       equipsCrafted: this.totalEquipCrafted - beforeEquips,
@@ -923,6 +1567,7 @@ export class DungeonInnGame {
         gold: this.gold,
         totalGoldEarned: this.totalGoldEarned,
         reputation: this.reputation,
+        innRank: this.innRank,
         totalServed: this.totalServed,
         totalLootFound: this.totalLootFound,
         upgrades: this.upgrades,
@@ -950,6 +1595,13 @@ export class DungeonInnGame {
         totalEnhanceSuccess: this.totalEnhanceSuccess,
         totalEnhanceDestroyed: this.totalEnhanceDestroyed,
         totalPeddlerSales: this.totalPeddlerSales,
+        dayNumber: this.dayNumber,
+        dayTimeSec: this.dayTimeSec,
+        currentDayLedger: this.currentDayLedger,
+        dayHistory: this.dayHistory,
+        unpaidWages: this.unpaidWages,
+        completedQuests: this.completedQuests,
+        maxDailyNetProfitReached: this.maxDailyNetProfitReached,
       };
       this.storage.setItem(SAVE_STORAGE_KEY, JSON.stringify(payload));
     } catch {
@@ -975,7 +1627,8 @@ export class DungeonInnGame {
     this.activeEvent = null;
     this.eventCooldownSec = 0;
     this.spawnTimer = 0.4;
-    this.migratedFromV1 = false;
+    this.migratedFromLegacy = false;
+    this.legacyVersionDetected = null;
 
     this.addLog(
       '여관을 처음부터 다시 단장했습니다! 시작 영웅 4명과 첫 손님이 여관에 모였습니다.',
@@ -987,7 +1640,7 @@ export class DungeonInnGame {
   }
 
   // ==========================================================================
-  // 기본 여관 골드 · 평판 · 업그레이드
+  // 기본 여관 골드 · 평판 · 업그레이드 (초당 자동 골드 완전 제거!)
   // ==========================================================================
 
   public getGlobalGoldMultiplier(): number {
@@ -998,11 +1651,10 @@ export class DungeonInnGame {
         mult += lv * u.globalMultiplierBonus;
       }
     }
-    const innLv = getCurrentInnLevel(this.reputation).level;
-    mult += (innLv - 1) * 0.05;
+    mult += (this.innRank - 1) * 0.04;
 
-    if (mult > 2.2) {
-      mult = 2.2 + Math.sqrt(mult - 2.2) * 0.4;
+    if (mult > 1.85) {
+      mult = 1.85 + Math.sqrt(mult - 1.85) * 0.25;
     }
 
     if (this.activeEvent) {
@@ -1011,15 +1663,11 @@ export class DungeonInnGame {
     return mult;
   }
 
+  /**
+   * v4 경제 개편: 수동 초당 자동 골드(GPS)는 완전히 제거되어 항상 0을 반환합니다.
+   */
   public getGoldPerSecond(): number {
-    let baseGps = 0.8;
-    for (const u of UPGRADES) {
-      const lv = this.upgrades[u.id] ?? 0;
-      if (lv > 0) {
-        baseGps += lv * u.gpsPerLevel;
-      }
-    }
-    return baseGps * this.getGlobalGoldMultiplier();
+    return 0;
   }
 
   public getClickServeBonus(): number {
@@ -1027,7 +1675,7 @@ export class DungeonInnGame {
     for (const u of UPGRADES) {
       const lv = this.upgrades[u.id] ?? 0;
       if (lv > 0) {
-        baseClick += lv * u.clickPerLevel;
+        baseClick += lv * Math.min(8, u.clickPerLevel);
       }
     }
     return Math.max(5, Math.floor(baseClick * this.getGlobalGoldMultiplier()));
@@ -1037,29 +1685,25 @@ export class DungeonInnGame {
     guestDef: GuestTypeDef,
     isManualClick: boolean
   ): number {
-    let raw = guestDef.baseGold;
+    // 인플레이션 폭주를 막기 위해 손님 기본 지불액에 업그레이드 보너스를 완만하게 합산
+    let menuBonus = 0;
     for (const u of UPGRADES) {
       const lv = this.upgrades[u.id] ?? 0;
       if (lv > 0) {
-        raw += lv * u.clickPerLevel;
+        menuBonus += lv * Math.min(3, Math.ceil(u.clickPerLevel * 0.2));
       }
     }
-    let total = raw * this.getGlobalGoldMultiplier();
+    const cappedBonus = Math.min(guestDef.baseGold * 1.1, menuBonus);
+    let total = (guestDef.baseGold + cappedBonus) * this.getGlobalGoldMultiplier();
     if (isManualClick) {
-      total *= 1.25;
+      total *= 1.15;
     }
-    return Math.max(1, Math.floor(total));
+    return Math.max(2, Math.floor(total));
   }
 
   public getServeReputationGain(guestDef: GuestTypeDef): number {
-    let rep = guestDef.baseRep;
-    for (const u of UPGRADES) {
-      const lv = this.upgrades[u.id] ?? 0;
-      if (lv > 0 && u.repPerServeBonus) {
-        rep += lv * u.repPerServeBonus;
-      }
-    }
-    return Math.max(1, Math.round(rep));
+    // 평판 인플레이션 방지: 손님 서빙당 기본 1~3 평판 획득 (주 평판은 던전 공략과 시설/목표 달성에서 획득)
+    return Math.max(1, Math.min(4, guestDef.baseRep));
   }
 
   public getMaxGuests(): number {
@@ -1070,16 +1714,7 @@ export class DungeonInnGame {
         bonus += Math.ceil((lv * u.maxGuestsBonusPerLevel) / 2);
       }
     }
-    return Math.min(12, 4 + bonus);
-  }
-
-  public getTotalStaffLevels(): number {
-    return (
-      (this.upgrades['staff_maid'] ?? 0) +
-      (this.upgrades['staff_bartender'] ?? 0) +
-      (this.upgrades['staff_chef'] ?? 0) +
-      (this.upgrades['staff_bard'] ?? 0)
-    );
+    return Math.min(10, 4 + bonus);
   }
 
   public getAutoServeInterval(): number {
@@ -1090,10 +1725,11 @@ export class DungeonInnGame {
         speed += lv * u.autoServeSpeedBonus;
       }
     }
+    speed *= this.getStaffEfficiencyMultiplier();
     if (speed <= 0) {
-      return 6.5;
+      return 4.8; // 직원이 없어도 여관 주인이 기본 속도로 서빙하여 교착 방지
     }
-    return Math.max(0.55, 3.0 / (1 + speed * 0.65));
+    return Math.max(0.75, 3.2 / (1 + speed * 0.65));
   }
 
   public getExtraLootChance(): number {
@@ -1104,8 +1740,8 @@ export class DungeonInnGame {
         bonus += lv * u.lootChanceBonus;
       }
     }
-    if (getCurrentInnLevel(this.reputation).level >= 8) {
-      bonus += 0.08;
+    if (this.innRank >= 7) {
+      bonus += 0.06;
     }
     if (this.activeEvent) {
       bonus += this.activeEvent.def.lootChanceAdd;
@@ -1117,13 +1753,25 @@ export class DungeonInnGame {
     if (amount <= 0) return;
     this.gold += amount;
     this.totalGoldEarned += amount;
+
+    // 체불 급료가 있고 골드가 여유 있으면 즉시 자동 상환하여 직원 효율 정상화
+    if (this.unpaidWages > 0 && this.gold >= this.unpaidWages + 25) {
+      const paid = this.unpaidWages;
+      this.gold -= paid;
+      this.unpaidWages = 0;
+      if (this.currentDayLedger) {
+        this.currentDayLedger.wageArrears = 0;
+      }
+      this.addLog(
+        `✅ 체불 급료 ${formatGold(paid)}G를 상환하여 직원 근무 효율이 100%로 회복되었습니다!`,
+        'unlock'
+      );
+    }
   }
 
   public addReputation(amount: number): void {
     if (amount <= 0) return;
-    const prevLevel = getCurrentInnLevel(this.reputation).level;
     this.reputation += amount;
-    const newLevelDef = getCurrentInnLevel(this.reputation);
 
     for (const g of GUEST_TYPES) {
       if (this.reputation >= g.unlockRep && !this.discoveredGuests[g.id]) {
@@ -1136,21 +1784,7 @@ export class DungeonInnGame {
     }
 
     this.checkHeroUnlocks();
-
-    if (newLevelDef.level > prevLevel) {
-      this.sound.playLevelUp();
-      this.addLog(
-        `🎊 여관 등급 상승! [${newLevelDef.title}] 달성! (${newLevelDef.rewardText})`,
-        'unlock'
-      );
-      this.spawnFloatingText(
-        CANVAS_WIDTH / 2 - 35,
-        50,
-        `★ ${newLevelDef.title}!`,
-        '#ebd186'
-      );
-      this.onLevelUp(newLevelDef.title, newLevelDef.rewardText);
-    }
+    this.checkInnRankProgression();
   }
 
   public hasMaterials(reqs: Record<string, number>): boolean {
@@ -1188,6 +1822,7 @@ export class DungeonInnGame {
     const matReqs = getInnUpgradeMaterialRequirements(upgradeId, currentLv);
 
     this.gold -= cost;
+    this.recordExpense('facilityInvest', cost);
     this.consumeMaterials(matReqs);
     this.upgrades[upgradeId] = currentLv + 1;
     this.sound.playUpgrade();
@@ -1201,17 +1836,18 @@ export class DungeonInnGame {
       '#7eb38a'
     );
     this.addLog(
-      `[${def.name}] Lv.${currentLv + 1} 업그레이드 완료!`,
+      `[${def.name}] Lv.${currentLv + 1} 업그레이드 완료! (-${formatGold(cost)}G)`,
       'normal'
     );
 
+    this.checkInnRankProgression();
     this.saveToStorage();
     this.onUiUpdate();
     return true;
   }
 
   // ==========================================================================
-  // 영웅 타일 그리드 경로탐색 · 욕구 기반 자율 AI · 플레이어 행동 지시
+  // 영웅 타일 그리드 경로탐색 · 성격 반영 이동 · 욕구 기반 자율 AI · 플레이어 지시
   // ==========================================================================
 
   private pickSpotInZone(
@@ -1219,13 +1855,20 @@ export class DungeonInnGame {
     hero: HeroState
   ): { col: number; row: number; facing: 'left' | 'right' } {
     const spots = ZONE_SPOTS[zone] ?? ZONE_SPOTS.hall;
-    // 다른 영웅이 점유하지 않은 좌석 우선 선택
     const occupied = new Set<string>();
     for (const other of this.getUnlockedHeroes()) {
       if (other.id === hero.id || other.status === 'exploring') continue;
-      occupied.add(`${other.targetTileX ?? other.tileX},${other.targetTileY ?? other.tileY}`);
+      occupied.add(
+        `${other.targetTileX ?? other.tileX},${other.targetTileY ?? other.tileY}`
+      );
     }
-    for (const s of spots) {
+    // 고독(lone_wolf) 성격은 구석 자리를 선호하여 뒤쪽 인덱스부터 탐색
+    const roster = HERO_ROSTER_MAP[hero.id];
+    const orderedSpots = roster?.personalities.includes('lone_wolf')
+      ? [...spots].reverse()
+      : spots;
+
+    for (const s of orderedSpots) {
       if (!occupied.has(`${s.col},${s.row}`)) {
         return s;
       }
@@ -1262,9 +1905,6 @@ export class DungeonInnGame {
     hero.activityTimer = 0;
   }
 
-  /**
-   * 플레이어가 특정 영웅에게 직접 행동을 지시합니다 (그 행동이 끝날 때까지 자율 AI를 덮어씀).
-   */
   public issueHeroOrder(heroId: string, order: HeroPlayerOrder): boolean {
     const hero = this.heroes[heroId];
     if (!hero || !hero.unlocked || hero.status === 'exploring') return false;
@@ -1326,13 +1966,16 @@ export class DungeonInnGame {
   }
 
   private updateHeroAgents(dt: number): void {
-    const walkSpeed = 72; // 타일 이동 속도 (픽셀/초)
+    const baseWalkSpeed = 72; // 기본 타일 이동 속도 (픽셀/초)
     const unlocked = this.getUnlockedHeroes();
 
     for (const hero of unlocked) {
       this.ensureHeroAgentFields(hero);
+      const roster = HERO_ROSTER_MAP[hero.id];
+      const walkSpeed =
+        baseWalkSpeed *
+        (roster ? getPersonalityWalkSpeedMultiplier(roster.personalities) : 1.0);
 
-      // 말풍선 & 상호작용 이펙트 타이머 감소
       if ((hero.speechTimer ?? 0) > 0) {
         hero.speechTimer = Math.max(0, (hero.speechTimer ?? 0) - dt);
         if (hero.speechTimer === 0) {
@@ -1359,8 +2002,13 @@ export class DungeonInnGame {
         continue;
       }
 
-      // 여관 체류 중 서서히 허기 증가
-      hero.hunger = Math.min(100, (hero.hunger ?? 20) + dt * 0.42);
+      hero.hunger = Math.min(100, (hero.hunger ?? 20) + dt * 0.48);
+
+      // 신중(cautious) 성격은 이동 중 가끔 주변을 살피며 잠깐 멈칫함
+      if ((hero.hesitateTimer ?? 0) > 0) {
+        hero.hesitateTimer = Math.max(0, (hero.hesitateTimer ?? 0) - dt);
+        continue;
+      }
 
       // 1. 경로 이동 중인 경우
       if (hero.path && hero.path.length > 0) {
@@ -1377,6 +2025,15 @@ export class DungeonInnGame {
           hero.tileX = nextStep.col;
           hero.tileY = nextStep.row;
           hero.path.shift();
+
+          if (
+            roster?.personalities.includes('cautious') &&
+            hero.path.length === 2 &&
+            this.random() < 0.22
+          ) {
+            hero.hesitateTimer = 0.25;
+          }
+
           if (hero.path.length === 0) {
             this.onHeroArriveAtZone(hero, hero.targetZone ?? 'hall');
           }
@@ -1390,7 +2047,7 @@ export class DungeonInnGame {
         continue;
       }
 
-      // 2. 도착 후 작업/상호작용 애니메이션 타이머 진행
+      // 2. 도착 후 작업/상호작용 타이머
       if (hero.activityTimer && hero.activityTimer > 0) {
         hero.activityTimer -= dt;
         if (hero.activityTimer <= 0) {
@@ -1400,19 +2057,20 @@ export class DungeonInnGame {
       }
     }
 
-    // 3. 프레임 분산 자율 AI 의사결정 (0.35초마다 최대 3명씩 평가하여 30명일 때도 프레임 드랍 없음)
+    // 3. 프레임 분산 자율 AI 의사결정
     this.agentDecisionTimer += dt;
     if (this.agentDecisionTimer >= 0.35 && unlocked.length > 0) {
       this.agentDecisionTimer = 0;
       const batchSize = Math.min(3, unlocked.length);
       for (let i = 0; i < batchSize; i++) {
         const h = unlocked[this.agentDecisionCursor % unlocked.length];
-        this.agentDecisionCursor = (this.agentDecisionCursor + 1) % unlocked.length;
+        this.agentDecisionCursor =
+          (this.agentDecisionCursor + 1) % unlocked.length;
         this.evaluateHeroAutonomousNeed(h);
       }
     }
 
-    // 4. 의뢰 게시판에 모인 영웅들의 자동 파티 결성 및 출정 행진 체크
+    // 4. 의뢰 게시판 자동 파티 결성 및 출정
     this.boardDispatchTimer += dt;
     if (this.boardDispatchTimer >= 1.4) {
       this.boardDispatchTimer = 0;
@@ -1434,12 +2092,12 @@ export class DungeonInnGame {
     switch (zone) {
       case 'trade':
         hero.activity = 'selling_loot';
-        hero.activityTimer = 1.3;
+        hero.activityTimer = 1.2;
         hero.intentText = '💎 거래 가판대에서 전리품 흥정·매각 중';
         break;
       case 'potion':
         hero.activity = 'shopping_potion';
-        hero.activityTimer = 1.4;
+        hero.activityTimer = 1.3;
         hero.intentText = '⚗️ 포션 가게에서 비약 고르는 중';
         break;
       case 'blacksmith':
@@ -1447,34 +2105,37 @@ export class DungeonInnGame {
           hero.playerOrder?.kind === 'enhance_equip'
             ? 'enhancing'
             : 'shopping_equip';
-        hero.activityTimer = 1.5;
+        hero.activityTimer = 1.4;
         hero.intentText = '⚒️ 대장간에서 장비 정비 중';
         break;
       case 'dining':
         hero.activity = 'eating';
-        hero.activityTimer = 1.6;
+        hero.activityTimer = 1.5;
         hero.intentText = '🍲 1층 식당에서 따뜻한 식사 중';
         break;
       case 'bar':
         hero.activity = 'drinking';
-        hero.activityTimer = 1.5;
+        hero.activityTimer = 1.4;
         hero.intentText = '🍺 바 카운터에서 맥아 에일 시음 중';
         break;
       case 'room':
         hero.activity = 'sleeping';
-        hero.activityTimer = Math.max(1.8, Math.min(4.5, hero.restTimerSec || 2.2));
+        hero.activityTimer = Math.max(
+          1.6,
+          Math.min(4.0, hero.restTimerSec || 2.0)
+        );
         hero.intentText = '🛏️ 2층 객실 침대에서 수면·회복 중';
         this.triggerHeroSpeech(hero, 'resting');
         break;
       case 'board':
         hero.activity = 'rallying';
-        hero.activityTimer = 1.0;
+        hero.activityTimer = 0.9;
         hero.intentText = '📋 의뢰 게시판에서 파티원 모집 중';
         this.triggerHeroSpeech(hero, 'party_banter');
         break;
       case 'gate':
         hero.activity = 'rallying';
-        hero.activityTimer = 0.6;
+        hero.activityTimer = 0.5;
         hero.intentText = '🗺️ 던전 입구에서 출정 준비 완료!';
         break;
       default:
@@ -1548,7 +2209,8 @@ export class DungeonInnGame {
     }
 
     let soldCount = 0;
-    let earnedGold = 0;
+    let spentByInn = 0;
+    let marginEarned = 0;
     const reserve = this.autoBuyLoot ? this.shopConfig.lootReserveGold : 0;
 
     for (const stack of [...hero.lootBag]) {
@@ -1556,7 +2218,6 @@ export class DungeonInnGame {
       if (this.shopConfig.lootBuyEnabled[stack.materialId] === false) {
         continue;
       }
-      // 매입가가 너무 낮으면(75% 이하) 탐욕/자만 성격 영웅은 잠시 판매를 망설임 (단, 오래된 전리품은 매각)
       const roster = HERO_ROSTER_MAP[hero.id];
       if (
         ratePct <= 75 &&
@@ -1568,31 +2229,45 @@ export class DungeonInnGame {
         continue;
       }
 
+      const mat = MATERIAL_MAP[stack.materialId];
       const unitPrice = this.getEffectiveMaterialBuyPrice(stack.materialId);
       const availGold = Math.max(0, this.gold - reserve);
       const canBuy = Math.min(stack.count, Math.floor(availGold / unitPrice));
       if (canBuy > 0) {
         const total = canBuy * unitPrice;
         this.gold -= total;
+        this.recordExpense('lootPurchase', total);
         hero.gold += total;
         this.materials[stack.materialId] =
           (this.materials[stack.materialId] ?? 0) + canBuy;
         stack.count -= canBuy;
         soldCount += canBuy;
-        earnedGold += total;
+        spentByInn += total;
+
+        // 여관 거래소 감정 수수료 및 저가 매입 마진 수입 기록
+        const baseVal = (mat?.buyPrice ?? unitPrice) * canBuy;
+        const discountGain = Math.max(0, baseVal - total);
+        const fee = Math.max(1, Math.round(baseVal * 0.15)) + discountGain;
+        marginEarned += fee;
       }
     }
 
     hero.lootBag = hero.lootBag.filter((s) => s.count > 0);
 
     if (soldCount > 0) {
+      if (marginEarned > 0) {
+        this.recordIncome('lootMargin', marginEarned);
+      }
       this.totalHeroShopTransactions += 1;
+      if (this.currentDayLedger) {
+        this.currentDayLedger.heroTransactions += 1;
+      }
       this.sound.playCoin();
       this.spawnCoins(hero.x!, hero.y! - 10, 4);
       this.setHeroInteractionEffect(
         hero,
         '💎',
-        `+${earnedGold}G`,
+        `매입 ${spentByInn}G`,
         '#ebd186'
       );
       this.triggerHeroSpeech(
@@ -1640,7 +2315,6 @@ export class DungeonInnGame {
       if (!rec || (this.potionStock[pId] ?? 0) <= 0) continue;
       const price = this.getEffectivePotionSellPrice(pId);
 
-      // 가격이 1.5배 이상 비싸고 부상이 아니면 가끔 구매를 포기하고 불평
       if (
         !specificPotionId &&
         mult >= 1.5 &&
@@ -1653,9 +2327,12 @@ export class DungeonInnGame {
 
       if (hero.gold >= price) {
         hero.gold -= price;
-        this.addGold(price);
+        this.recordIncome('potionSales', price);
         this.potionStock[pId] -= 1;
         this.totalHeroShopTransactions += 1;
+        if (this.currentDayLedger) {
+          this.currentDayLedger.heroTransactions += 1;
+        }
 
         const buff: HeroBuff | null = rec.buff
           ? {
@@ -1696,6 +2373,7 @@ export class DungeonInnGame {
           )}G 여관 수입)`,
           'normal'
         );
+        this.checkOptionalQuests();
         return;
       }
     }
@@ -1705,7 +2383,6 @@ export class DungeonInnGame {
     hero: HeroState,
     order?: HeroPlayerOrder | null
   ): void {
-    // 1. 플레이어가 특정 재고 장비 장착/구매를 지시한 경우
     if (order?.kind === 'buy_equip' && order.stockUid !== undefined) {
       if (this.equipItemToHero(hero.id, order.stockUid)) {
         this.setHeroInteractionEffect(hero, '⚒️', '장착 완료!', '#e6c274');
@@ -1714,18 +2391,19 @@ export class DungeonInnGame {
       return;
     }
 
-    // 2. 자율 장비 쇼핑
     if (this.shopConfig.blacksmithSaleEnabled) {
       const bought = this.heroTryBuyBetterEquipment(hero);
       if (bought) {
         this.totalHeroShopTransactions += 1;
+        if (this.currentDayLedger) {
+          this.currentDayLedger.heroTransactions += 1;
+        }
         this.spawnCoins(hero.x!, hero.y! - 10, 4);
         this.setHeroInteractionEffect(hero, '⚒️', '신규 장착!', '#e6c274');
         this.triggerHeroSpeech(hero, 'equip_bought');
       }
     }
 
-    // 3. 대장간 자율 안전 강화 의뢰 (옵션이 켜져 있고 영웅 골드가 넉넉할 때 +1~+2 시도)
     if (this.shopConfig.blacksmithAutoEnhanceEnabled && hero.gold >= 90) {
       for (const slot of ['weapon', 'armor', 'offhand', 'accessory'] as EquipSlot[]) {
         const inst = hero.equipment[slot];
@@ -1769,10 +2447,13 @@ export class DungeonInnGame {
 
       if (hero.gold >= price) {
         hero.gold -= price;
-        this.addGold(price);
+        this.recordIncome('foodAndDrink', price);
         hero.hunger = Math.max(0, (hero.hunger ?? 50) - 75);
         hero.fatigue = Math.max(0, (hero.fatigue ?? 20) - 20);
         this.totalHeroShopTransactions += 1;
+        if (this.currentDayLedger) {
+          this.currentDayLedger.heroTransactions += 1;
+        }
 
         this.applyBuffAndHealToHero(
           hero,
@@ -1792,13 +2473,19 @@ export class DungeonInnGame {
           hero,
           mult >= 1.25 ? 'price_high' : mult <= 0.85 ? 'price_good' : 'eating'
         );
+        this.checkOptionalQuests();
         return;
       }
     }
 
-    // 영웅 골드가 부족해도 여관 기본 약초 수프로 허기 해소
+    // 파산·교착 방지: 영웅 골드가 바닥나도 여관 기본 약초 수프는 계속 제공되며 소액의 기본 식대를 지불
+    const minSoupPay = Math.min(hero.gold, 4);
+    if (minSoupPay > 0) {
+      hero.gold -= minSoupPay;
+      this.recordIncome('foodAndDrink', minSoupPay);
+    }
     hero.hunger = Math.max(0, (hero.hunger ?? 50) - 55);
-    this.setHeroInteractionEffect(hero, '🥣', '식사 완료', '#7eb38a');
+    this.setHeroInteractionEffect(hero, '🥣', '기본 수프', '#7eb38a');
     this.triggerHeroSpeech(hero, 'eating');
   }
 
@@ -1810,14 +2497,17 @@ export class DungeonInnGame {
     hero.fatigue = 0;
     this.totalHeroesHealed += 1;
 
-    const roomFee = Math.min(
-      hero.gold,
-      Math.round(6 * this.getRoomRecoveryBonus())
+    const targetFee = Math.round(
+      9 * this.getRoomRecoveryBonus() * this.getGlobalGoldMultiplier()
     );
+    const roomFee = Math.min(hero.gold, targetFee);
     if (roomFee > 0) {
       hero.gold -= roomFee;
-      this.addGold(roomFee);
+      this.recordIncome('roomAndRest', roomFee);
       this.totalHeroShopTransactions += 1;
+      if (this.currentDayLedger) {
+        this.currentDayLedger.heroTransactions += 1;
+      }
       this.spawnCoins(hero.x!, hero.y! - 10, 3);
     }
 
@@ -1837,22 +2527,23 @@ export class DungeonInnGame {
       remainingRuns: 1,
     });
 
-    this.setHeroInteractionEffect(hero, '🛏️', '완전 회복!', '#7eb38a');
+    this.setHeroInteractionEffect(
+      hero,
+      '🛏️',
+      roomFee > 0 ? `+${roomFee}G` : '완전 회복!',
+      '#7eb38a'
+    );
     this.triggerHeroSpeech(hero, 'healed');
   }
 
-  /**
-   * 대기 중인 영웅의 욕구(부상/피로 → 전리품 판매 → 장비/포션 쇼핑 → 허기/식사 → 게시판 집결)를 평가하여 목적지로 이동시킵니다.
-   */
   private evaluateHeroAutonomousNeed(hero: HeroState): void {
     if (!hero.unlocked || hero.status === 'exploring') return;
-    if (hero.playerOrder) return; // 플레이어 지시 수행 중에는 자율 AI가 덮어쓰지 않음
+    if (hero.playerOrder) return;
     if (hero.path && hero.path.length > 0) return;
     if ((hero.activityTimer ?? 0) > 0) return;
 
     const bd = getHeroStatBreakdown(hero);
 
-    // 1. 부상 또는 저체력/과피로 치료 및 휴식
     if (
       hero.status === 'injured' ||
       hero.status === 'fatigued' ||
@@ -1867,7 +2558,6 @@ export class DungeonInnGame {
       return;
     }
 
-    // 2. 가방에 전리품이 있으면 거래 가판대로 이동하여 매각
     const hasSellableLoot = hero.lootBag.some(
       (s) => s.count > 0 && this.shopConfig.lootBuyEnabled[s.materialId] !== false
     );
@@ -1876,7 +2566,6 @@ export class DungeonInnGame {
       return;
     }
 
-    // 3. 대장간에 착용 가능한 더 좋은 장비가 있고 구매 가능하면 대장간으로 이동
     if (
       this.shopConfig.blacksmithSaleEnabled &&
       this.hasAffordableBetterEquipment(hero) &&
@@ -1886,7 +2575,6 @@ export class DungeonInnGame {
       return;
     }
 
-    // 4. 포션 버프가 없고 구매 가능한 포션이 있으면 포션 가게로 이동
     const hasPotionBuff = hero.buffs.some((b) => b.source === 'potion');
     if (
       !hasPotionBuff &&
@@ -1897,11 +2585,10 @@ export class DungeonInnGame {
       return;
     }
 
-    // 5. 허기가 높거나(>=48) 음식 버프가 없으면 식당 또는 바로 이동
     const hasFoodBuff = hero.buffs.some((b) => b.source === 'food');
     if (
       this.shopConfig.mealSaleEnabled &&
-      ((hero.hunger ?? 0) >= 48 || (!hasFoodBuff && hero.gold >= 8)) &&
+      ((hero.hunger ?? 0) >= 44 || (!hasFoodBuff && hero.gold >= 8)) &&
       hero.targetZone !== 'dining' &&
       hero.targetZone !== 'bar'
     ) {
@@ -1920,7 +2607,6 @@ export class DungeonInnGame {
       return;
     }
 
-    // 6. 모든 준비가 끝났으면 의뢰 게시판으로 모여 파티 결성 대기
     if (hero.targetZone !== 'board' && hero.targetZone !== 'gate') {
       this.sendHeroToZone(
         hero,
@@ -1986,7 +2672,6 @@ export class DungeonInnGame {
   private tryAutonomousBoardRallyAndDepart(): void {
     if (this.expeditions.length >= this.getMaxConcurrentExpeditions()) return;
 
-    // 이미 출정 게이트로 걸어가는 중인 영웅이 있으면 도착을 기다림
     const marchingToGate = this.getUnlockedHeroes().filter(
       (h) =>
         h.status === 'idle' &&
@@ -2034,7 +2719,7 @@ export class DungeonInnGame {
   }
 
   // ==========================================================================
-  // 던전 해금 · 파티 파견 · 카이로소프트풍 층별 탐험 & 자동 전투
+  // 던전 해금 · 파티 파견 · 갈래 방(Branching Rooms) · 직업 기술 자동 전투 · 이벤트 선택지
   // ==========================================================================
 
   public isDungeonUnlocked(dungeonId: string): boolean {
@@ -2050,7 +2735,7 @@ export class DungeonInnGame {
   }
 
   public getMaxPartySize(): number {
-    return getCurrentInnLevel(this.reputation).level >= 5 ? 4 : 3;
+    return this.innRank >= 5 ? 4 : 3;
   }
 
   public getMaxConcurrentExpeditions(): number {
@@ -2075,32 +2760,59 @@ export class DungeonInnGame {
     if (typeof exp.marchProgress !== 'number') {
       exp.marchProgress = 0;
     }
-    if (!Array.isArray(exp.monsters) || exp.monsters.length === 0) {
+    if (!Array.isArray(exp.roomGraph) || exp.roomGraph.length === 0) {
+      exp.roomGraph = createDungeonRoomGraph(dungeon, () => this.random());
+    }
+    if (!exp.currentRoomId) {
+      exp.currentRoomId = 'f1_b0';
+    }
+    if (!exp.currentRoomType) {
+      exp.currentRoomType = 'combat';
+    }
+    if (!Array.isArray(exp.visitedRoomIds)) {
+      exp.visitedRoomIds = [exp.currentRoomId];
+    }
+    if (!Array.isArray(exp.monsters)) {
       exp.monsters = createFloorMonsters(
         dungeon,
         exp.currentFloor,
-        exp.totalFloors
+        exp.totalFloors,
+        exp.currentRoomType
       );
     }
     if (!exp.partyCombatState) {
       exp.partyCombatState = {};
       for (const hId of exp.heroIds) {
         const h = this.heroes[hId];
+        const roster = HERO_ROSTER_MAP[hId];
         const maxHp = h ? getHeroStatBreakdown(h).totalStats.hp : 100;
+        const stanceOffset = roster?.personalities.includes('brave') ||
+          roster?.personalities.includes('hotblooded')
+          ? 8
+          : roster?.personalities.includes('cautious')
+          ? -6
+          : 0;
         exp.partyCombatState[hId] = {
           currentHp: h ? Math.max(20, h.currentHp) : maxHp,
           maxHp,
           hitFlashTimer: 0,
           lungeTimer: 0,
+          stanceOffset,
+          skillIcon: null,
+          skillTimer: 0,
+          combatSpeech: null,
+          combatSpeechTimer: 0,
         };
       }
     }
+    if (!Array.isArray(exp.skillEffects)) exp.skillEffects = [];
     if (typeof exp.combatRoundTimer !== 'number') exp.combatRoundTimer = 0.45;
     if (typeof exp.floorTransitionTimer !== 'number') exp.floorTransitionTimer = 0;
     if (!Array.isArray(exp.combatFloats)) exp.combatFloats = [];
     if (!Array.isArray(exp.dropVisuals)) exp.dropVisuals = [];
     if (!Array.isArray(exp.floorLogs)) exp.floorLogs = [];
     if (!exp.accumulatedLoot) exp.accumulatedLoot = {};
+    if (typeof exp.bonusGoldEarned !== 'number') exp.bonusGoldEarned = 0;
     if (typeof exp.willSucceed !== 'boolean') {
       exp.willSucceed = this.random() < exp.expectedSuccessRate;
       exp.failAtFloor = exp.willSucceed
@@ -2152,7 +2864,7 @@ export class DungeonInnGame {
       this.heroAutoPrepareForExpedition(h);
     }
 
-    // 역할 순서(탱커 전열 -> 딜러/지원 -> 힐러 후열)로 정렬하여 전투 대열 구성
+    // 전열(탱커) -> 중열(딜러/지원) -> 후열(힐러) 진형 정렬
     const roleOrder = { tank: 0, dps: 1, support: 2, healer: 3 };
     partyHeroes.sort((a, b) => {
       const ra = HERO_CLASSES[HERO_ROSTER_MAP[a.id].classId].role;
@@ -2165,10 +2877,19 @@ export class DungeonInnGame {
     const expId = `exp_${this.nextExpeditionUid++}`;
     const totalFloors = getDungeonTotalFloors(dungeon);
     const willSucceed = this.random() < preview.finalSuccessRate;
+    const roomGraph = createDungeonRoomGraph(dungeon, () => this.random());
 
     const partyCombatState: ActiveExpedition['partyCombatState'] = {};
     for (const h of partyHeroes) {
       const bd = getHeroStatBreakdown(h);
+      const roster = HERO_ROSTER_MAP[h.id];
+      const stanceOffset =
+        roster.personalities.includes('brave') ||
+        roster.personalities.includes('hotblooded')
+          ? 8
+          : roster.personalities.includes('cautious')
+          ? -6
+          : 0;
       h.status = 'exploring';
       h.expeditionId = expId;
       h.activity = 'exploring';
@@ -2182,6 +2903,11 @@ export class DungeonInnGame {
         maxHp: bd.totalStats.hp,
         hitFlashTimer: 0,
         lungeTimer: 0,
+        stanceOffset,
+        skillIcon: null,
+        skillTimer: 0,
+        combatSpeech: null,
+        combatSpeechTimer: 0,
       };
     }
 
@@ -2196,21 +2922,29 @@ export class DungeonInnGame {
       currentFloor: 1,
       floorPhase: 'marching',
       marchProgress: 0,
-      monsters: createFloorMonsters(dungeon, 1, totalFloors),
+      roomGraph,
+      currentRoomId: 'f1_b0',
+      currentRoomType: 'combat',
+      visitedRoomIds: ['f1_b0'],
+      roomResolved: false,
+      activeEventPrompt: null,
+      monsters: createFloorMonsters(dungeon, 1, totalFloors, 'combat'),
       partyCombatState,
+      skillEffects: [],
       combatRoundTimer: 0.5,
       floorTransitionTimer: 0,
       combatFloats: [],
       dropVisuals: [],
       floorLogs: [],
       accumulatedLoot: {},
+      bonusGoldEarned: 0,
       willSucceed,
       failAtFloor: willSucceed ? totalFloors + 1 : totalFloors,
     };
 
     this.appendExpeditionFloorLog(
       newExp,
-      `1층 진입: [${preview.heroNames.join('·')}] 파티가 ${dungeon.name} 탐험을 시작합니다!`,
+      `1층 진입: [${preview.heroNames.join('·')}] 진형이 ${dungeon.name} 탐험을 시작합니다!`,
       'march'
     );
 
@@ -2236,6 +2970,143 @@ export class DungeonInnGame {
     return true;
   }
 
+  /**
+   * 갈래 방(2갈래 분기) 선택 로직: 파티의 직업(도적 등)과 성격(탐욕/신중/용감)에 따라 선호하는 방을 선택합니다.
+   */
+  private chooseBranchRoomForFloor(
+    exp: ActiveExpedition,
+    targetFloor: number
+  ): DungeonRoomNode {
+    const floorNodes = exp.roomGraph?.[targetFloor - 1] ?? [];
+    if (floorNodes.length <= 1) {
+      return (
+        floorNodes[0] ?? {
+          id: `f${targetFloor}_b0`,
+          floor: targetFloor,
+          branchIndex: 0,
+          type: targetFloor === exp.totalFloors ? 'boss' : 'combat',
+          label: `${targetFloor}F 전투방`,
+          icon: '⚔️',
+          nextIds: [],
+        }
+      );
+    }
+
+    const partyRosters = exp.heroIds
+      .map((id) => HERO_ROSTER_MAP[id])
+      .filter(Boolean);
+    const hasRogueOrGreedy = partyRosters.some(
+      (r) =>
+        r.classId === 'rogue' ||
+        r.classId === 'traveler' ||
+        r.personalities.includes('greedy')
+    );
+    const hasCautious = partyRosters.some((r) =>
+      r.personalities.includes('cautious')
+    );
+    const hasBraveOrHot = partyRosters.some(
+      (r) =>
+        r.personalities.includes('brave') ||
+        r.personalities.includes('hotblooded')
+    );
+
+    for (const node of floorNodes) {
+      if (node.type === 'treasure' && hasRogueOrGreedy) return node;
+      if ((node.type === 'rest' || node.type === 'event') && hasCautious) {
+        return node;
+      }
+      if (node.type === 'elite' && hasBraveOrHot) return node;
+    }
+
+    return floorNodes[Math.floor(this.random() * floorNodes.length)];
+  }
+
+  /**
+   * 이벤트 방에서 플레이어(또는 타이머 만료 시 파티 리더)가 선택지를 골랐을 때 효과를 적용합니다.
+   */
+  public chooseDungeonEventOption(
+    expeditionId: string,
+    optionId?: string
+  ): boolean {
+    const exp = this.expeditions.find((e) => e.id === expeditionId);
+    if (!exp || !exp.activeEventPrompt || exp.activeEventPrompt.resolvedOptionId) {
+      return false;
+    }
+    const prompt = exp.activeEventPrompt;
+    const chosen =
+      prompt.options.find((o) => o.id === optionId) ?? prompt.options[0];
+    if (!chosen) return false;
+
+    prompt.resolvedOptionId = chosen.id;
+    const dungeon = DUNGEON_MAP[exp.dungeonId] ?? DUNGEONS[0];
+
+    if (chosen.kind === 'heal') {
+      for (const cState of Object.values(exp.partyCombatState ?? {})) {
+        const heal = Math.round(cState.maxHp * 0.25);
+        cState.currentHp = Math.min(cState.maxHp, cState.currentHp + heal);
+      }
+      exp.combatFloats?.push({
+        x: 155,
+        y: 92,
+        text: '💚파티 치유 +25%!',
+        color: '#7eb38a',
+        life: 1.1,
+      });
+    } else if (chosen.kind === 'gold') {
+      exp.bonusGoldEarned = (exp.bonusGoldEarned ?? 0) + 24;
+      exp.combatFloats?.push({
+        x: 165,
+        y: 92,
+        text: '💰+24G 보물 발견!',
+        color: '#ebd186',
+        life: 1.1,
+      });
+    } else if (chosen.kind === 'loot') {
+      if (dungeon.drops.length > 0) {
+        const dropMatId = dungeon.drops[0].materialId;
+        const mat = MATERIAL_MAP[dropMatId];
+        exp.accumulatedLoot = exp.accumulatedLoot ?? {};
+        exp.accumulatedLoot[dropMatId] =
+          (exp.accumulatedLoot[dropMatId] ?? 0) + 1;
+        if (mat) {
+          exp.dropVisuals?.push({
+            x: 300,
+            y: 112,
+            icon: mat.icon,
+            name: mat.name,
+            count: 1,
+            life: 1.5,
+          });
+        }
+      }
+    } else if (chosen.kind === 'haste') {
+      exp.remainingSec = Math.max(2, exp.remainingSec - 4);
+      exp.combatFloats?.push({
+        x: 165,
+        y: 92,
+        text: '⚡지름길 발견 (-4초)!',
+        color: '#78b2bf',
+        life: 1.1,
+      });
+    } else if (chosen.kind === 'buff_atk') {
+      exp.combatFloats?.push({
+        x: 165,
+        y: 92,
+        text: '⚔️전투 사기 상승!',
+        color: '#ebd186',
+        life: 1.1,
+      });
+    }
+
+    this.appendExpeditionFloorLog(
+      exp,
+      `❓ 이벤트 선택 [${chosen.label}] → ${chosen.effectText}`,
+      'drop'
+    );
+    this.onUiUpdate();
+    return true;
+  }
+
   private updateExpeditions(dt: number): void {
     if (this.expeditions.length === 0) return;
     const stillRunning: ActiveExpedition[] = [];
@@ -2244,7 +3115,6 @@ export class DungeonInnGame {
       this.ensureExpeditionFloorFields(exp);
       exp.remainingSec -= dt;
 
-      // 층별 진행 및 자동 전투 시뮬레이션
       this.updateSingleExpeditionFloorCombat(exp, dt);
 
       if (exp.remainingSec <= 0) {
@@ -2278,9 +3148,12 @@ export class DungeonInnGame {
       Math.floor(elapsed / floorSpan) + 1
     );
     const floorLocalElapsed = elapsed - (targetFloor - 1) * floorSpan;
-    const floorLocalRatio = Math.min(1, Math.max(0, floorLocalElapsed / floorSpan));
+    const floorLocalRatio = Math.min(
+      1,
+      Math.max(0, floorLocalElapsed / floorSpan)
+    );
 
-    // 플로팅 텍스트 및 드랍 시각효과 타이머 감쇠
+    // 이펙트 및 타이머 감쇠
     if (exp.combatFloats && exp.combatFloats.length > 0) {
       exp.combatFloats = exp.combatFloats.filter((cf) => {
         cf.y -= 14 * dt;
@@ -2294,6 +3167,12 @@ export class DungeonInnGame {
         return dv.life > 0;
       });
     }
+    if (exp.skillEffects && exp.skillEffects.length > 0) {
+      exp.skillEffects = exp.skillEffects.filter((se) => {
+        se.life -= dt;
+        return se.life > 0;
+      });
+    }
     for (const m of exp.monsters ?? []) {
       if (m.hitFlashTimer > 0) m.hitFlashTimer = Math.max(0, m.hitFlashTimer - dt);
       if (m.lungeTimer > 0) m.lungeTimer = Math.max(0, m.lungeTimer - dt);
@@ -2305,48 +3184,97 @@ export class DungeonInnGame {
       if (cState.lungeTimer > 0) {
         cState.lungeTimer = Math.max(0, cState.lungeTimer - dt);
       }
+      if ((cState.skillTimer ?? 0) > 0) {
+        cState.skillTimer = Math.max(0, (cState.skillTimer ?? 0) - dt);
+      }
+      if ((cState.combatSpeechTimer ?? 0) > 0) {
+        cState.combatSpeechTimer = Math.max(
+          0,
+          (cState.combatSpeechTimer ?? 0) - dt
+        );
+      }
     }
 
-    // 층 전환 감지
+    // 이벤트 선택지 자동 타임아웃 처리 (플레이어가 안 눌러도 시뮬/방치가 멈추지 않음)
+    if (exp.activeEventPrompt && !exp.activeEventPrompt.resolvedOptionId) {
+      exp.activeEventPrompt.autoResolveTimer -= dt;
+      if (exp.activeEventPrompt.autoResolveTimer <= 0) {
+        this.chooseDungeonEventOption(exp.id);
+      }
+    }
+
+    // 층 전환 및 갈래 방 진입 감지
     if (targetFloor > (exp.currentFloor ?? 1)) {
+      if (exp.activeEventPrompt && !exp.activeEventPrompt.resolvedOptionId) {
+        this.chooseDungeonEventOption(exp.id);
+      }
+      exp.activeEventPrompt = null;
       exp.currentFloor = targetFloor;
       exp.floorPhase = 'marching';
       exp.marchProgress = 0;
-      exp.monsters = createFloorMonsters(dungeon, targetFloor, totalFloors);
-      const isBoss = targetFloor === totalFloors;
+      exp.roomResolved = false;
+
+      const chosenRoom = this.chooseBranchRoomForFloor(exp, targetFloor);
+      exp.currentRoomId = chosenRoom.id;
+      exp.currentRoomType = chosenRoom.type;
+      exp.visitedRoomIds = exp.visitedRoomIds ?? [];
+      if (!exp.visitedRoomIds.includes(chosenRoom.id)) {
+        exp.visitedRoomIds.push(chosenRoom.id);
+      }
+
+      const rMeta = ROOM_TYPE_META[chosenRoom.type] ?? ROOM_TYPE_META.combat;
+      if (
+        chosenRoom.type === 'combat' ||
+        chosenRoom.type === 'elite' ||
+        chosenRoom.type === 'boss'
+      ) {
+        exp.monsters = createFloorMonsters(
+          dungeon,
+          targetFloor,
+          totalFloors,
+          chosenRoom.type
+        );
+      } else {
+        exp.monsters = [];
+      }
+
+      const isBoss = chosenRoom.type === 'boss';
       this.appendExpeditionFloorLog(
         exp,
         isBoss
-          ? `👑 [${targetFloor}층 보스방 진입!] ${exp.monsters[0]?.name}이(가) 모습을 드러냈습니다!`
-          : `🏃 ${targetFloor}층 진입: 어두운 복도를 따라 전진합니다.`,
+          ? `👑 [${targetFloor}층 보스방 진입!] ${exp.monsters[0]?.name} (${exp.monsters[0]?.behaviorLabel}) 출현!`
+          : `🔀 ${targetFloor}층 갈래길: [${rMeta.icon} ${chosenRoom.label}] 경로로 진입합니다.`,
         isBoss ? 'boss' : 'march'
       );
     }
 
-    // 층 내 단계(복도 행진 -> 몬스터 교전 -> 층 클리어 및 드랍)
-    if (floorLocalRatio < 0.24) {
+    // 층 내 단계 진행
+    const roomType = exp.currentRoomType ?? 'combat';
+    if (floorLocalRatio < 0.22) {
       exp.floorPhase = 'marching';
-      exp.marchProgress = floorLocalRatio / 0.24;
+      exp.marchProgress = floorLocalRatio / 0.22;
     } else if (floorLocalRatio < 0.84) {
       if (exp.floorPhase === 'marching') {
         exp.floorPhase = 'fighting';
-        const mNames = (exp.monsters ?? []).map((m) => m.name).join(', ');
-        this.appendExpeditionFloorLog(
-          exp,
-          `⚔️ ${exp.currentFloor}층 교전 시작! (${mNames})`,
-          'combat'
-        );
+        this.onEnterDungeonRoomAction(exp, dungeon, roomType);
       }
 
-      exp.combatRoundTimer = (exp.combatRoundTimer ?? 0.5) - dt;
-      if (exp.combatRoundTimer <= 0) {
-        exp.combatRoundTimer = 0.65;
-        this.executeExpeditionCombatTick(exp, dungeon, floorLocalRatio);
+      if (
+        roomType === 'combat' ||
+        roomType === 'elite' ||
+        roomType === 'boss'
+      ) {
+        exp.combatRoundTimer = (exp.combatRoundTimer ?? 0.5) - dt;
+        if (exp.combatRoundTimer <= 0) {
+          exp.combatRoundTimer = 0.62;
+          this.executeExpeditionCombatTick(exp, dungeon, floorLocalRatio);
+        }
       }
     } else {
       if (exp.floorPhase === 'fighting') {
         const isFailFloor =
-          !exp.willSucceed && exp.currentFloor === (exp.failAtFloor ?? totalFloors);
+          !exp.willSucceed &&
+          exp.currentFloor === (exp.failAtFloor ?? totalFloors);
         if (isFailFloor) {
           exp.floorPhase = 'retreated';
           this.appendExpeditionFloorLog(
@@ -2359,15 +3287,14 @@ export class DungeonInnGame {
           for (const m of exp.monsters ?? []) {
             m.currentHp = 0;
           }
-          // 층 클리어 시 가시적 드랍 아이템 연출
           if (dungeon.drops.length > 0) {
             const dropDef =
               dungeon.drops[(exp.currentFloor ?? 1) % dungeon.drops.length];
             const mat = MATERIAL_MAP[dropDef.materialId];
-            if (mat && (exp.willSucceed || this.random() < 0.5)) {
+            if (mat && (exp.willSucceed || this.random() < 0.55)) {
               exp.dropVisuals?.push({
                 x: 315,
-                y: 98,
+                y: 122,
                 icon: mat.icon,
                 name: mat.name,
                 count: 1,
@@ -2375,13 +3302,162 @@ export class DungeonInnGame {
               });
               this.appendExpeditionFloorLog(
                 exp,
-                `🎁 ${exp.currentFloor}층 처치 보상! ${mat.icon}${mat.name} 획득!`,
+                `🎁 ${exp.currentFloor}층 돌파 보상! ${mat.icon}${mat.name} 획득!`,
                 'drop'
               );
             }
           }
         }
       }
+    }
+  }
+
+  /**
+   * 방(전투/보물/함정/휴식/이벤트/정예/보스)에 도착했을 때 직업 기술과 성격 대사를 발동합니다.
+   */
+  private onEnterDungeonRoomAction(
+    exp: ActiveExpedition,
+    dungeon: (typeof DUNGEONS)[number],
+    roomType: NonNullable<ActiveExpedition['currentRoomType']>
+  ): void {
+    // 대표 영웅 성격 말풍선 표시
+    const speakerId =
+      exp.heroIds.find((id) => {
+        const r = HERO_ROSTER_MAP[id];
+        if (roomType === 'treasure') {
+          return r?.classId === 'rogue' || r?.personalities.includes('greedy');
+        }
+        if (roomType === 'trap') {
+          return r?.classId === 'rogue' || r?.personalities.includes('cautious');
+        }
+        return false;
+      }) ?? exp.heroIds[0];
+
+    if (speakerId && exp.partyCombatState?.[speakerId]) {
+      const roster = HERO_ROSTER_MAP[speakerId];
+      exp.partyCombatState[speakerId].combatSpeech =
+        generateCombatPersonalitySpeech(
+          roster.personalities,
+          roomType,
+          () => this.random()
+        );
+      exp.partyCombatState[speakerId].combatSpeechTimer = 2.4;
+    }
+
+    if (roomType === 'treasure') {
+      const openerName = HERO_ROSTER_MAP[speakerId]?.name ?? '도적';
+      exp.bonusGoldEarned = (exp.bonusGoldEarned ?? 0) + 18 + dungeon.tier * 6;
+      exp.skillEffects?.push({
+        id: this.nextSkillEffectId++,
+        kind: 'trap_disarm',
+        label: '🗝️자물쇠 해제!',
+        color: '#ebd186',
+        startX: 175,
+        startY: 132,
+        targetX: 310,
+        targetY: 132,
+        life: 0.9,
+        maxLife: 0.9,
+      });
+      this.appendExpeditionFloorLog(
+        exp,
+        `🎁 [${openerName}]이(가) 고대 보물상자를 열어 금화와 전리품을 확보했습니다!`,
+        'drop'
+      );
+    } else if (roomType === 'trap') {
+      const rogueId = exp.heroIds.find(
+        (id) =>
+          HERO_ROSTER_MAP[id]?.classId === 'rogue' ||
+          HERO_ROSTER_MAP[id]?.personalities.includes('cautious')
+      );
+      if (rogueId) {
+        const rName = HERO_ROSTER_MAP[rogueId].name;
+        exp.skillEffects?.push({
+          id: this.nextSkillEffectId++,
+          kind: 'trap_disarm',
+          label: '⚙️함정 해제!',
+          color: '#7eb38a',
+          startX: 175,
+          startY: 132,
+          targetX: 285,
+          targetY: 136,
+          life: 0.9,
+          maxLife: 0.9,
+        });
+        this.appendExpeditionFloorLog(
+          exp,
+          `⚙️ [${rName}]이(가) 날렵한 손놀림으로 바닥 톱니 함정을 안전하게 해제했습니다!`,
+          'combat'
+        );
+      } else {
+        const tankId = exp.heroIds[0];
+        const tName = HERO_ROSTER_MAP[tankId]?.name ?? '선봉';
+        exp.skillEffects?.push({
+          id: this.nextSkillEffectId++,
+          kind: 'shield_taunt',
+          label: '🛡️방패 방어!',
+          color: '#78b2bf',
+          startX: 178,
+          startY: 140,
+          targetX: 190,
+          targetY: 140,
+          life: 0.9,
+          maxLife: 0.9,
+        });
+        this.appendExpeditionFloorLog(
+          exp,
+          `🛡️ [${tName}]이(가) 방패를 들어 함정 충격을 막아냈습니다!`,
+          'combat'
+        );
+      }
+    } else if (roomType === 'rest') {
+      for (const cState of Object.values(exp.partyCombatState ?? {})) {
+        const heal = Math.round(cState.maxHp * 0.25);
+        cState.currentHp = Math.min(cState.maxHp, cState.currentHp + heal);
+      }
+      exp.skillEffects?.push({
+        id: this.nextSkillEffectId++,
+        kind: 'heal_light',
+        label: '🏕️모닥불 회복',
+        color: '#7eb38a',
+        startX: 150,
+        startY: 138,
+        targetX: 150,
+        targetY: 138,
+        life: 1.0,
+        maxLife: 1.0,
+      });
+      this.appendExpeditionFloorLog(
+        exp,
+        `🏕️ 안식의 모닥불에서 파티원들이 체력을 회복하고 전열을 가다듬었습니다.`,
+        'march'
+      );
+    } else if (roomType === 'event') {
+      const evDef =
+        DUNGEON_ROOM_EVENTS[
+          Math.floor(this.random() * DUNGEON_ROOM_EVENTS.length)
+        ];
+      exp.activeEventPrompt = {
+        eventId: evDef.id,
+        title: evDef.title,
+        description: evDef.description,
+        options: evDef.options,
+        autoResolveTimer: 4.5,
+      };
+      this.appendExpeditionFloorLog(
+        exp,
+        `❓ 미지의 이벤트 발견: [${evDef.title}] (선택지를 고르거나 잠시 후 리더가 결정합니다)`,
+        'march'
+      );
+    } else {
+      const mNames = (exp.monsters ?? [])
+        .map((m) => `${m.name}(${m.behaviorLabel})`)
+        .join(', ');
+      this.appendExpeditionFloorLog(
+        exp,
+        `⚔️ ${exp.currentFloor}층 교전 시작! — ${mNames}`,
+        'combat'
+      );
     }
   }
 
@@ -2393,92 +3469,187 @@ export class DungeonInnGame {
     const aliveMonsters = (exp.monsters ?? []).filter((m) => m.currentHp > 0);
     if (aliveMonsters.length === 0) return;
 
-    const attackerId =
-      exp.heroIds[Math.floor(this.random() * exp.heroIds.length)];
+    const attackerIdx = Math.floor(this.random() * exp.heroIds.length);
+    const attackerId = exp.heroIds[attackerIdx];
     const attacker = this.heroes[attackerId];
     const targetMonster = aliveMonsters[0];
 
     if (attacker && exp.partyCombatState?.[attackerId]) {
       const roster = HERO_ROSTER_MAP[attackerId];
       const cls = HERO_CLASSES[roster.classId];
+      const skillDef = CLASS_COMBAT_SKILLS[roster.classId];
       const bd = getHeroStatBreakdown(attacker);
-      exp.partyCombatState[attackerId].lungeTimer = 0.25;
+      const cState = exp.partyCombatState[attackerId];
 
-      const isCrit = this.random() < 0.22;
+      cState.lungeTimer = 0.28;
+      cState.skillIcon = skillDef.icon;
+      cState.skillTimer = 0.85;
+
+      // 가끔 전투 성격 말풍선 출력
+      if (this.random() < 0.28 && (cState.combatSpeechTimer ?? 0) <= 0) {
+        cState.combatSpeech = generateCombatPersonalitySpeech(
+          roster.personalities,
+          exp.currentRoomType ?? 'combat',
+          () => this.random()
+        );
+        cState.combatSpeechTimer = 1.8;
+      }
+
+      const heroX = 178 - attackerIdx * 40 + (cState.stanceOffset ?? 0);
+      const heroY = 132 + (attackerIdx % 2) * 9;
+      const monsterX = 294;
+      const monsterY = 132;
+
+      // 직업 기술 시각 이펙트 생성
+      exp.skillEffects?.push({
+        id: this.nextSkillEffectId++,
+        kind: skillDef.visualKind,
+        label: skillDef.shortLabel,
+        color: skillDef.color,
+        startX: heroX,
+        startY: heroY,
+        targetX: skillDef.isHeal ? 178 : monsterX,
+        targetY: skillDef.isHeal ? 136 : monsterY,
+        life: 0.55,
+        maxLife: 0.55,
+      });
+
+      const isRogueOrHot =
+        cls.id === 'rogue' ||
+        cls.id === 'berserker' ||
+        roster.personalities.includes('hotblooded');
+      const isCrit = this.random() < (isRogueOrHot ? 0.38 : 0.2);
       const rawDmg = Math.max(
         12,
         Math.round(
           (bd.totalStats.atk + bd.totalStats.int * 0.85) *
-            (isCrit ? 1.45 : 1.0)
+            (isCrit ? 1.5 : 1.0)
         )
       );
 
-      // 층 진행도에 맞춰 몬스터 체력이 자연스럽게 깎이도록 보정
       const isFailFloor =
         !exp.willSucceed &&
         exp.currentFloor === (exp.failAtFloor ?? exp.totalFloors);
       const maxPull = isFailFloor
         ? Math.floor(targetMonster.maxHp * 0.28)
-        : Math.floor(targetMonster.maxHp * 0.45);
+        : Math.floor(targetMonster.maxHp * 0.48);
       const dmg = Math.min(maxPull, rawDmg);
 
-      targetMonster.currentHp = Math.max(
-        isFailFloor ? Math.floor(targetMonster.maxHp * 0.2) : 1,
-        targetMonster.currentHp - dmg
-      );
-      targetMonster.hitFlashTimer = 0.2;
+      // 마법사/광전사 범위 기술(isAoe)은 모든 생존 몬스터를 타격!
+      const targets = skillDef.isAoe ? aliveMonsters : [targetMonster];
+      for (const m of targets) {
+        const applied = m === targetMonster ? dmg : Math.round(dmg * 0.65);
+        m.currentHp = Math.max(
+          isFailFloor ? Math.floor(m.maxHp * 0.2) : 1,
+          m.currentHp - applied
+        );
+        m.hitFlashTimer = 0.22;
+      }
 
       exp.combatFloats?.push({
-        x: 295 + this.random() * 30,
-        y: 66,
-        text: isCrit ? `⚡-${dmg}!` : `-${dmg}`,
-        color: isCrit ? '#ebd186' : '#f6efe2',
-        life: 0.75,
+        x: 288 + this.random() * 32,
+        y: 88,
+        text: isCrit
+          ? `${skillDef.icon}치명타 -${dmg}!`
+          : `${skillDef.icon}-${dmg}`,
+        color: isCrit ? '#ebd186' : skillDef.color,
+        life: 0.8,
       });
 
-      if (cls.role === 'healer') {
+      // 힐러(사제) 또는 성기사는 전열 아군 치유 발동
+      if (skillDef.isHeal) {
         const frontId = exp.heroIds[0];
         const frontState = exp.partyCombatState?.[frontId];
         if (frontState) {
-          const healAmt = Math.max(10, Math.round(bd.totalStats.int * 0.65));
+          const healAmt = Math.max(12, Math.round(bd.totalStats.int * 0.7));
           frontState.currentHp = Math.min(
             frontState.maxHp,
             frontState.currentHp + healAmt
           );
           exp.combatFloats?.push({
-            x: 165,
-            y: 66,
-            text: `+${healAmt}`,
+            x: 162,
+            y: 88,
+            text: `💚+${healAmt}`,
             color: '#7eb38a',
-            life: 0.75,
+            life: 0.8,
           });
         }
       }
     }
 
-    // 몬스터 반격 (전열 탱커 우선 피격)
+    // 몬스터 행동 패턴별 반격 연출 (돌진 / 원거리 / 맹독 / 무리 / 강타·브레스)
     const frontId = exp.heroIds[0];
-    const frontState = exp.partyCombatState?.[frontId];
-    if (frontState && targetMonster) {
-      targetMonster.lungeTimer = 0.22;
+    const backId = exp.heroIds[exp.heroIds.length - 1];
+    const targetHeroId =
+      targetMonster.behavior === 'ranged' && this.random() < 0.45
+        ? backId
+        : frontId;
+    const targetHeroState = exp.partyCombatState?.[targetHeroId];
+
+    if (targetHeroState && targetMonster) {
+      targetMonster.lungeTimer = 0.24;
+      if (targetMonster.behavior === 'ranged') {
+        exp.skillEffects?.push({
+          id: this.nextSkillEffectId++,
+          kind: 'monster_projectile',
+          label: '🏹원거리 사격',
+          color: '#e09f67',
+          startX: 290,
+          startY: 126,
+          targetX: 160,
+          targetY: 132,
+          life: 0.45,
+          maxLife: 0.45,
+        });
+      } else if (targetMonster.behavior === 'poison') {
+        exp.skillEffects?.push({
+          id: this.nextSkillEffectId++,
+          kind: 'poison_cloud',
+          label: '🧪맹독 안개',
+          color: '#6da67a',
+          startX: 280,
+          startY: 130,
+          targetX: 178,
+          targetY: 134,
+          life: 0.5,
+          maxLife: 0.5,
+        });
+      } else if (targetMonster.behavior === 'heavy' && targetMonster.isBoss) {
+        exp.skillEffects?.push({
+          id: this.nextSkillEffectId++,
+          kind: 'fire_breath',
+          label: '🔥브레스',
+          color: '#c7635b',
+          startX: 285,
+          startY: 124,
+          targetX: 175,
+          targetY: 134,
+          life: 0.55,
+          maxLife: 0.55,
+        });
+      }
+
       const isFailFloor =
         !exp.willSucceed &&
         exp.currentFloor === (exp.failAtFloor ?? exp.totalFloors);
       const mDmg = Math.max(
         4,
         Math.round(
-          targetMonster.atk * (isFailFloor && floorLocalRatio > 0.55 ? 1.5 : 0.55)
+          targetMonster.atk *
+            (isFailFloor && floorLocalRatio > 0.55 ? 1.5 : 0.52)
         )
       );
-      frontState.currentHp = Math.max(
-        isFailFloor ? Math.floor(frontState.maxHp * 0.18) : Math.floor(frontState.maxHp * 0.45),
-        frontState.currentHp - mDmg
+      targetHeroState.currentHp = Math.max(
+        isFailFloor
+          ? Math.floor(targetHeroState.maxHp * 0.18)
+          : Math.floor(targetHeroState.maxHp * 0.45),
+        targetHeroState.currentHp - mDmg
       );
-      frontState.hitFlashTimer = 0.2;
+      targetHeroState.hitFlashTimer = 0.2;
 
       exp.combatFloats?.push({
         x: 168,
-        y: 74,
+        y: 96,
         text: `-${mDmg}`,
         color: '#d47a72',
         life: 0.7,
@@ -2507,14 +3678,13 @@ export class DungeonInnGame {
       h.expeditionId = null;
       h.partyId = null;
       h.totalRuns += 1;
-      // 귀환 시 던전 입구 아치(28, 14)에 다시 등장!
       h.tileX = 28;
       h.tileY = 14;
       h.x = gatePx.x;
       h.y = gatePx.y;
       h.facing = 'left';
       h.path = [];
-      h.hunger = Math.min(100, (h.hunger ?? 30) + 24);
+      h.hunger = Math.min(100, (h.hunger ?? 30) + 26);
       h.fatigue = Math.min(100, (h.fatigue ?? 15) + 30);
 
       for (const b of h.buffs) {
@@ -2524,18 +3694,28 @@ export class DungeonInnGame {
       h.buffs = h.buffs.filter((b) => b.remainingRuns > 0);
     }
 
-    const lootDropped: Record<string, number> = {};
+    const lootDropped: Record<string, number> = {
+      ...(exp.accumulatedLoot ?? {}),
+    };
     const injuredHeroNames: string[] = [];
 
     if (isSuccess) {
       this.dungeonClears[dungeon.id] = (this.dungeonClears[dungeon.id] ?? 0) + 1;
+      if (this.currentDayLedger) {
+        this.currentDayLedger.dungeonWins += 1;
+      }
       const xpGain = Math.max(
         5,
         Math.round(dungeon.rewardXp * preview.xpMult)
       );
-      const goldPerHero = Math.max(
-        4,
-        Math.round(dungeon.rewardHeroGold * preview.goldMult)
+      const bonusG = Math.round((exp.bonusGoldEarned ?? 0) / partyHeroes.length);
+      const goldPerHero =
+        Math.max(4, Math.round(dungeon.rewardHeroGold * preview.goldMult)) +
+        bonusG;
+
+      // 탐욕(greedy) 성격 영웅이 있으면 전리품을 먼저 챙김
+      const greedyHero = partyHeroes.find((h) =>
+        HERO_ROSTER_MAP[h.id]?.personalities.includes('greedy')
       );
 
       for (const drop of dungeon.drops) {
@@ -2549,7 +3729,9 @@ export class DungeonInnGame {
           this.totalLootFound += count;
 
           const recipient =
-            partyHeroes[Math.floor(this.random() * partyHeroes.length)];
+            greedyHero && this.random() < 0.65
+              ? greedyHero
+              : partyHeroes[Math.floor(this.random() * partyHeroes.length)];
           this.addLootToHeroBag(recipient, drop.materialId, count);
         }
       }
@@ -2611,7 +3793,12 @@ export class DungeonInnGame {
       );
 
       this.checkHeroUnlocks();
+      this.checkOptionalQuests();
+      this.checkInnRankProgression();
     } else {
+      if (this.currentDayLedger) {
+        this.currentDayLedger.dungeonFails += 1;
+      }
       const xpGain = Math.max(3, Math.round(dungeon.rewardXp * 0.35));
       const goldPerHero = Math.max(
         2,
@@ -2620,7 +3807,7 @@ export class DungeonInnGame {
 
       if (dungeon.drops.length > 0 && this.random() < 0.45) {
         const firstMat = dungeon.drops[0].materialId;
-        lootDropped[firstMat] = 1;
+        lootDropped[firstMat] = (lootDropped[firstMat] ?? 0) + 1;
         this.addLootToHeroBag(partyHeroes[0], firstMat, 1);
       }
 
@@ -2637,7 +3824,14 @@ export class DungeonInnGame {
           h.status = 'injured';
           h.currentHp = Math.max(1, Math.floor(h.currentHp * 0.25));
           h.restTimerSec = this.getHeroRestDuration(h, 'injured');
-          injuredHeroNames.push(HERO_ROSTER_MAP[h.id].name);
+          const hName = HERO_ROSTER_MAP[h.id].name;
+          injuredHeroNames.push(hName);
+          if (
+            this.currentDayLedger &&
+            !this.currentDayLedger.injuredHeroes.includes(hName)
+          ) {
+            this.currentDayLedger.injuredHeroes.push(hName);
+          }
         } else {
           h.status = 'fatigued';
           h.currentHp = Math.max(1, Math.floor(h.currentHp * 0.5));
@@ -2860,12 +4054,17 @@ export class DungeonInnGame {
 
     const totalCost = buyCount * unitPrice;
     this.gold -= totalCost;
+    this.recordExpense('lootPurchase', totalCost);
     hero.gold += totalCost;
     this.materials[materialId] = (this.materials[materialId] ?? 0) + buyCount;
     stack.count -= buyCount;
 
+    const baseVal = mat.buyPrice * buyCount;
+    const fee = Math.max(1, Math.round(baseVal * 0.15)) + Math.max(0, baseVal - totalCost);
+    this.recordIncome('lootMargin', fee);
+
     hero.lootBag = hero.lootBag.filter((s) => s.count > 0);
-    this.setHeroInteractionEffect(hero, '💎', `+${totalCost}G`, '#ebd186');
+    this.setHeroInteractionEffect(hero, '💎', `매입 ${totalCost}G`, '#ebd186');
     this.triggerHeroSpeech(hero, 'loot_sold');
     this.onUiUpdate();
     return buyCount;
@@ -2877,6 +4076,7 @@ export class DungeonInnGame {
   } {
     let boughtCount = 0;
     let spentGold = 0;
+    let totalMargin = 0;
 
     for (const h of this.getUnlockedHeroes()) {
       for (const stack of [...h.lootBag]) {
@@ -2889,18 +4089,27 @@ export class DungeonInnGame {
         if (canBuy > 0) {
           const cost = canBuy * unitPrice;
           this.gold -= cost;
+          this.recordExpense('lootPurchase', cost);
           h.gold += cost;
           this.materials[mat.id] = (this.materials[mat.id] ?? 0) + canBuy;
           stack.count -= canBuy;
           boughtCount += canBuy;
           spentGold += cost;
-          this.setHeroInteractionEffect(h, '💎', `+${cost}G`, '#ebd186');
+
+          const baseVal = mat.buyPrice * canBuy;
+          totalMargin +=
+            Math.max(1, Math.round(baseVal * 0.15)) +
+            Math.max(0, baseVal - cost);
+          this.setHeroInteractionEffect(h, '💎', `매입 ${cost}G`, '#ebd186');
         }
       }
       h.lootBag = h.lootBag.filter((s) => s.count > 0);
     }
 
     if (boughtCount > 0) {
+      if (totalMargin > 0) {
+        this.recordIncome('lootMargin', totalMargin);
+      }
       this.sound.playCoin();
       this.onUiUpdate();
     }
@@ -2927,7 +4136,7 @@ export class DungeonInnGame {
       INN_MEAL_OPTIONS[0];
     const lv = Math.max(1, this.upgrades[opt.upgradeId] ?? 1);
     const levelMult = 1 + (lv - 1) * 0.08;
-    const price = Math.round(opt.basePrice * (1 + (lv - 1) * 0.05));
+    const price = Math.round(opt.basePrice * (1 + (lv - 1) * 0.06));
 
     const scaledStats: HeroBuff['statBonusPct'] = {};
     for (const [k, v] of Object.entries(opt.statBonusPct)) {
@@ -2965,10 +4174,11 @@ export class DungeonInnGame {
     const { option, price, buff } = this.getMealEffectiveBuff(
       chosenOpt.upgradeId
     );
-    const treatCost = Math.max(4, Math.floor(price * 0.7));
+    const treatCost = Math.max(4, Math.floor(price * 0.6));
     if (this.gold < treatCost) return false;
 
     this.gold -= treatCost;
+    this.recordExpense('craftCost', treatCost);
     hero.hunger = 0;
     this.applyBuffAndHealToHero(hero, buff, option.hpRestorePct, false, true);
     this.setHeroInteractionEffect(hero, option.icon, '대접!', '#7eb38a');
@@ -2987,9 +4197,10 @@ export class DungeonInnGame {
     const hero = this.heroes[heroId];
     if (!hero || !hero.unlocked || hero.status === 'exploring') return false;
 
-    const roomCost = 10;
+    const roomCost = 8;
     if (this.gold < roomCost) return false;
     this.gold -= roomCost;
+    this.recordExpense('craftCost', roomCost);
 
     const bd = getHeroStatBreakdown(hero);
     hero.currentHp = bd.totalStats.hp;
@@ -3041,8 +4252,11 @@ export class DungeonInnGame {
     if (paidByHero) {
       if (hero.gold < effPrice) return false;
       hero.gold -= effPrice;
-      this.addGold(effPrice);
+      this.recordIncome('potionSales', effPrice);
       this.totalHeroShopTransactions += 1;
+      if (this.currentDayLedger) {
+        this.currentDayLedger.heroTransactions += 1;
+      }
     }
 
     this.potionStock[potionId] -= 1;
@@ -3087,6 +4301,7 @@ export class DungeonInnGame {
       );
     }
 
+    this.checkOptionalQuests();
     this.onUiUpdate();
     return true;
   }
@@ -3124,7 +4339,6 @@ export class DungeonInnGame {
 
   private updateHeroesRestAndLootAge(dt: number): void {
     for (const h of this.getUnlockedHeroes()) {
-      // 1. 휴식 타이머 진행
       if (h.status === 'injured' || h.status === 'fatigued') {
         if (h.status === 'injured') {
           for (const pId of [
@@ -3159,12 +4373,17 @@ export class DungeonInnGame {
 
             const roomFee = Math.min(
               h.gold,
-              Math.round(6 * this.getRoomRecoveryBonus())
+              Math.round(
+                8 * this.getRoomRecoveryBonus() * this.getGlobalGoldMultiplier()
+              )
             );
             if (roomFee > 0) {
               h.gold -= roomFee;
-              this.addGold(roomFee);
+              this.recordIncome('roomAndRest', roomFee);
               this.totalHeroShopTransactions += 1;
+              if (this.currentDayLedger) {
+                this.currentDayLedger.heroTransactions += 1;
+              }
             }
             if (this.getRoomRecoveryBonus() >= 1.2) {
               const rBonus = Math.min(
@@ -3187,7 +4406,6 @@ export class DungeonInnGame {
         }
       }
 
-      // 2. 전리품 대기 시간 증가 및 행상인 자동 매각 안전장치 (교착 방지)
       if (h.lootBag.length > 0) {
         const remainingStacks = [];
         for (const stack of h.lootBag) {
@@ -3196,9 +4414,9 @@ export class DungeonInnGame {
             const mat = MATERIAL_MAP[stack.materialId];
             if (mat && stack.count > 0) {
               const heroGain = stack.count * mat.peddlerPrice;
-              const innCommission = Math.max(1, Math.floor(heroGain * 0.25));
+              const innCommission = Math.max(1, Math.floor(heroGain * 0.35));
               h.gold += heroGain;
-              this.addGold(innCommission);
+              this.recordIncome('lootMargin', innCommission);
               this.materials[mat.id] = (this.materials[mat.id] ?? 0) + 1;
               this.totalPeddlerSales += stack.count;
             }
@@ -3219,16 +4437,19 @@ export class DungeonInnGame {
     }
 
     const hasFoodBuff = hero.buffs.some((b) => b.source === 'food');
-    if (this.shopConfig.mealSaleEnabled && !hasFoodBuff && hero.gold >= 8) {
+    if (this.shopConfig.mealSaleEnabled && !hasFoodBuff && hero.gold >= 6) {
       const meals = this.getUnlockedMeals();
       for (let i = meals.length - 1; i >= 0; i--) {
         const { option, buff } = this.getMealEffectiveBuff(meals[i].upgradeId);
         const effPrice = this.getEffectiveMealPrice(meals[i].upgradeId);
         if (hero.gold >= effPrice) {
           hero.gold -= effPrice;
-          this.addGold(effPrice);
+          this.recordIncome('foodAndDrink', effPrice);
           hero.hunger = 0;
           this.totalHeroShopTransactions += 1;
+          if (this.currentDayLedger) {
+            this.currentDayLedger.heroTransactions += 1;
+          }
           this.applyBuffAndHealToHero(
             hero,
             buff,
@@ -3304,7 +4525,7 @@ export class DungeonInnGame {
         const def = EQUIPMENT_DEF_MAP[chosen.defId];
         const effPrice = this.getEffectiveEquipSellPrice(def.id);
         hero.gold -= effPrice;
-        this.addGold(effPrice);
+        this.recordIncome('blacksmithSales', effPrice);
 
         const oldDef = EQUIPMENT_DEF_MAP[currentInst.defId];
         if (oldDef && !oldDef.isBase) {
@@ -3375,6 +4596,7 @@ export class DungeonInnGame {
     const { gold, materials } = this.getShopToolUpgradeCost(def);
 
     this.gold -= gold;
+    this.recordExpense('facilityInvest', gold);
     this.consumeMaterials(materials);
 
     if (def.shop === 'potion') {
@@ -3386,7 +4608,7 @@ export class DungeonInnGame {
     this.sound.playUpgrade();
     this.addReputation(2);
     this.addLog(
-      `${def.icon} [${def.name}] Lv.${lv + 1} 건설/강화 완료!`,
+      `${def.icon} [${def.name}] Lv.${lv + 1} 건설/강화 완료! (-${formatGold(gold)}G)`,
       'unlock'
     );
     this.onUiUpdate();
@@ -3414,11 +4636,13 @@ export class DungeonInnGame {
     const list = shop === 'potion' ? POTION_TOOLS : BLACKSMITH_TOOLS;
     let successAdd = 0;
     let speedMult = 1.0;
+    const effMult = this.getStaffEfficiencyMultiplier();
     for (const t of list) {
       const lv = this.getShopToolLevel(shop, t.id);
       if (lv > 0) {
-        successAdd += lv * t.successBonusPerLevel;
-        speedMult += lv * t.speedBonusPerLevel;
+        const mult = t.kind === 'staff' ? effMult : 1.0;
+        successAdd += lv * t.successBonusPerLevel * mult;
+        speedMult += lv * t.speedBonusPerLevel * mult;
       }
     }
     return { successAdd, speedMult };
@@ -3464,6 +4688,7 @@ export class DungeonInnGame {
     if (!r || !this.canCraftPotion(potionId)) return false;
 
     this.gold -= r.goldCost;
+    this.recordExpense('craftCost', r.goldCost);
     this.consumeMaterials(r.materials);
     const { successRate, durationSec } = this.getPotionCraftPreview(potionId);
 
@@ -3531,6 +4756,7 @@ export class DungeonInnGame {
     if (!def || !this.canCraftEquipment(equipDefId)) return false;
 
     this.gold -= def.craftGoldCost;
+    this.recordExpense('craftCost', def.craftGoldCost);
     this.consumeMaterials(def.craftMaterials);
     const { successRate, durationSec } =
       this.getEquipmentCraftPreview(equipDefId);
@@ -3589,6 +4815,8 @@ export class DungeonInnGame {
         `⚗️ 포션 제작 성공! 〈${recipe.name}〉 1병이 가게 재고에 추가되었습니다.`,
         'loot'
       );
+      this.checkOptionalQuests();
+      this.checkInnRankProgression();
     } else {
       if (recipe.fallbackPotionId && POTION_RECIPE_MAP[recipe.fallbackPotionId]) {
         const fb = POTION_RECIPE_MAP[recipe.fallbackPotionId];
@@ -3600,6 +4828,8 @@ export class DungeonInnGame {
           `💨 〈${recipe.name}〉 연금 실패... 대신 하위 등급 〈${fb.name}〉 1병을 건졌습니다.`,
           'normal'
         );
+        this.checkOptionalQuests();
+        this.checkInnRankProgression();
       } else {
         this.addLog(
           `💨 〈${recipe.name}〉 조제에 실패하여 재료 일부가 증발했습니다.`,
@@ -3630,6 +4860,8 @@ export class DungeonInnGame {
         `⚒️ 장비 단조 성공! 〈${def.name}〉이(가) 대장간 진열대에 추가되었습니다.`,
         'loot'
       );
+      this.checkOptionalQuests();
+      this.checkInnRankProgression();
     } else {
       if (def.fallbackEquipId && EQUIPMENT_DEF_MAP[def.fallbackEquipId]) {
         const fb = EQUIPMENT_DEF_MAP[def.fallbackEquipId];
@@ -3648,6 +4880,8 @@ export class DungeonInnGame {
           `火花 〈${def.name}〉 단조 실패... 대신 하위 등급 〈${fb.name}〉이(가) 완성되었습니다.`,
           'normal'
         );
+        this.checkOptionalQuests();
+        this.checkInnRankProgression();
       } else {
         this.materials['mat_iron_scrap'] =
           (this.materials['mat_iron_scrap'] ?? 0) + 1;
@@ -3681,13 +4915,33 @@ export class DungeonInnGame {
     const bd = getHeroStatBreakdown(hero);
     hero.currentHp = Math.min(bd.totalStats.hp, hero.currentHp);
 
-    this.setHeroInteractionEffect(hero, def.icon, '장착!', '#e6c274');
+    // 대장간에서 단조한 장비를 영웅에게 지급·장착할 때 영웅이 보유 골드 내에서 대장간에 장비 대금을 지불
+    const sellPrice = this.getEffectiveEquipSellPrice(def.id);
+    const paidByHero = Math.min(
+      hero.gold,
+      Math.max(Math.round(def.craftGoldCost * 1.15), Math.round(sellPrice * 0.75))
+    );
+    if (paidByHero > 0) {
+      hero.gold -= paidByHero;
+      this.recordIncome('blacksmithSales', paidByHero);
+      this.totalHeroShopTransactions += 1;
+      if (this.currentDayLedger) {
+        this.currentDayLedger.heroTransactions += 1;
+      }
+    }
+
+    this.setHeroInteractionEffect(
+      hero,
+      def.icon,
+      paidByHero > 0 ? `+${paidByHero}G` : '장착!',
+      '#e6c274'
+    );
     this.triggerHeroSpeech(hero, 'equip_bought');
 
     this.addLog(
       `🛡️ [${roster.name}]에게 〈${def.name}${
         inst.enhanceLevel > 0 ? ` +${inst.enhanceLevel}` : ''
-      }〉을(를) 장착시켰습니다!`,
+      }〉을(를) 장착했습니다!${paidByHero > 0 ? ` (+${formatGold(paidByHero)}G 대장간 수입)` : ''}`,
       'normal'
     );
     this.onUiUpdate();
@@ -3803,13 +5057,14 @@ export class DungeonInnGame {
         return null;
       }
       hero.gold -= gold;
-      this.addGold(gold);
+      this.recordIncome('blacksmithSales', gold);
       this.consumeMaterials(materials);
     } else {
       if (this.gold < gold || !this.hasMaterials(materials)) {
         return null;
       }
       this.gold -= gold;
+      this.recordExpense('craftCost', gold);
       this.consumeMaterials(materials);
     }
 
@@ -3840,6 +5095,8 @@ export class DungeonInnGame {
         ).toFixed(1)}%)`,
         'unlock'
       );
+      this.checkOptionalQuests();
+      this.checkInnRankProgression();
       this.onUiUpdate();
       return {
         success: true,
@@ -3892,17 +5149,17 @@ export class DungeonInnGame {
   }
 
   // ==========================================================================
-  // 메인 프레임 업데이트 루프
+  // 메인 프레임 업데이트 루프 (초당 자동 골드 없음! 하루 주기 240초 & 행동 수입만)
   // ==========================================================================
 
   public update(dt: number): void {
     const clampedDt = Math.min(2.0, Math.max(0, dt));
     this.elapsedTime += clampedDt;
 
-    // 1. 초당 자동 골드 수입 (GPS)
-    const gps = this.getGoldPerSecond();
-    if (gps > 0) {
-      this.addGold(gps * clampedDt);
+    // 1. 하루 시각 진행 (240초 = 1일)
+    this.dayTimeSec += clampedDt;
+    if (this.dayTimeSec >= DAY_DURATION_SEC) {
+      this.settleEndOfDay();
     }
 
     // 2. 활성 랜덤 이벤트 타이머
@@ -3919,7 +5176,7 @@ export class DungeonInnGame {
     } else {
       this.autoEventTimer -= clampedDt;
       if (this.autoEventTimer <= 0) {
-        this.autoEventTimer = 48 + this.random() * 20;
+        this.autoEventTimer = 54 + this.random() * 20;
         this.triggerRandomEvent();
       }
     }
@@ -3944,7 +5201,7 @@ export class DungeonInnGame {
       this.spawnTimer = this.getNextSpawnDelay();
     }
 
-    // 4. 직원 자동 서빙 타이머
+    // 4. 직원(또는 여관 주인) 자동 서빙 타이머 — 서빙 행위당 수입만 발생
     const waitingGuests = this.guests.filter((g) => g.state === 'waiting');
     if (waitingGuests.length > 0) {
       this.autoServeTimer += clampedDt;
@@ -3987,7 +5244,7 @@ export class DungeonInnGame {
       }
     }
 
-    // 10. 2초마다 보조 체크 (자동 매입/소비/자동 파견 백업)
+    // 10. 2초마다 보조 체크 (자동 매입/소비/자동 파견/등급 승급 백업)
     this.heroAiTimer += clampedDt;
     if (this.heroAiTimer >= 2.0) {
       this.heroAiTimer = 0;
@@ -4002,6 +5259,8 @@ export class DungeonInnGame {
       if (this.autoDispatch && this.expeditions.length === 0) {
         this.tryAutoDispatch();
       }
+      this.checkOptionalQuests();
+      this.checkInnRankProgression();
     }
 
     // 11. 파티클 & 플로팅 텍스트 업데이트
@@ -4053,11 +5312,11 @@ export class DungeonInnGame {
         rateBonus += lv * u.spawnRateBonus;
       }
     }
-    let delay = 3.2 / (1 + rateBonus * 0.45);
+    let delay = 6.5 / (1 + rateBonus * 0.32);
     if (this.activeEvent) {
       delay /= this.activeEvent.def.spawnMult;
     }
-    return Math.max(0.75, delay + (this.random() * 0.6 - 0.3));
+    return Math.max(2.4, delay + (this.random() * 0.8 - 0.4));
   }
 
   private updateMaidMovement(dt: number, targetGuest?: GuestEntity): void {
@@ -4071,7 +5330,7 @@ export class DungeonInnGame {
     const dist = Math.hypot(dx, dy);
 
     if (dist > 2) {
-      const speed = 58;
+      const speed = 58 * this.getStaffEfficiencyMultiplier();
       this.maidPos.x += (dx / dist) * speed * dt;
       this.maidPos.y += (dy / dist) * speed * dt;
       this.maidPos.facing = dx >= 0 ? 'right' : 'left';
@@ -4080,6 +5339,7 @@ export class DungeonInnGame {
 
   private updateGuests(dt: number): void {
     const walkSpeed = 76;
+    const step = walkSpeed * dt;
     const remaining: GuestEntity[] = [];
 
     for (const g of this.guests) {
@@ -4092,7 +5352,7 @@ export class DungeonInnGame {
         const dx = g.targetX - g.x;
         const dy = g.targetY - g.y;
         const dist = Math.hypot(dx, dy);
-        if (dist <= 2) {
+        if (dist <= step + 2) {
           g.x = g.targetX;
           g.y = g.targetY;
           const seat = SEAT_SLOTS.find((s) => s.id === g.seatId);
@@ -4100,8 +5360,8 @@ export class DungeonInnGame {
           g.state = 'waiting';
           g.stateTimer = 0;
         } else {
-          g.x += (dx / dist) * walkSpeed * dt;
-          g.y += (dy / dist) * walkSpeed * dt;
+          g.x += (dx / dist) * step;
+          g.y += (dy / dist) * step;
           g.facing = dx >= 0 ? 'right' : 'left';
         }
         remaining.push(g);
@@ -4121,9 +5381,9 @@ export class DungeonInnGame {
         const dx = g.targetX - g.x;
         const dy = g.targetY - g.y;
         const dist = Math.hypot(dx, dy);
-        if (dist > 3) {
-          g.x += (dx / dist) * walkSpeed * dt;
-          g.y += (dy / dist) * walkSpeed * dt;
+        if (dist > step + 3) {
+          g.x += (dx / dist) * step;
+          g.y += (dy / dist) * step;
           g.facing = 'left';
           remaining.push(g);
         }
@@ -4244,9 +5504,22 @@ export class DungeonInnGame {
     const earnedGold = this.getGuestServeGold(def, isManualClick);
     const earnedRep = this.getServeReputationGain(def);
 
-    this.addGold(earnedGold);
+    // 주문 종류에 따라 일일 장부 항목별 수입 기록
+    const incomeCat: IncomeCategory =
+      guest.orderType === 'sleep'
+        ? 'roomAndRest'
+        : guest.orderType === 'repair'
+        ? 'blacksmithSales'
+        : guest.orderType === 'potion'
+        ? 'potionSales'
+        : 'guestServing';
+
+    this.recordIncome(incomeCat, earnedGold);
     this.addReputation(earnedRep);
     this.totalServed += 1;
+    if (this.currentDayLedger) {
+      this.currentDayLedger.servedCount += 1;
+    }
 
     guest.state = 'enjoying';
     guest.stateTimer = 0;
@@ -4269,19 +5542,19 @@ export class DungeonInnGame {
     );
 
     const lootChance = Math.min(
-      0.75,
+      0.7,
       def.lootChance + this.getExtraLootChance()
     );
     if (this.random() < lootChance) {
       const hotSpringLv = this.upgrades['fac_hotspring'] ?? 0;
       const lootGold = Math.max(
-        5,
+        4,
         Math.floor(
           earnedGold *
-            (0.65 + (def.lootGoldMultiplier - 1) * 0.35 + hotSpringLv * 0.1)
+            (0.5 + (def.lootGoldMultiplier - 1) * 0.25 + hotSpringLv * 0.08)
         )
       );
-      this.addGold(lootGold);
+      this.recordIncome('guestServing', lootGold);
       this.totalLootFound += 1;
       this.sound.playLoot();
 
@@ -4313,14 +5586,15 @@ export class DungeonInnGame {
       this.innkeeperWaveTimer = 0.4;
     }
 
+    this.checkOptionalQuests();
     this.onUiUpdate();
   }
 
   /**
    * 여관 캔버스 클릭/탭:
-   * 1) 맵 위의 영웅을 탭하면 해당 영웅을 선택하여 상태/지시 패널을 엶
-   * 2) 대기 중인 방문 손님을 탭하면 즉시 서빙
-   * 3) 특정 구역(포션가게/대장간/거래소/게시판 등)을 탭하면 해당 탭 전환 콜백 호출 및 팁 획득
+   * 1) 맵 위의 영웅을 탭하면 해당 영웅을 선택하여 상태/지시 서랍을 엶
+   * 2) 대기 중인 방문 손님을 탭하면 즉시 서빙 (서빙 행위당 수입)
+   * 3) 특정 구역을 탭하면 해당 관리 서랍을 엶
    */
   public handleCanvasTap(canvasX: number, canvasY: number): void {
     // 1. 여관 내 영웅 클릭 감지
@@ -4366,6 +5640,7 @@ export class DungeonInnGame {
     const tappedZone = detectZoneAtPixel(canvasX, canvasY);
     if (tappedZone && this.onZoneTapped) {
       this.onZoneTapped(tappedZone);
+      return;
     }
 
     const anyWaiting = this.guests.find((g) => g.state === 'waiting');
@@ -4374,17 +5649,14 @@ export class DungeonInnGame {
       return;
     }
 
-    const tipGold = Math.max(2, Math.floor(this.getClickServeBonus() * 0.35));
-    this.addGold(tipGold);
-    this.sound.playCoin();
+    // 대기 손님이 없을 때는 허공 클릭 골드 대신 손님 입장을 재촉하고 선택된 영웅 서랍을 닫음
+    this.selectedHeroId = null;
     this.innkeeperWaveTimer = 0.35;
-    this.spawnTimer = Math.max(0.1, this.spawnTimer - 0.45);
-
-    this.spawnCoins(canvasX, canvasY, 4);
+    this.spawnTimer = Math.max(0.1, this.spawnTimer - 0.8);
     this.spawnFloatingText(
-      Math.max(8, Math.min(MAP_WIDTH - 48, canvasX - 12)),
+      Math.max(8, Math.min(MAP_WIDTH - 64, canvasX - 18)),
       Math.max(14, canvasY - 6),
-      `+${formatGold(tipGold)}G`,
+      `🔔 손님 맞이 준비!`,
       '#ebd186'
     );
     this.onUiUpdate();
@@ -4399,20 +5671,19 @@ export class DungeonInnGame {
       return;
     }
 
-    const tipGold = Math.max(3, Math.floor(this.getClickServeBonus() * 0.45));
-    this.addGold(tipGold);
-    this.sound.playCoin();
+    // 대기 손님이 없을 때는 손님을 즉시 불러와 서빙 행위로 골드를 벌 수 있게 함
     this.innkeeperWaveTimer = 0.4;
     if (this.guests.length < this.getMaxGuests()) {
       this.spawnGuest();
+      const justSpawned = this.guests[this.guests.length - 1];
+      if (justSpawned && justSpawned.state === 'entering') {
+        justSpawned.x = justSpawned.targetX;
+        justSpawned.y = justSpawned.targetY;
+        justSpawned.state = 'waiting';
+        this.serveGuest(justSpawned, true);
+        return;
+      }
     }
-    this.spawnCoins(210, 56, 5);
-    this.spawnFloatingText(
-      194,
-      42,
-      `+${formatGold(tipGold)}G 호객!`,
-      '#ebd186'
-    );
     this.onUiUpdate();
   }
 
@@ -4427,28 +5698,10 @@ export class DungeonInnGame {
       def,
       remainingSec: def.durationSec,
     };
-    this.eventCooldownSec = 30;
+    this.eventCooldownSec = 35;
     this.sound.playEvent();
 
     let extraMsg = '';
-    if (def.instantGoldFactor) {
-      const bonusGold = Math.max(
-        15,
-        Math.floor(
-          (this.getClickServeBonus() + this.getGoldPerSecond() * 2) *
-            def.instantGoldFactor
-        )
-      );
-      this.addGold(bonusGold);
-      this.spawnCoins(CANVAS_WIDTH / 2, 70, 10);
-      this.spawnFloatingText(
-        CANVAS_WIDTH / 2 - 28,
-        62,
-        `+${formatGold(bonusGold)}G 보너스!`,
-        '#ebd186'
-      );
-      extraMsg += ` (+${formatGold(bonusGold)} 골드)`;
-    }
     if (def.instantRep) {
       this.addReputation(def.instantRep);
       extraMsg += ` (평판 +${def.instantRep})`;
@@ -4499,14 +5752,11 @@ export class DungeonInnGame {
   }
 
   public addLog(text: string, type: LogEntry['type']): void {
-    const now = new Date();
-    const hh = String(now.getHours()).padStart(2, '0');
-    const mm = String(now.getMinutes()).padStart(2, '0');
-    const ss = String(now.getSeconds()).padStart(2, '0');
+    const { clockText } = this.getDayPhaseLabel();
 
     this.logs.unshift({
       id: this.nextLogId++,
-      timeText: `${hh}:${mm}:${ss}`,
+      timeText: `${this.dayNumber}일 ${clockText}`,
       text,
       type,
     });
@@ -4516,16 +5766,17 @@ export class DungeonInnGame {
   }
 
   public getNextGoalDescription(): string {
-    const nextLv = getNextInnLevel(this.reputation);
-    if (nextLv) {
-      const remain = Math.max(0, nextLv.requiredRep - this.reputation);
-      return `다음 목표: 평판 ${formatGold(
-        nextLv.requiredRep
-      )} 달성 시 [${nextLv.title}] 승급 (${
-        nextLv.rewardText
-      }) — 남은 평판 ${formatGold(remain)}`;
+    const { nextRank, items } = this.getNextRankGoalsProgress();
+    if (nextRank && items.length > 0) {
+      const parts = items.map(
+        (it) =>
+          `${it.completed ? '✅' : '▫️'}${it.condition.label} (${formatGold(
+            it.current
+          )}/${formatGold(it.target)})`
+      );
+      return `🎯 [${nextRank.title}] 승급 목표: ${parts.join(' · ')}`;
     }
-    return '최고 등급 [Lv.10 전설의 던전 여관] 달성! 모든 모험가와 용왕의 안식처입니다.';
+    return '🏆 최고 등급 [Lv.8 전설의 왕국 최고 여관] 달성! 고대 용왕을 격파한 대륙 최고의 쉼터입니다.';
   }
 
   public getRenderState(): RenderContextState {
@@ -4533,6 +5784,8 @@ export class DungeonInnGame {
     const heroEntities: HeroCanvasEntity[] = unlocked.map((h, idx) => {
       this.ensureHeroAgentFields(h, idx);
       const roster = HERO_ROSTER_MAP[h.id];
+      const cls = HERO_CLASSES[roster.classId];
+      const primaryPers = PERSONALITIES[roster.personalities[0]];
       const bd = getHeroStatBreakdown(h);
       const hpPct = Math.max(
         0,
@@ -4542,6 +5795,9 @@ export class DungeonInnGame {
       return {
         heroId: h.id,
         name: roster.name,
+        classIcon: cls.icon,
+        role: cls.role,
+        personalityIcon: primaryPers?.icon ?? '✨',
         status: h.status,
         activity: h.activity ?? 'idle',
         x: h.x ?? 240,
@@ -4564,6 +5820,9 @@ export class DungeonInnGame {
 
     return {
       time: this.elapsedTime,
+      dayNumber: this.dayNumber,
+      dayPhase: this.getDayPhase(),
+      dayProgressRatio: this.getDayProgressRatio(),
       guests: this.guests,
       floatingTexts: this.floatingTexts,
       particles: this.particles,
@@ -4581,6 +5840,7 @@ export class DungeonInnGame {
       pendingLootCount: pendingLoot.totalCount,
       potionStockTotal,
       equipStockTotal: this.equipmentStock.length,
+      unpaidWages: this.unpaidWages,
     };
   }
 }

@@ -1,12 +1,12 @@
 import './style.css';
 import {
   GUEST_TYPES,
+  INN_LEVELS,
+  OPTIONAL_QUESTS,
   UPGRADES,
-  getCurrentInnLevel,
-  getNextInnLevel,
   getUpgradeCost,
 } from './data';
-import { formatDuration, formatGold, formatRate } from './format';
+import { formatDuration, formatGold, formatSignedGold } from './format';
 import { DungeonInnGame, OfflineReport } from './game';
 import {
   BASE_ENHANCE_RATES,
@@ -45,6 +45,7 @@ import {
   selectBestPartyForDungeon,
 } from './synergy';
 import {
+  DailyFinancialReport,
   EquipSlot,
   HeroClassId,
   HeroState,
@@ -53,6 +54,8 @@ import {
 } from './types';
 
 type ActiveTab =
+  | 'goals'
+  | 'stats'
   | 'heroes'
   | 'trade'
   | 'dungeon'
@@ -62,24 +65,28 @@ type ActiveTab =
   | 'codex';
 
 const TAB_SUMMARIES: Record<ActiveTab, string> = {
+  goals:
+    '🏆 여관 등급(Lv.1~Lv.8) 승급 공개 목표와 선택 퀘스트/업적 현황입니다. 최종 목표인 [고대 용왕의 화산 둥지]를 격파하고 왕국 최고의 여관에 등극하세요!',
+  stats:
+    '📊 오늘 실시간 장부(항목별 수입·급료·유지비·전리품 매입)와 최근 일별 수입·지출·순이익 비교 차트입니다.',
   heroes:
-    '🦸 고유 이름을 지닌 9직업 30명의 영웅 명부입니다. 영웅을 선택해 HP·허기·피로·의도를 확인하고 행동을 직접 지시하거나 +강화를 진행하세요.',
+    '🦸 고유 이름을 지닌 9직업 30명의 영웅 명부입니다. 맵이나 명단에서 영웅을 탭하면 우측 서랍에서 상태를 확인하고 행동을 직접 지시할 수 있습니다.',
   trade:
-    '💎 상점 판매가(요리·포션·장비)와 전리품 매입 시세/품목을 설정하세요. 설정에 맞춰 영웅들이 스스로 걸어가 거래합니다.',
+    '💎 상점 판매가(요리·포션·장비)와 전리품 매입 시세/품목을 설정하세요. 영웅들이 스스로 걸어가 소비할 때만 여관이 골드를 법니다.',
   dungeon:
-    '🗺️ 7개 던전의 요구 스탯과 출발 전 파티 시너지(역할 삼각 진형, 성격 궁합/충돌, 출신 세트)를 확인하고 원정대를 파견합니다.',
+    '🗺️ 7개 갈래 방 던전의 요구 스탯과 출발 전 파티 시너지(역할 삼각 진형, 성격 궁합/충돌, 출신 세트)를 확인하고 원정대를 파견합니다.',
   potion:
     '⚗️ 연금 도구와 약초 정원·작업실을 건설하고 8종의 포션을 조제합니다. 판매 등록된 포션은 영웅들이 걸어와 구매합니다.',
   blacksmith:
     '⚒️ 드워프 화로와 모루로 직업별 장비를 단조하고 +1~+15 강화를 시도합니다. (⚠️ +강화 실패 시 장비 완전 파괴 → 기본 장비 복귀)',
-  menu: '🍲 따뜻한 수프와 스튜, 에일, 만찬을 개발하여 서빙 수익과 영웅 식사 버프 강도를 높입니다.',
+  menu: '🍲 따뜻한 수프와 스튜, 에일, 만찬을 보유 골드로 개발하여 서빙 수익과 영웅 식사 버프를 높입니다.',
   room: '🛏️ 2층 침대와 객실을 확충하여 숙박 수입과 영웅 부상/피로 수면 회복 속도를 높입니다.',
   staff:
-    '🧑‍🍳 메이드·바텐더·요리사·음유시인을 고용하면 여관에 등장하여 자동 서빙과 수익을 돕습니다.',
+    '🧑‍🍳 메이드·바텐더·요리사·음유시인을 고용하면 자동 서빙과 품질을 높여 주며, 매일 일일 결산 시 급료(일당)가 지급됩니다.',
   facility:
-    '🏛️ 게시판·간이 대장간·오르골·비밀금고·온천탕을 설치하여 여관에 특별 보너스를 부여합니다.',
+    '🏛️ 게시판·간이 대장간·오르골·비밀금고·온천탕을 설치하여 여관에 특별 보너스를 부여합니다. (일일 유지비 발생)',
   codex:
-    '🛡️ 여관을 방문하는 일회성 손님 도감입니다. 평판을 높여 전설의 VIP 손님을 맞이하세요!',
+    '🛡️ 여관을 방문하는 손님 도감입니다. 손님 서빙은 초당 자동이 아니라 서빙 행위당 수입으로 정산됩니다.',
 };
 
 class InnAppController {
@@ -88,13 +95,15 @@ class InnAppController {
   private dungeonRenderer: DungeonExpeditionRenderer;
   private canvas: HTMLCanvasElement;
   private dungeonCanvas: HTMLCanvasElement;
-  private activeTab: ActiveTab = 'heroes';
+  private activeTab: ActiveTab = 'goals';
+  private isDrawerOpen = false;
+  private isDungeonOverlayHiddenByUser = false;
   private lastFrameTime = performance.now();
   private uiRefreshAccumulator = 0;
   private lastLogTopId = -1;
   private lastFloorLogTopId = -1;
+  private lastRenderedEventPromptId: string | null = null;
   private mapZoomExpanded = false;
-  private dungeonViewCollapsed = false;
 
   // 던전 탭 파티 편성 상태
   private selectedDungeonId = 'dungeon_slime';
@@ -114,14 +123,15 @@ class InnAppController {
 
   // DOM 참조
   private elLevelBadge = document.getElementById('inn-level-badge')!;
+  private elDayClock = document.getElementById('stat-day-clock')!;
   private elRepText = document.getElementById('inn-rep-text')!;
   private elHeroBadge = document.getElementById('inn-hero-badge')!;
   private elGold = document.getElementById('stat-gold')!;
-  private elGps = document.getElementById('stat-gps')!;
-  private elClick = document.getElementById('stat-click')!;
-  private elGuests = document.getElementById('stat-guests')!;
+  private elTodayProfit = document.getElementById('stat-today-profit')!;
+  private elDailyFixed = document.getElementById('stat-daily-fixed')!;
   private elGoalFill = document.getElementById('goal-progress-fill')!;
   private elNextGoal = document.getElementById('next-goal-text')!;
+  private elHudGoalChips = document.getElementById('hud-goal-chips')!;
 
   private elEventBanner = document.getElementById('active-event-banner')!;
   private elEventTitle = document.getElementById('event-banner-title')!;
@@ -129,29 +139,36 @@ class InnAppController {
   private elEventDesc = document.getElementById('event-banner-desc')!;
 
   private elHeroInspector = document.getElementById('hero-inspector-panel')!;
+  private elDungeonPanel = document.getElementById('dungeon-expedition-panel')!;
+  private elBtnShowDungeon = document.getElementById(
+    'btn-show-dungeon-overlay'
+  )!;
   private elDungeonPartyTabs = document.getElementById('dungeon-party-tabs')!;
-  private elDungeonViewBody = document.getElementById('dungeon-view-body')!;
+  private elDungeonEventBox = document.getElementById(
+    'dungeon-event-choice-box'
+  )!;
   private elDungeonFloorLogs = document.getElementById(
     'dungeon-floor-log-list'
   )!;
 
   private elServeBtnLabel = document.getElementById('serve-btn-label')!;
-  private elServeBtnSub = document.getElementById('serve-btn-sub')!;
   private elEventBtn = document.getElementById(
     'btn-random-event'
   ) as HTMLButtonElement;
   private elEventBtnLabel = document.getElementById('event-btn-label')!;
-  private elEventBtnSub = document.getElementById('event-btn-sub')!;
 
   private elLiveStrip = document.getElementById('live-status-strip')!;
   private elServedSummary = document.getElementById('stat-served-summary')!;
   private elLogList = document.getElementById('inn-log-list')!;
+
+  private elManagementDrawer = document.getElementById('management-drawer')!;
   private elCategorySummary = document.getElementById('category-summary-bar')!;
   private elUpgradeList = document.getElementById('upgrade-list')!;
 
   private elSoundBtn = document.getElementById(
     'btn-sound'
   ) as HTMLButtonElement;
+  private elDailyReportModal = document.getElementById('daily-report-modal')!;
   private elOfflineModal = document.getElementById('offline-modal')!;
   private elEnhanceModal = document.getElementById('enhance-modal')!;
   private elMigrationModal = document.getElementById('migration-modal')!;
@@ -177,7 +194,8 @@ class InnAppController {
       () => this.refreshHeaderAndLogs(),
       () => this.refreshAllUi(true),
       undefined,
-      (zoneTab) => this.switchTab(zoneTab)
+      (zoneTab) => this.openDrawerOnTab(zoneTab),
+      (settledReport) => this.showDailyReportModal(settledReport, true)
     );
 
     const offlineReport = this.game.loadFromStorage();
@@ -186,7 +204,7 @@ class InnAppController {
     this.updateSoundButtonText();
     this.refreshAllUi(true);
 
-    if (this.game.migratedFromV1) {
+    if (this.game.migratedFromLegacy) {
       this.elMigrationModal.classList.remove('hidden');
     } else if (offlineReport) {
       this.showOfflineModal(offlineReport);
@@ -232,19 +250,21 @@ class InnAppController {
         viewport?.classList.toggle('zoom-scroll-mode', this.mapZoomExpanded);
         const btn = e.currentTarget as HTMLButtonElement;
         btn.textContent = this.mapZoomExpanded
-          ? '↔️ 확대 팬 모드 (탭해 축소)'
+          ? '↔️ 확대 팬 모드 (탭해 맞춤)'
           : '🔍 전체 맞춤 보기';
       });
 
     document
-      .getElementById('btn-toggle-dungeon-size')
+      .getElementById('btn-return-to-inn')
       ?.addEventListener('click', () => {
-        this.dungeonViewCollapsed = !this.dungeonViewCollapsed;
-        this.elDungeonViewBody.classList.toggle(
-          'hidden',
-          this.dungeonViewCollapsed
-        );
+        this.isDungeonOverlayHiddenByUser = true;
+        this.updateDungeonOverlayVisibility();
       });
+
+    this.elBtnShowDungeon.addEventListener('click', () => {
+      this.isDungeonOverlayHiddenByUser = false;
+      this.updateDungeonOverlayVisibility();
+    });
 
     document.getElementById('btn-serve-now')?.addEventListener('click', () => {
       this.game.serveAllOrSolicit();
@@ -254,12 +274,40 @@ class InnAppController {
       this.game.triggerRandomEvent(true);
     });
 
+    document
+      .getElementById('btn-open-daily-report')
+      ?.addEventListener('click', () => {
+        const rep =
+          this.game.lastSettledDayReport ?? this.game.currentDayLedger;
+        this.showDailyReportModal(
+          rep,
+          Boolean(this.game.lastSettledDayReport)
+        );
+      });
+
+    document
+      .getElementById('btn-close-daily-report')
+      ?.addEventListener('click', () => {
+        this.elDailyReportModal.classList.add('hidden');
+        this.game.sound.playCoin();
+      });
+
+    document
+      .getElementById('btn-close-drawer')
+      ?.addEventListener('click', () => {
+        this.closeDrawer();
+      });
+
     const tabButtons = document.querySelectorAll<HTMLButtonElement>('.tab-btn');
     tabButtons.forEach((btn) => {
       btn.addEventListener('click', () => {
         const tab = btn.dataset.tab as ActiveTab | undefined;
         if (!tab) return;
-        this.switchTab(tab);
+        if (this.isDrawerOpen && this.activeTab === tab) {
+          this.closeDrawer();
+        } else {
+          this.openDrawerOnTab(tab);
+        }
       });
     });
 
@@ -297,14 +345,16 @@ class InnAppController {
           this.pendingEnhanceTarget = null;
           this.elEnhanceModal.classList.add('hidden');
           this.renderHeroInspectorPanel(true);
-          this.buildTabCards();
+          if (this.isDrawerOpen) {
+            this.buildTabCards();
+          }
         }
       });
 
     document
       .getElementById('btn-migrate-continue')
       ?.addEventListener('click', () => {
-        this.game.migratedFromV1 = false;
+        this.game.migratedFromLegacy = false;
         this.elMigrationModal.classList.add('hidden');
         this.refreshAllUi(true);
       });
@@ -335,6 +385,7 @@ class InnAppController {
       });
 
     [
+      this.elDailyReportModal,
       this.elOfflineModal,
       this.elEnhanceModal,
       this.elMigrationModal,
@@ -361,8 +412,11 @@ class InnAppController {
     });
   }
 
-  public switchTab(tab: ActiveTab): void {
+  public openDrawerOnTab(tab: ActiveTab): void {
     this.activeTab = tab;
+    this.isDrawerOpen = true;
+    this.elManagementDrawer.classList.remove('hidden');
+
     const tabButtons = document.querySelectorAll<HTMLButtonElement>('.tab-btn');
     tabButtons.forEach((b) => {
       const isActive = b.dataset.tab === tab;
@@ -373,9 +427,161 @@ class InnAppController {
     this.buildTabCards();
   }
 
+  public closeDrawer(): void {
+    this.isDrawerOpen = false;
+    this.elManagementDrawer.classList.add('hidden');
+    const tabButtons = document.querySelectorAll<HTMLButtonElement>('.tab-btn');
+    tabButtons.forEach((b) => {
+      b.classList.remove('active');
+      b.setAttribute('aria-selected', 'false');
+    });
+  }
+
+  private updateDungeonOverlayVisibility(): void {
+    const hasExpeditions = this.game.expeditions.length > 0;
+    if (!hasExpeditions) {
+      this.elDungeonPanel.classList.add('hidden');
+      this.elBtnShowDungeon.classList.add('hidden');
+      this.isDungeonOverlayHiddenByUser = false;
+      return;
+    }
+
+    if (this.isDungeonOverlayHiddenByUser) {
+      this.elDungeonPanel.classList.add('hidden');
+      this.elBtnShowDungeon.classList.remove('hidden');
+      const exp = this.game.expeditions[0];
+      const d = DUNGEON_MAP[exp.dungeonId];
+      this.elBtnShowDungeon.textContent = `⚔️ 원정 화면 열기 (${
+        d?.name ?? '던전'
+      } ${exp.currentFloor ?? 1}/${exp.totalFloors ?? 3}F)`;
+    } else {
+      this.elDungeonPanel.classList.remove('hidden');
+      this.elBtnShowDungeon.classList.add('hidden');
+    }
+  }
+
   private updateSoundButtonText(): void {
     const muted = this.game.sound.isMuted();
-    this.elSoundBtn.textContent = muted ? '🔇 음소거' : '🔊 효과음';
+    this.elSoundBtn.textContent = muted ? '🔇' : '🔊';
+  }
+
+  private showDailyReportModal(
+    report: DailyFinancialReport,
+    isEndOfDay: boolean
+  ): void {
+    const elTitle = document.getElementById('daily-report-modal-title');
+    const elSub = document.getElementById('daily-report-subtitle');
+    const elBody = document.getElementById('daily-report-body');
+
+    if (elTitle) {
+      elTitle.textContent = isEndOfDay
+        ? `🌙 ${report.day}일차 여관 일일 결산서 (${report.innRankTitle})`
+        : `📊 ${report.day}일차 오늘 실시간 장부 (${report.innRankTitle})`;
+    }
+    if (elSub) {
+      elSub.textContent = isEndOfDay
+        ? `${report.day}일차 영업이 마감되어 직원 일당과 시설 유지비를 정산했습니다. 확인 후 ${this.game.dayNumber}일차를 맞이하세요!`
+        : `현재 진행 중인 ${report.day}일차의 실시간 수입·지출 집계입니다. (하루가 끝나면 급료·유지비가 차감됩니다)`;
+    }
+    if (elBody) {
+      const inc = report.income;
+      const exp = report.expense;
+      const expectedWages = this.game.getDailyWagesBreakdown().totalWages;
+      const expectedUpkeep = this.game.getDailyUpkeepCost();
+
+      elBody.innerHTML = `
+        <div class="report-row">
+          <span>🍲 식사·음료 판매 수입</span>
+          <strong style="color:#7eb38a">+${formatGold(inc.foodAndDrink)} G</strong>
+        </div>
+        <div class="report-row">
+          <span>🍻 방문 손님 서빙·팁 수입 (${report.servedCount}회)</span>
+          <strong style="color:#7eb38a">+${formatGold(inc.guestServing)} G</strong>
+        </div>
+        <div class="report-row">
+          <span>🛏️ 2층 객실 숙박·휴식 수입</span>
+          <strong style="color:#7eb38a">+${formatGold(inc.roomAndRest)} G</strong>
+        </div>
+        <div class="report-row">
+          <span>⚗️ 포션 가게 판매 수입</span>
+          <strong style="color:#7eb38a">+${formatGold(inc.potionSales)} G</strong>
+        </div>
+        <div class="report-row">
+          <span>⚒️ 대장간 장비 판매·강화·수리 수입</span>
+          <strong style="color:#7eb38a">+${formatGold(inc.blacksmithSales)} G</strong>
+        </div>
+        <div class="report-row">
+          <span>💎 전리품 감정 수수료·퀘스트 보상</span>
+          <strong style="color:#7eb38a">+${formatGold(inc.lootMargin)} G</strong>
+        </div>
+        <div class="report-row highlight-row">
+          <span>📈 일일 총 영업 수입</span>
+          <strong style="color:#7eb38a">+${formatGold(inc.totalIncome)} G</strong>
+        </div>
+
+        <div class="report-row" style="margin-top:4px">
+          <span>🧑‍🍳 직원 일당 / 급료 지출</span>
+          <strong style="color:#e3958d">-${formatGold(
+            isEndOfDay ? exp.wages : expectedWages
+          )} G${!isEndOfDay ? ' (결산 예정)' : ''}</strong>
+        </div>
+        <div class="report-row">
+          <span>🕯️ 연료·식자재·시설 유지비</span>
+          <strong style="color:#e3958d">-${formatGold(
+            isEndOfDay ? exp.upkeep : expectedUpkeep
+          )} G${!isEndOfDay ? ' (결산 예정)' : ''}</strong>
+        </div>
+        <div class="report-row">
+          <span>🧪 포션 조제·장비 단조·강화 원가</span>
+          <strong style="color:#e3958d">-${formatGold(exp.craftCost)} G</strong>
+        </div>
+        <div class="report-row">
+          <span>🎒 영웅 던전 전리품 매입 지출</span>
+          <strong style="color:#e3958d">-${formatGold(exp.lootPurchase)} G</strong>
+        </div>
+        <div class="report-row">
+          <span>🏛️ 시설·메뉴·도구 확장 투자 (자본 지출)</span>
+          <strong style="color:#d4bfa8">-${formatGold(exp.facilityInvest)} G</strong>
+        </div>
+
+        <div class="report-row highlight-row">
+          <span>💰 ${report.day}일차 영업 순이익 (수입 - 운영지출)</span>
+          <strong class="gold-highlight" style="color:${
+            report.netProfit >= 0 ? '#ebd186' : '#e3958d'
+          }">${formatSignedGold(report.netProfit)} G</strong>
+        </div>
+
+        <div class="report-row">
+          <span>🗺️ 던전 원정 결과 / 상점 거래</span>
+          <strong>성공 ${report.dungeonWins}회 · 후퇴 ${
+        report.dungeonFails
+      }회 / 상점 거래 ${report.heroTransactions}건</strong>
+        </div>
+        ${
+          report.newHeroesJoined.length > 0
+            ? `<div class="report-row"><span>🦸 오늘 합류한 동료</span><strong style="color:#7eb38a">${report.newHeroesJoined.join(
+                ', '
+              )}</strong></div>`
+            : ''
+        }
+        ${
+          report.injuredHeroes.length > 0
+            ? `<div class="report-row"><span>🩸 치료받은 부상 영웅</span><strong style="color:#e3958d">${report.injuredHeroes.join(
+                ', '
+              )}</strong></div>`
+            : ''
+        }
+        ${
+          report.wageArrears > 0
+            ? `<p class="enhance-warning-box">⚠️ 체불 급료 ${formatGold(
+                report.wageArrears
+              )}G가 남아 있어 직원 효율이 70%로 낮아졌습니다. 골드를 벌면 자동 상환됩니다.</p>`
+            : ''
+        }
+      `;
+    }
+
+    this.elDailyReportModal.classList.remove('hidden');
   }
 
   private showOfflineModal(report: OfflineReport): void {
@@ -385,15 +591,17 @@ class InnAppController {
     const elCraft = document.getElementById('offline-craft-text');
     const elExtra = document.getElementById('offline-extra-text');
     const elGold = document.getElementById('offline-gold-text');
-    const elNote = document.getElementById('offline-cap-note');
 
     if (elTime) {
-      elTime.textContent = report.wasCapped
-        ? `${formatDuration(report.cappedSeconds)} (최대 8시간 적용)`
+      const durStr = report.wasCapped
+        ? `${formatDuration(report.cappedSeconds)} (최대 8시간)`
         : formatDuration(report.elapsedSeconds);
+      elTime.textContent = `${durStr} (${report.simulatedDays}일분 요약 정산)`;
     }
     if (elGps) {
-      elGps.textContent = `${formatRate(report.gpsUsed)} G/초`;
+      elGps.textContent = `수입 +${formatGold(
+        report.totalIncome
+      )}G / 지출 -${formatGold(report.totalExpense)}G`;
     }
     if (elExp) {
       elExp.textContent = `${report.expeditionsCompleted}회 완료`;
@@ -405,12 +613,7 @@ class InnAppController {
       elExtra.textContent = `상점 거래 ${report.heroShopTransactions}건 / 치료 ${report.heroesHealedCount}회 / 안전매각 ${report.peddlerSales}개`;
     }
     if (elGold) {
-      elGold.textContent = `+${formatGold(report.earnedGold)} G`;
-    }
-    if (elNote) {
-      const vaultLv = this.game.upgrades['fac_vault'] ?? 0;
-      const effPct = Math.round((0.85 + vaultLv * 0.1) * 100);
-      elNote.textContent = `* 오프라인 정산 효율 ${effPct}% 적용 (최대 8시간 상한)`;
+      elGold.textContent = `${formatSignedGold(report.earnedGold)} G`;
     }
 
     this.elOfflineModal.classList.remove('hidden');
@@ -474,9 +677,15 @@ class InnAppController {
     const prevSmithQueueCount = this.game.craftQueues.blacksmith.length;
 
     this.game.update(dt);
+
+    if (this.game.expeditions.length > prevExpCount) {
+      this.isDungeonOverlayHiddenByUser = false;
+    }
+    this.updateDungeonOverlayVisibility();
+
     const renderState = this.game.getRenderState();
     this.renderer.render(renderState);
-    if (!this.dungeonViewCollapsed) {
+    if (!this.elDungeonPanel.classList.contains('hidden')) {
       this.dungeonRenderer.render(renderState);
     }
 
@@ -503,22 +712,24 @@ class InnAppController {
   private refreshAllUi(forceRebuildCards: boolean): void {
     this.refreshHeaderAndLogs();
     this.renderHeroInspectorPanel(forceRebuildCards);
+    this.updateDungeonOverlayVisibility();
     this.renderDungeonExpeditionPartyTabsAndLogs();
-    if (forceRebuildCards) {
+    if (this.isDrawerOpen && forceRebuildCards) {
       this.buildTabCards();
-    } else {
+    } else if (this.isDrawerOpen) {
       this.updateLiveProgressBars();
     }
   }
 
   // ==========================================================================
-  // 영웅 클릭 상태 확인 & 특정 행동 직접 지시 패널 (섹션 3 필수 요구사항)
+  // 영웅을 탭했을 때만 열리는 상태 확인 & 특정 행동 직접 지시 서랍 (닫기 버튼 포함)
   // ==========================================================================
 
   private renderHeroInspectorPanel(forceRebuild = false): void {
     const heroId = this.game.selectedHeroId;
     if (!heroId || !this.game.heroes[heroId]?.unlocked) {
       this.elHeroInspector.classList.add('hidden');
+      this.elHeroInspector.dataset.renderedHeroId = '';
       return;
     }
     this.elHeroInspector.classList.remove('hidden');
@@ -540,7 +751,6 @@ class InnAppController {
     const hunger = Math.round(hero.hunger ?? 20);
     const fatigue = Math.round(hero.fatigue ?? 10);
 
-    // 소속 파티 텍스트
     let partyText = '단독 자율 행동 중';
     if (hero.expeditionId) {
       const exp = this.game.expeditions.find((e) => e.id === hero.expeditionId);
@@ -584,7 +794,6 @@ class InnAppController {
       })
       .join('');
 
-    // 가용 포션 옵션
     const potionOptionsHtml = POTION_RECIPES.map((p) => {
       const stock = this.game.potionStock[p.id] ?? 0;
       const price = this.game.getEffectivePotionSellPrice(p.id);
@@ -592,7 +801,6 @@ class InnAppController {
       return `<option value="${p.id}" ${sel}>${p.icon} ${p.name} (재고 ${stock} / ${price}G)</option>`;
     }).join('');
 
-    // 해금된 던전 옵션
     const dungeonOptionsHtml = DUNGEONS.filter((d) =>
       this.game.isDungeonUnlocked(d.id)
     )
@@ -616,11 +824,11 @@ class InnAppController {
               <span class="role-badge role-${cls.role}">${cls.icon} ${
       cls.name
     } · ${cls.roleName}</span>
+            </div>
+            <div class="trait-row">
               <span class="upgrade-level-badge" id="insp-lv-xp">Lv.${
                 hero.level
               } (XP ${hero.xp}/${reqXp})</span>
-            </div>
-            <div class="trait-row">
               ${roster.personalities
                 .map(
                   (p) =>
@@ -630,22 +838,25 @@ class InnAppController {
               <span class="trait-chip origin-chip">${origin.icon} ${
       origin.name
     }</span>
-              <span class="trait-chip" id="insp-party-pill">👥 ${partyText}</span>
             </div>
           </div>
         </div>
-        <div class="inspector-other-heroes">
-          ${this.game
-            .getUnlockedHeroes()
-            .slice(0, 8)
-            .map((h) => {
-              const r = HERO_ROSTER_MAP[h.id];
-              return `<button type="button" class="hero-quick-switch-btn${
-                h.id === hero.id ? ' active' : ''
-              }" data-switch-hero="${h.id}">${r.name}</button>`;
-            })
-            .join('')}
-        </div>
+        <button type="button" id="btn-close-hero-inspector" class="inspector-close-btn" aria-label="영웅 패널 닫기">
+          ✕ 닫기
+        </button>
+      </div>
+
+      <div class="inspector-other-heroes">
+        ${this.game
+          .getUnlockedHeroes()
+          .slice(0, 10)
+          .map((h) => {
+            const r = HERO_ROSTER_MAP[h.id];
+            return `<button type="button" class="hero-quick-switch-btn${
+              h.id === hero.id ? ' active' : ''
+            }" data-switch-hero="${h.id}">${r.name}</button>`;
+          })
+          .join('')}
       </div>
 
       <div class="inspector-vitals-grid">
@@ -659,7 +870,7 @@ class InnAppController {
         )} G</strong></div>
         <div class="vital-pill intent-pill">🧭 현재 의도: <strong id="insp-intent">${
           hero.intentText ?? '여관 대기 중'
-        }</strong></div>
+        }</strong> (${partyText})</div>
       </div>
 
       <div class="stat-pill-row">
@@ -677,7 +888,7 @@ class InnAppController {
 
       <div class="inspector-orders-box">
         <div class="orders-box-header">
-          <span>📣 <b>플레이어 행동 지시</b> (지시 완료 시 자율 AI로 자동 복귀)</span>
+          <span>📣 <b>플레이어 행동 지시</b></span>
           <button type="button" id="btn-cancel-hero-order" class="cancel-order-btn" ${
             hero.playerOrder ? '' : 'disabled'
           }>
@@ -685,27 +896,33 @@ class InnAppController {
           </button>
         </div>
         <div class="orders-btn-grid">
-          <button type="button" class="order-action-btn" data-order-kind="eat_meal">🍲 식당 가서 식사</button>
-          <button type="button" class="order-action-btn" data-order-kind="drink_ale">🍺 바에서 에일</button>
+          <button type="button" class="order-action-btn" data-order-kind="eat_meal">🍲 식당 식사</button>
+          <button type="button" class="order-action-btn" data-order-kind="drink_ale">🍺 바 에일</button>
           <button type="button" class="order-action-btn" data-order-kind="rest_room">🛏️ 2층 객실 휴식</button>
-          <button type="button" class="order-action-btn" data-order-kind="sell_loot">💎 거래대 전리품 매각</button>
-          <button type="button" class="order-action-btn" data-order-kind="buy_equip">⚒️ 대장간 장비 장착</button>
-          <button type="button" class="order-action-btn" data-order-kind="rally_board">📋 게시판 파티 결성</button>
+          <button type="button" class="order-action-btn" data-order-kind="sell_loot">💎 전리품 매각</button>
+          <button type="button" class="order-action-btn" data-order-kind="buy_equip">⚒️ 대장간 장비</button>
+          <button type="button" class="order-action-btn" data-order-kind="rally_board">📋 게시판 집결</button>
         </div>
         <div class="orders-custom-row">
           <div class="custom-order-group">
             <select id="select-order-potion" class="order-select">${potionOptionsHtml}</select>
-            <button type="button" id="btn-order-buy-potion" class="order-action-btn">⚗️ 포션 사러 가기</button>
+            <button type="button" id="btn-order-buy-potion" class="order-action-btn">⚗️ 포션 구매</button>
           </div>
           <div class="custom-order-group">
             <select id="select-order-dungeon" class="order-select">${dungeonOptionsHtml}</select>
-            <button type="button" id="btn-order-depart-dungeon" class="order-action-btn primary-order-btn">🚀 지정 던전 출발</button>
+            <button type="button" id="btn-order-depart-dungeon" class="order-action-btn primary-order-btn">🚀 던전 출발</button>
           </div>
         </div>
       </div>
     `;
 
-    // 이벤트 바인딩
+    document
+      .getElementById('btn-close-hero-inspector')
+      ?.addEventListener('click', () => {
+        this.game.selectedHeroId = null;
+        this.renderHeroInspectorPanel(true);
+      });
+
     this.elHeroInspector
       .querySelectorAll<HTMLButtonElement>('[data-switch-hero]')
       .forEach((btn) => {
@@ -829,56 +1046,89 @@ class InnAppController {
   }
 
   // ==========================================================================
-  // 카이로소프트풍 던전 실시간 층별 탐험 뷰 파티 탭 & 전투 로그 렌더링
+  // 던전 실시간 갈래 방 탐험 뷰 파티 탭 · 이벤트 선택지 · 전투 로그 렌더링
   // ==========================================================================
 
   private renderDungeonExpeditionPartyTabsAndLogs(): void {
     const exps = this.game.expeditions;
     this.elDungeonPartyTabs.innerHTML = '';
 
-    if (exps.length === 0) {
-      const badge = document.createElement('span');
-      badge.className = 'dungeon-idle-badge';
-      badge.textContent = '대기 중 (의뢰 게시판에서 파티 결성 시 자동 출정)';
-      this.elDungeonPartyTabs.appendChild(badge);
-    } else {
-      for (const exp of exps) {
-        const d = DUNGEON_MAP[exp.dungeonId];
-        const isFocused =
-          (this.game.focusedExpeditionId ?? exps[0].id) === exp.id;
-        const pct = Math.min(
-          100,
-          Math.max(
-            0,
-            ((exp.totalDurationSec - exp.remainingSec) /
-              Math.max(1, exp.totalDurationSec)) *
-              100
-          )
-        );
+    for (const exp of exps) {
+      const d = DUNGEON_MAP[exp.dungeonId];
+      const isFocused =
+        (this.game.focusedExpeditionId ?? exps[0]?.id) === exp.id;
+      const pct = Math.min(
+        100,
+        Math.max(
+          0,
+          ((exp.totalDurationSec - exp.remainingSec) /
+            Math.max(1, exp.totalDurationSec)) *
+            100
+        )
+      );
 
-        const tabBtn = document.createElement('button');
-        tabBtn.type = 'button';
-        tabBtn.className = `dungeon-party-tab-btn${isFocused ? ' active' : ''}`;
-        tabBtn.innerHTML = `
-          <span>${d?.icon ?? '🗺️'} ${d?.name ?? exp.dungeonId} [${
-          exp.currentFloor ?? 1
-        }/${exp.totalFloors ?? 3}F]</span>
-          <span class="mini-party-bar"><span style="width:${pct.toFixed(
-            0
-          )}%"></span></span>
-        `;
-        tabBtn.addEventListener('click', () => {
-          this.game.focusedExpeditionId = exp.id;
-          this.renderDungeonExpeditionPartyTabsAndLogs();
-        });
-        this.elDungeonPartyTabs.appendChild(tabBtn);
-      }
+      const tabBtn = document.createElement('button');
+      tabBtn.type = 'button';
+      tabBtn.className = `dungeon-party-tab-btn${isFocused ? ' active' : ''}`;
+      tabBtn.innerHTML = `
+        <span>${d?.icon ?? '🗺️'} ${d?.name ?? exp.dungeonId} [${
+        exp.currentFloor ?? 1
+      }/${exp.totalFloors ?? 3}F]</span>
+        <span class="mini-party-bar"><span style="width:${pct.toFixed(
+          0
+        )}%"></span></span>
+      `;
+      tabBtn.addEventListener('click', () => {
+        this.game.focusedExpeditionId = exp.id;
+        this.renderDungeonExpeditionPartyTabsAndLogs();
+      });
+      this.elDungeonPartyTabs.appendChild(tabBtn);
     }
 
     const activeExp =
       exps.find((e) => e.id === this.game.focusedExpeditionId) ??
       exps[0] ??
       null;
+
+    // 던전 이벤트 선택지 배너 렌더링
+    const prompt = activeExp?.activeEventPrompt;
+    if (activeExp && prompt && !prompt.resolvedOptionId) {
+      const promptKey = `${activeExp.id}_${prompt.eventId}`;
+      this.elDungeonEventBox.classList.remove('hidden');
+      if (this.lastRenderedEventPromptId !== promptKey) {
+        this.lastRenderedEventPromptId = promptKey;
+        this.elDungeonEventBox.innerHTML = `
+          <div class="event-choice-title">${prompt.title} <small>(${Math.ceil(
+          prompt.autoResolveTimer
+        )}초 후 자동 선택)</small></div>
+          <p class="event-choice-desc">${prompt.description}</p>
+          <div class="event-choice-btns">
+            ${prompt.options
+              .map(
+                (opt) =>
+                  `<button type="button" class="event-choice-btn" data-ev-opt="${opt.id}">${opt.label} <small>(${opt.effectText})</small></button>`
+              )
+              .join('')}
+          </div>
+        `;
+        this.elDungeonEventBox
+          .querySelectorAll<HTMLButtonElement>('[data-ev-opt]')
+          .forEach((btn) => {
+            btn.addEventListener('click', () => {
+              this.game.chooseDungeonEventOption(
+                activeExp.id,
+                btn.dataset.evOpt
+              );
+              this.lastRenderedEventPromptId = null;
+              this.elDungeonEventBox.classList.add('hidden');
+            });
+          });
+      }
+    } else {
+      this.lastRenderedEventPromptId = null;
+      this.elDungeonEventBox.classList.add('hidden');
+    }
+
     const logs =
       activeExp?.floorLogs ??
       this.game.recentExpeditionResults[0]?.floorLogs ??
@@ -888,16 +1138,7 @@ class InnAppController {
     this.lastFloorLogTopId = topId;
 
     this.elDungeonFloorLogs.innerHTML = '';
-    if (logs.length === 0) {
-      const li = document.createElement('li');
-      li.className = 'floor-log-item';
-      li.textContent =
-        '🧭 원정대가 출발하면 층별 전진·몬스터 교전·아이템 드랍·보스전 기록이 여기에 실시간으로 중계됩니다.';
-      this.elDungeonFloorLogs.appendChild(li);
-      return;
-    }
-
-    for (const item of logs.slice(0, 4)) {
+    for (const item of logs.slice(0, 3)) {
       const li = document.createElement('li');
       li.className = `floor-log-item floor-log-${item.type}`;
       li.textContent = `[${item.floor}층] ${item.text}`;
@@ -906,33 +1147,54 @@ class InnAppController {
   }
 
   private refreshHeaderAndLogs(): void {
-    const innLv = getCurrentInnLevel(this.game.reputation);
-    const nextLv = getNextInnLevel(this.game.reputation);
+    const rankDef = this.game.getCurrentInnRankDef();
+    const { icon, label, clockText } = this.game.getDayPhaseLabel();
 
-    this.elLevelBadge.textContent = innLv.title;
+    this.elLevelBadge.textContent = rankDef.title;
+    this.elDayClock.textContent = `${this.game.dayNumber}일차 · ${icon} ${label} ${clockText}`;
     this.elRepText.textContent = `평판 ${formatGold(this.game.reputation)}`;
-    this.elHeroBadge.textContent = `합류 영웅 ${this.game.getUnlockedHeroCount()}/${
+    this.elHeroBadge.textContent = `영웅 ${this.game.getUnlockedHeroCount()}/${
       HERO_ROSTER.length
     }명`;
     this.elGold.textContent = `${formatGold(this.game.gold)} G`;
-    this.elGps.textContent = `+${formatRate(this.game.getGoldPerSecond())} /초`;
 
-    const pendingLoot = this.game.getPendingLootSummary();
-    this.elClick.textContent = `원정 ${this.game.expeditions.length}팀 / 전리품 ${pendingLoot.totalCount}개`;
-    this.elGuests.textContent = `손님 ${this.game.guests.length}명 / 영웅 ${this.game.getUnlockedHeroCount()}명`;
+    const todayNet = this.game.currentDayLedger?.netProfit ?? 0;
+    this.elTodayProfit.textContent = `${formatSignedGold(todayNet)} G`;
+    this.elTodayProfit.style.color =
+      todayNet >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
 
-    if (nextLv) {
-      const prevReq = innLv.requiredRep;
-      const span = Math.max(1, nextLv.requiredRep - prevReq);
-      const pct = Math.min(
-        100,
-        Math.max(4, ((this.game.reputation - prevReq) / span) * 100)
-      );
-      this.elGoalFill.style.width = `${pct.toFixed(1)}%`;
+    const fixedWages = this.game.getDailyWagesBreakdown().totalWages;
+    const fixedUpkeep = this.game.getDailyUpkeepCost();
+    const arrearsNote =
+      this.game.unpaidWages > 0 ? ` (체불 ${this.game.unpaidWages}G)` : '';
+    this.elDailyFixed.textContent = `-${formatGold(
+      fixedWages + fixedUpkeep
+    )} G/일${arrearsNote}`;
+
+    // 항상 보이는 현재 여관 등급 목표 체크리스트 & 진행 바
+    const { nextRank, items, overallPct } =
+      this.game.getNextRankGoalsProgress();
+    this.elGoalFill.style.width = `${Math.max(4, overallPct).toFixed(1)}%`;
+
+    if (nextRank && items.length > 0) {
+      this.elNextGoal.textContent = `🎯 다음 등급 [${nextRank.title}] 승급 목표 (${Math.round(
+        overallPct
+      )}%)`;
+      this.elHudGoalChips.innerHTML = items
+        .map(
+          (it) =>
+            `<span class="hud-goal-chip${it.completed ? ' done' : ''}">${
+              it.completed ? '✅' : '▫️'
+            } ${it.condition.label}: <b>${formatGold(it.current)}/${formatGold(
+              it.target
+            )}</b></span>`
+        )
+        .join('');
     } else {
-      this.elGoalFill.style.width = '100%';
+      this.elNextGoal.textContent =
+        '🏆 최고 등급 [Lv.8 전설의 왕국 최고 여관] 달성 완료!';
+      this.elHudGoalChips.innerHTML = `<span class="hud-goal-chip done">🐉 고대 용왕의 화산 둥지 정복 완료</span>`;
     }
-    this.elNextGoal.textContent = this.game.getNextGoalDescription();
 
     if (this.game.activeEvent) {
       this.elEventBanner.classList.remove('hidden');
@@ -949,46 +1211,29 @@ class InnAppController {
       (g) => g.state === 'waiting'
     ).length;
     if (waitingCount > 0) {
-      this.elServeBtnLabel.textContent = `🍻 대기 손님 직접 서빙 (${waitingCount}명)`;
-      this.elServeBtnSub.textContent = `즉시 서빙 골드 + 친절 보너스 25%`;
+      this.elServeBtnLabel.textContent = `🍻 손님 서빙 (${waitingCount})`;
     } else {
-      const tip = Math.max(
-        3,
-        Math.floor(this.game.getClickServeBonus() * 0.45)
-      );
-      this.elServeBtnLabel.textContent = `🔔 여관 정돈 & 모험가 호객하기`;
-      this.elServeBtnSub.textContent = `즉시 +${formatGold(
-        tip
-      )} G & 손님 입장 가속`;
+      this.elServeBtnLabel.textContent = `🔔 손님 맞이`;
     }
 
     if (this.game.activeEvent) {
       this.elEventBtn.disabled = true;
-      this.elEventBtnLabel.textContent = `🎉 특별 이벤트 진행 중`;
-      this.elEventBtnSub.textContent = `${Math.ceil(
-        this.game.activeEvent.remainingSec
-      )}초 남음`;
+      this.elEventBtnLabel.textContent = `🎉 이벤트 중`;
     } else if (this.game.eventCooldownSec > 0) {
       this.elEventBtn.disabled = true;
-      this.elEventBtnLabel.textContent = `🎲 소문 준비 중 (${Math.ceil(
+      this.elEventBtnLabel.textContent = `🎲 쿨타임 ${Math.ceil(
         this.game.eventCooldownSec
-      )}초)`;
-      this.elEventBtnSub.textContent = `잠시 후 다시 발동 가능`;
+      )}s`;
     } else {
       this.elEventBtn.disabled = false;
-      this.elEventBtnLabel.textContent = `🎲 여관 소문내기 (이벤트)`;
-      this.elEventBtnSub.textContent = `즉시 랜덤 호재 발생!`;
+      this.elEventBtnLabel.textContent = `🎲 소문내기`;
     }
 
     this.renderLiveStatusStrip();
 
-    this.elServedSummary.textContent = `서빙 ${formatGold(
+    this.elServedSummary.textContent = `${this.game.dayNumber}일차 · 서빙 ${formatGold(
       this.game.totalServed
-    )}회 · 전리품 ${formatGold(
-      this.game.totalLootFound
-    )}개 · 포션 ${this.game.totalPotionsCrafted} · 단조 ${
-      this.game.totalEquipCrafted
-    }`;
+    )}회 · 거래 ${this.game.totalHeroShopTransactions}건`;
     this.renderLogsIfChanged();
   }
 
@@ -999,27 +1244,21 @@ class InnAppController {
       parts.push(
         `🗺️ ${d?.name ?? exp.dungeonId} [${exp.currentFloor ?? 1}/${
           exp.totalFloors ?? 3
-        }층] (${Math.ceil(exp.remainingSec)}초)`
+        }F]`
       );
-    }
-    for (const pq of this.game.craftQueues.potion) {
-      parts.push(`⚗️ 포션 조제 중 (${Math.ceil(pq.remainingSec)}초)`);
-    }
-    for (const sq of this.game.craftQueues.blacksmith) {
-      parts.push(`⚒️ 장비 단조 중 (${Math.ceil(sq.remainingSec)}초)`);
     }
     const pending = this.game.getPendingLootSummary();
     if (pending.totalCount > 0) {
-      parts.push(
-        `💎 매입 대기 전리품 ${pending.totalCount}개 (${formatGold(
-          pending.totalCost
-        )}G)`
-      );
+      parts.push(`💎 대기 전리품 ${pending.totalCount}개`);
+    }
+    if (this.game.craftQueues.potion.length > 0) {
+      parts.push(`⚗️ 포션 조제 중`);
+    }
+    if (this.game.craftQueues.blacksmith.length > 0) {
+      parts.push(`⚒️ 장비 단조 중`);
     }
     this.elLiveStrip.textContent =
-      parts.length > 0
-        ? parts.join('  |  ')
-        : '🏠 영웅들이 여관 안에서 식사·쇼핑·파티 모집 중입니다. 준비가 끝나면 던전 입구로 출발합니다!';
+      parts.length > 0 ? parts.join(' · ') : '🏠 여관 영업 중';
   }
 
   private updateLiveProgressBars(): void {
@@ -1062,13 +1301,13 @@ class InnAppController {
     this.lastLogTopId = topId;
 
     this.elLogList.innerHTML = '';
-    for (const entry of this.game.logs.slice(0, 7)) {
+    for (const entry of this.game.logs.slice(0, 3)) {
       const li = document.createElement('li');
       li.className = `log-item log-${entry.type}`;
 
       const timeSpan = document.createElement('span');
       timeSpan.className = 'log-time';
-      timeSpan.textContent = entry.timeText;
+      timeSpan.textContent = `[${entry.timeText}]`;
 
       const textSpan = document.createElement('span');
       textSpan.textContent = entry.text;
@@ -1080,13 +1319,19 @@ class InnAppController {
   }
 
   // ==========================================================================
-  // 탭별 콘텐츠 빌더
+  // 서랍 탭별 콘텐츠 빌더
   // ==========================================================================
 
   private buildTabCards(): void {
     this.elUpgradeList.innerHTML = '';
 
     switch (this.activeTab) {
+      case 'goals':
+        this.buildGoalsAndQuestsTab();
+        break;
+      case 'stats':
+        this.buildStatsAndLedgerTab();
+        break;
       case 'heroes':
         this.buildHeroesTab();
         break;
@@ -1112,7 +1357,236 @@ class InnAppController {
   }
 
   // --------------------------------------------------------------------------
-  // 1. 🦸 영웅 명단 탭 (클릭 시 상태/지시 패널 연동 + 허기/피로/의도 표시)
+  // 0-A. 🏆 여관 등급 목표 & 선택 퀘스트 탭
+  // --------------------------------------------------------------------------
+  private buildGoalsAndQuestsTab(): void {
+    const rankPanel = document.createElement('div');
+    rankPanel.className = 'section-panel';
+    rankPanel.innerHTML = `
+      <div class="panel-subtitle">🏆 여관 등급 성장 축 (Lv.1 ~ Lv.8) &amp; 등급별 공개 달성 목표</div>
+      <p class="upgrade-desc">각 등급의 목표 조건을 모두 달성하면 즉시 다음 등급으로 승급하고 축하 보상을 받습니다. 최종 목표는 여관에서 키운 파티로 <b>[고대 용왕의 화산 둥지]</b>를 격파하고 <b>[Lv.8 전설의 왕국 최고 여관]</b>에 오르는 것입니다!</p>
+    `;
+
+    for (const lvl of INN_LEVELS) {
+      const isReached = this.game.innRank >= lvl.level;
+      const isNext = this.game.innRank + 1 === lvl.level;
+      const milestone = this.game.rankMilestones[lvl.level];
+
+      const card = document.createElement('div');
+      card.className = `upgrade-card${
+        !isReached && !isNext ? ' locked' : ''
+      }`;
+      if (isNext) {
+        card.style.borderColor = 'var(--accent-gold)';
+      }
+
+      const goalsHtml =
+        lvl.goals.length === 0
+          ? `<span class="hud-goal-chip done">✅ 시작 등급</span>`
+          : lvl.goals
+              .map((g) => {
+                const st = this.game.evaluateGoalCondition(g);
+                return `<span class="hud-goal-chip${
+                  st.completed ? ' done' : ''
+                }">${st.completed ? '✅' : '▫️'} ${g.label} (${formatGold(
+                  st.current
+                )}/${formatGold(st.target)})</span>`;
+              })
+              .join(' ');
+
+      card.innerHTML = `
+        <div class="upgrade-info">
+          <div class="upgrade-icon">${
+            isReached ? '🏆' : isNext ? '🎯' : '🔒'
+          }</div>
+          <div class="upgrade-text-wrap">
+            <div class="upgrade-title-row">
+              <span class="upgrade-name">${lvl.title}</span>
+              <span class="upgrade-level-badge">${
+                isReached
+                  ? milestone
+                    ? `달성 완료 (${milestone.day}일차)`
+                    : '달성 완료'
+                  : isNext
+                  ? '현재 도전 목표'
+                  : '상위 등급'
+              }</span>
+            </div>
+            <p class="upgrade-effects">승급 혜택: ${lvl.rewardText}</p>
+            <div class="trait-row" style="margin-top:5px">${goalsHtml}</div>
+          </div>
+        </div>
+      `;
+      rankPanel.appendChild(card);
+    }
+    this.elUpgradeList.appendChild(rankPanel);
+
+    // 선택 퀘스트 / 업적 목록
+    const questPanel = document.createElement('div');
+    questPanel.className = 'section-panel';
+    const doneCnt = Object.values(this.game.completedQuests).filter(
+      Boolean
+    ).length;
+    questPanel.innerHTML = `
+      <div class="panel-subtitle">🏅 선택 퀘스트 &amp; 여관 업적 (${doneCnt}/${OPTIONAL_QUESTS.length} 달성)</div>
+    `;
+
+    for (const q of OPTIONAL_QUESTS) {
+      const done = Boolean(this.game.completedQuests[q.id]);
+      const card = document.createElement('div');
+      card.className = `upgrade-card compact-card${done ? '' : ' locked'}`;
+      card.innerHTML = `
+        <div class="upgrade-info">
+          <div class="upgrade-icon">${q.icon}</div>
+          <div class="upgrade-text-wrap">
+            <div class="upgrade-title-row">
+              <span class="upgrade-name">${q.title}</span>
+              <span class="upgrade-level-badge">${
+                done ? '✅ 달성 완료' : `보상 +${q.rewardGold}G · 평판 +${q.rewardRep}`
+              }</span>
+            </div>
+            <p class="upgrade-desc">${q.description}</p>
+          </div>
+        </div>
+      `;
+      questPanel.appendChild(card);
+    }
+    this.elUpgradeList.appendChild(questPanel);
+  }
+
+  // --------------------------------------------------------------------------
+  // 0-B. 📊 통계·장부 탭 (일별 수입·지출·순이익 바 차트 + 급료/유지비 명세)
+  // --------------------------------------------------------------------------
+  private buildStatsAndLedgerTab(): void {
+    const wagesInfo = this.game.getDailyWagesBreakdown();
+    const upkeepCost = this.game.getDailyUpkeepCost();
+    const cur = this.game.currentDayLedger;
+
+    // 1. 최근 일별 수입·지출·순이익 차트
+    const chartPanel = document.createElement('div');
+    chartPanel.className = 'section-panel';
+
+    const chartDays: DailyFinancialReport[] = [
+      ...this.game.dayHistory.slice(-9),
+      cur,
+    ];
+    let maxBarVal = 100;
+    for (const d of chartDays) {
+      maxBarVal = Math.max(
+        maxBarVal,
+        d.income.totalIncome,
+        d.expense.totalOperatingExpense
+      );
+    }
+
+    const barsHtml = chartDays
+      .map((d) => {
+        const isToday = d.day === this.game.dayNumber && d === cur;
+        const incH = Math.max(
+          4,
+          Math.round((d.income.totalIncome / maxBarVal) * 82)
+        );
+        const expH = Math.max(
+          4,
+          Math.round((d.expense.totalOperatingExpense / maxBarVal) * 82)
+        );
+        return `
+          <div class="chart-day-col">
+            <span class="chart-net-label ${d.netProfit < 0 ? 'neg' : ''}">${formatSignedGold(
+          d.netProfit
+        )}G</span>
+            <div class="chart-pair-bars" title="${d.day}일차: 수입 +${d.income.totalIncome}G / 운영지출 -${d.expense.totalOperatingExpense}G">
+              <div class="chart-bar-inc" style="height:${incH}px"></div>
+              <div class="chart-bar-exp" style="height:${expH}px"></div>
+            </div>
+            <span class="chart-day-label">${d.day}일${
+          isToday ? '(오늘)' : ''
+        }</span>
+          </div>
+        `;
+      })
+      .join('');
+
+    chartPanel.innerHTML = `
+      <div class="panel-subtitle">📊 일별 수입 · 운영지출 · 순이익 추이 차트 (하루 = 실시간 4분)</div>
+      <div class="stats-chart-container">
+        <div class="chart-legend">
+          <span><i class="legend-dot" style="background:#7eb38a"></i>일일 총수입 (식음료·서빙·객실·포션·대장간)</span>
+          <span><i class="legend-dot" style="background:#c7635b"></i>운영 지출 (급료·유지비·조제단조·전리품매입)</span>
+          <span><i class="legend-dot" style="background:#ebd186"></i>상단 숫자: 일일 영업 순이익</span>
+        </div>
+        <div class="chart-bars-grid">
+          ${barsHtml}
+        </div>
+      </div>
+    `;
+    this.elUpgradeList.appendChild(chartPanel);
+
+    // 2. 고용 직원 급료 및 일일 유지비 명세
+    const wagePanel = document.createElement('div');
+    wagePanel.className = 'section-panel';
+    const staffRows =
+      wagesInfo.items.length > 0
+        ? wagesInfo.items
+            .map(
+              (st) =>
+                `<div class="report-row"><span>${st.icon} ${st.name} (Lv.${st.level})</span><strong style="color:#e3958d">-${st.wage} G/일</strong></div>`
+            )
+            .join('')
+        : `<p class="empty-hint">현재 고용된 유급 직원이 없습니다 (여관 주인이 직접 기본 서빙 중 · 일일 급료 0G).</p>`;
+
+    wagePanel.innerHTML = `
+      <div class="panel-subtitle">🧑‍🍳 일일 고정비 명세 (급료 합계 -${wagesInfo.totalWages}G/일 · 시설 유지비 -${upkeepCost}G/일)</div>
+      <div class="offline-report-box">
+        ${staffRows}
+        <div class="report-row highlight-row">
+          <span>🕯️ 여관 기본 연료·식자재·시설 유지비</span>
+          <strong style="color:#e3958d">-${upkeepCost} G/일</strong>
+        </div>
+      </div>
+    `;
+    this.elUpgradeList.appendChild(wagePanel);
+
+    // 3. 일별 상세 장부 기록 리스트
+    const historyPanel = document.createElement('div');
+    historyPanel.className = 'section-panel';
+    historyPanel.innerHTML = `<div class="panel-subtitle">📜 일별 결산 장부 기록 (최근 ${chartDays.length}일)</div>`;
+
+    for (const d of [...chartDays].reverse()) {
+      const isToday = d.day === this.game.dayNumber && d === cur;
+      const row = document.createElement('div');
+      row.className = `history-row ${d.netProfit >= 0 ? 'win' : 'lose'}`;
+      row.innerHTML = `
+        <div>
+          <strong>[${d.day}일차${isToday ? ' · 진행 중' : ''}] ${
+        d.innRankTitle
+      } — 순이익 ${formatSignedGold(d.netProfit)} G</strong>
+          <span>(보유 골드 ${formatGold(d.endGold)}G)</span>
+        </div>
+        <div class="history-sub">
+          수입 +${formatGold(d.income.totalIncome)}G (서빙 ${
+        d.income.guestServing
+      } · 식음료 ${d.income.foodAndDrink} · 객실 ${
+        d.income.roomAndRest
+      } · 포션 ${d.income.potionSales} · 대장간 ${
+        d.income.blacksmithSales
+      } · 수수료 ${d.income.lootMargin}) |
+          운영지출 -${formatGold(
+            d.expense.totalOperatingExpense
+          )}G (급료 ${d.expense.wages} · 유지비 ${
+        d.expense.upkeep
+      } · 제작 ${d.expense.craftCost} · 매입 ${
+        d.expense.lootPurchase
+      }) | 시설투자 -${formatGold(d.expense.facilityInvest)}G
+        </div>
+      `;
+      historyPanel.appendChild(row);
+    }
+    this.elUpgradeList.appendChild(historyPanel);
+  }
+
+  // --------------------------------------------------------------------------
+  // 1. 🦸 영웅 명단 탭
   // --------------------------------------------------------------------------
   private buildHeroesTab(): void {
     const unlockedCount = this.game.getUnlockedHeroCount();
@@ -1295,7 +1769,6 @@ class InnAppController {
       header.appendChild(textWrap);
       card.appendChild(header);
 
-      // 4개 장비 슬롯 표시 + 대장간 재고 교체 및 +강화 버튼
       const equipGrid = document.createElement('div');
       equipGrid.className = 'hero-equip-grid';
 
@@ -1383,7 +1856,6 @@ class InnAppController {
 
       card.appendChild(equipGrid);
 
-      // 하단 액션 바 (맵에서 상태/행동 지시 열기 + 요리 대접 / 특실 회복 / 포션 지급)
       const actionBar = document.createElement('div');
       actionBar.className = 'hero-care-bar';
 
@@ -1392,7 +1864,7 @@ class InnAppController {
       inspectBtn.className = `care-btn${
         this.game.selectedHeroId === state.id ? ' active-toggle' : ''
       }`;
-      inspectBtn.textContent = '🎯 상태 확인 & 행동 지시';
+      inspectBtn.textContent = '🎯 상태·행동 지시 서랍 열기';
       inspectBtn.addEventListener('click', () => {
         this.game.selectedHeroId = state.id;
         this.renderHeroInspectorPanel(true);
@@ -1406,7 +1878,7 @@ class InnAppController {
       const unlockedMeals = this.game.getUnlockedMeals();
       const topMeal = unlockedMeals[unlockedMeals.length - 1];
       const mealInfo = this.game.getMealEffectiveBuff(topMeal.upgradeId);
-      const treatCost = Math.max(4, Math.floor(mealInfo.price * 0.7));
+      const treatCost = Math.max(4, Math.floor(mealInfo.price * 0.6));
       mealBtn.disabled = this.game.gold < treatCost;
       mealBtn.textContent = `${topMeal.icon} 요리 대접 (${treatCost}G)`;
       mealBtn.addEventListener('click', () => {
@@ -1421,8 +1893,8 @@ class InnAppController {
         const restBtn = document.createElement('button');
         restBtn.type = 'button';
         restBtn.className = 'care-btn heal-btn';
-        restBtn.disabled = this.game.gold < 10;
-        restBtn.textContent = `🛏️ 특실 즉시 회복 (10G)`;
+        restBtn.disabled = this.game.gold < 8;
+        restBtn.textContent = `🛏️ 특실 즉시 회복 (8G)`;
         restBtn.addEventListener('click', () => {
           if (this.game.restHeroInRoom(state.id)) {
             this.renderHeroInspectorPanel(true);
@@ -1457,17 +1929,16 @@ class InnAppController {
   }
 
   // --------------------------------------------------------------------------
-  // 2. 💎 상점 판매 설정 & 전리품 거래소 탭 (섹션 2 필수 요구사항)
+  // 2. 💎 상점 판매 설정 & 전리품 거래소 탭
   // --------------------------------------------------------------------------
   private buildTradeTab(): void {
     const cfg = this.game.shopConfig;
 
-    // 1. 플레이어 상점 무대 설정 패널 (판매가·판매 등록·매입 시세·대장간 의뢰 설정)
     const stageConfigPanel = document.createElement('div');
     stageConfigPanel.className = 'section-panel';
     stageConfigPanel.innerHTML = `
       <div class="panel-subtitle">🎪 여관 상점 판매 &amp; 전리품 매입 시세 설정 (영웅 자율 반응)</div>
-      <p class="upgrade-desc">판매 물품을 등록하거나 매입 가격을 바꾸면 영웅들이 해당 구역으로 직접 걸어가 거래합니다. 가격이 높으면 불평하거나 망설이고, 할인하면 만족도가 올라갑니다.</p>
+      <p class="upgrade-desc">초당 자동 골드가 없으므로 영웅들이 여관 식당·포션 가게·대장간에서 지갑을 열게 하는 것이 핵심 수입원입니다.</p>
 
       <div class="market-config-grid">
         <div class="market-config-box">
@@ -1576,7 +2047,6 @@ class InnAppController {
 
     this.elUpgradeList.appendChild(stageConfigPanel);
 
-    // 설정 버튼 이벤트 바인딩
     document
       .getElementById('btn-toggle-meal-sale')
       ?.addEventListener('click', () => {
@@ -1635,7 +2105,6 @@ class InnAppController {
         });
       });
 
-    // 2. 현재 영웅 가방 전리품 매입소
     const summary = this.game.getPendingLootSummary();
     const tradeTopPanel = document.createElement('div');
     tradeTopPanel.className = 'section-panel';
@@ -1647,7 +2116,7 @@ class InnAppController {
         <div class="panel-subtitle">💰 거래 가판대 — 영웅 전리품 대기 목록 (${
           summary.totalCount
         }개 / 매입 총액 ${formatGold(summary.totalCost)} G)</div>
-        <p class="upgrade-desc">영웅이 거래 가판대에 도착하면 켜져 있는 매입 품목을 자동 판매합니다. 여기서 즉시 수동 매입할 수도 있습니다.</p>
+        <p class="upgrade-desc">전리품을 매입하면 지출로 기록되고 영웅의 보유 골드가 늘어나 여관 내 식사·포션·장비 소비로 되돌아옵니다.</p>
       </div>
     `;
 
@@ -1694,10 +2163,7 @@ class InnAppController {
                 <span class="upgrade-level-badge">보유: ${item.heroName}</span>
                 <span class="upgrade-level-badge">매입 단가 ${
                   item.unitPrice
-                }G (행상인 매각까지 ${Math.max(
-          0,
-          45 - Math.floor(item.ageSeconds)
-        )}초)</span>
+                }G</span>
               </div>
             </div>
           </div>
@@ -1720,12 +2186,10 @@ class InnAppController {
     }
     this.elUpgradeList.appendChild(tradeTopPanel);
 
-    // 3. 종류별 전리품 매입 켜기/끄기 & 여관 재료 창고 현황
     const warehousePanel = document.createElement('div');
     warehousePanel.className = 'section-panel';
     warehousePanel.innerHTML = `
-      <div class="panel-subtitle">📦 종류별 전리품 매입 허용 설정 &amp; 여관 재료 창고 (행상인 안전 매각 누적: ${this.game.totalPeddlerSales}개)</div>
-      <p class="upgrade-desc">품목별 [매입 ON/OFF] 버튼을 눌러 특정 전리품만 매입하거나 차단할 수 있습니다.</p>
+      <div class="panel-subtitle">📦 종류별 전리품 매입 허용 설정 &amp; 여관 재료 창고</div>
     `;
 
     const matGrid = document.createElement('div');
@@ -2058,15 +2522,13 @@ class InnAppController {
     } · AGI ${preview.partyStats.agi} · INT ${preview.partyStats.int} · HP ${
       preview.partyStats.hp
     } · LUK ${preview.partyStats.luk}) →
-        <b>기본 스탯 성공률 ${Math.round(
+        <b>기본 성공률 ${Math.round(
           preview.baseStatSuccessRate * 100
         )}%</b> +
-        <b>시너지 합계 ${
+        <b>시너지 ${
           preview.totalSynergyDelta >= 0 ? '+' : ''
         }${Math.round(preview.totalSynergyDelta * 100)}%</b> +
-        <b>음식·포션·숙면 버프 +${Math.round(
-          preview.buffSuccessBonus * 100
-        )}%</b> =
+        <b>버프 +${Math.round(preview.buffSuccessBonus * 100)}%</b> =
         <strong class="gold-highlight">${Math.round(
           preview.finalSuccessRate * 100
         )}%</strong>
@@ -2093,52 +2555,17 @@ class InnAppController {
     dispatchBtn.addEventListener('click', () => {
       if (this.game.dispatchParty(dungeon.id, this.selectedPartyHeroIds)) {
         this.autoSelectInitialParty();
+        this.closeDrawer();
         this.refreshAllUi(true);
       }
     });
     builderPanel.appendChild(dispatchBtn);
 
     this.elUpgradeList.appendChild(builderPanel);
-
-    if (this.game.recentExpeditionResults.length > 0) {
-      const historyBox = document.createElement('div');
-      historyBox.className = 'section-panel';
-      historyBox.innerHTML = `<div class="panel-subtitle">📜 최근 던전 원정 결과 (층별 진행 요약)</div>`;
-      for (const res of this.game.recentExpeditionResults.slice(0, 5)) {
-        const lootStr = Object.entries(res.lootDropped)
-          .map(([mId, cnt]) => `${MATERIAL_MAP[mId]?.name ?? mId} x${cnt}`)
-          .join(', ');
-        const row = document.createElement('div');
-        row.className = `history-row ${res.success ? 'win' : 'lose'}`;
-        row.innerHTML = `
-          <div>
-            <strong>${
-              res.success
-                ? `🏆 전 층(${res.totalFloors ?? 3}F) 공략 성공`
-                : `💥 ${res.reachedFloor ?? 2}층에서 후퇴`
-            } — ${res.dungeonName}</strong>
-            <span>(${res.heroNames.join('·')} / 확률 ${Math.round(
-          res.successRateUsed * 100
-        )}% / ${res.synergySummaryText})</span>
-          </div>
-          <div class="history-sub">
-            XP +${res.xpGained} · 영웅 골드 +${res.heroGoldGained}G
-            ${lootStr ? ` · 전리품: ${lootStr}` : ''}
-            ${
-              res.injuredHeroNames.length > 0
-                ? ` · ⚠️부상: ${res.injuredHeroNames.join(', ')}`
-                : ''
-            }
-          </div>
-        `;
-        historyBox.appendChild(row);
-      }
-      this.elUpgradeList.appendChild(historyBox);
-    }
   }
 
   // --------------------------------------------------------------------------
-  // 4. ⚗️ 포션 가게 탭 (판매 등록 토글 + 레시피 조제 + 도구 업그레이드)
+  // 4. ⚗️ 포션 가게 탭
   // --------------------------------------------------------------------------
   private buildPotionTab(): void {
     const statusPanel = document.createElement('div');
@@ -2221,8 +2648,7 @@ class InnAppController {
 
     const recipeHeader = document.createElement('div');
     recipeHeader.className = 'panel-subtitle';
-    recipeHeader.textContent =
-      '📜 포션 조제 레시피 (영웅이 포션 가게로 걸어와 구매하거나 직접 지급)';
+    recipeHeader.textContent = '📜 포션 조제 레시피';
     this.elUpgradeList.appendChild(recipeHeader);
 
     for (const rec of POTION_RECIPES) {
@@ -2308,7 +2734,7 @@ class InnAppController {
   }
 
   // --------------------------------------------------------------------------
-  // 5. ⚒️ 대장간 탭 (장비 단조 · +강화 · 확률표 · 도구/시설)
+  // 5. ⚒️ 대장간 탭
   // --------------------------------------------------------------------------
   private buildBlacksmithTab(): void {
     const maxSlots = this.game.getMaxCraftSlots('blacksmith');
@@ -2316,7 +2742,7 @@ class InnAppController {
     topPanel.className = 'section-panel';
     topPanel.innerHTML = `
       <div class="panel-subtitle">⚒️ 대장간 단조 큐 (${this.game.craftQueues.blacksmith.length}/${maxSlots}슬롯) &amp; 완성 장비 진열대 (${this.game.equipmentStock.length}개)</div>
-      <p class="upgrade-desc">완성된 장비는 영웅들이 대장간 모루로 걸어와 구매·장착하거나, 여기서 직접 영웅에게 입혀 주고 <b>+강화</b>를 시도할 수 있습니다.</p>
+      <p class="upgrade-desc">완성된 장비는 영웅들이 대장간 모루로 걸어와 구매·장착하거나 직접 장착 및 <b>+강화</b>를 시도할 수 있습니다.</p>
     `;
 
     if (this.game.craftQueues.blacksmith.length > 0) {
@@ -2350,7 +2776,7 @@ class InnAppController {
       const empty = document.createElement('p');
       empty.className = 'empty-hint';
       empty.textContent =
-        '진열대에 보관 중인 여분 장비가 없습니다. 아래 레시피에서 장비를 단조하거나 [🦸 영웅] 탭에서 착용 중인 장비를 +강화하세요!';
+        '진열대에 보관 중인 여분 장비가 없습니다. 아래 레시피에서 장비를 단조하거나 [🦸 영웅] 탭에서 착용 장비를 +강화하세요!';
       topPanel.appendChild(empty);
     } else {
       for (const inst of this.game.equipmentStock) {
@@ -2422,7 +2848,7 @@ class InnAppController {
       })
       .join(' ');
     rateBox.innerHTML = `
-      <div class="enhance-table-title">🔥 +강화 기본 성공 확률표 (실패 시 완전 파괴 · 기본 장비 즉시 복귀 | 누적 성공 ${this.game.totalEnhanceSuccess}회 / 파괴 ${this.game.totalEnhanceDestroyed}회 | 룬 숫돌 보정 Lv.${grindLv})</div>
+      <div class="enhance-table-title">🔥 +강화 기본 성공 확률표 (실패 시 완전 파괴 · 기본 장비 즉시 복귀 | 누적 성공 ${this.game.totalEnhanceSuccess}회 / 파괴 ${this.game.totalEnhanceDestroyed}회 | 룬 숫돌 Lv.${grindLv})</div>
       <div class="rate-pill-wrap">${rateChips}</div>
     `;
     topPanel.appendChild(rateBox);
@@ -2498,7 +2924,7 @@ class InnAppController {
               )}G</span>
             </div>
             <p class="upgrade-desc">${def.description}</p>
-            <p class="upgrade-effects">기본 스탯: ${stStr} | 착용 가능 직업: ${getWearableClassesText(
+            <p class="upgrade-effects">기본 스탯: ${stStr} | 착용 직업: ${getWearableClassesText(
         def
       )}</p>
             <p class="upgrade-desc">필요 재료: <b>${matStr}</b></p>
@@ -2546,6 +2972,10 @@ class InnAppController {
       })
       .join(' · ');
 
+    const wageText = tool.dailyWagePerLevel
+      ? ` (고용 급료: 레벨당 -${tool.dailyWagePerLevel}G/일)`
+      : '';
+
     const card = document.createElement('div');
     card.className = 'upgrade-card';
     card.innerHTML = `
@@ -2556,10 +2986,10 @@ class InnAppController {
             <span class="upgrade-name">${tool.name}</span>
             <span class="upgrade-level-badge">Lv.${lv} / ${tool.maxLevel}</span>
           </div>
-          <p class="upgrade-desc">${tool.description}</p>
+          <p class="upgrade-desc">${tool.description}${wageText}</p>
           ${
             !isMax && matStr
-              ? `<p class="upgrade-effects">추가 필요 재료: ${matStr}</p>`
+              ? `<p class="upgrade-effects">상위 레벨 재료: ${matStr}</p>`
               : ''
           }
         </div>
@@ -2572,7 +3002,7 @@ class InnAppController {
     btn.disabled = !canBuy;
     btn.innerHTML = `
       <span class="buy-btn-label">${
-        isMax ? '최대 레벨' : lv === 0 ? '건설' : '강화'
+        isMax ? '최대 레벨' : lv === 0 ? '보유 골드 건설' : '강화'
       }</span>
       <span class="buy-btn-cost">${isMax ? 'MAX' : `${formatGold(gold)} G`}</span>
     `;
@@ -2586,7 +3016,7 @@ class InnAppController {
   }
 
   // --------------------------------------------------------------------------
-  // 6. 기존 여관 업그레이드 탭 (메뉴 · 객실 · 직원 · 시설)
+  // 6. 여관 업그레이드 탭 (메뉴 · 객실 · 직원 · 시설)
   // --------------------------------------------------------------------------
   private buildInnUpgradesTab(category: UpgradeCategory): void {
     const items = UPGRADES.filter((u) => u.category === category);
@@ -2656,7 +3086,7 @@ class InnAppController {
       const matEl = document.createElement('p');
       matEl.className = 'upgrade-desc';
       matEl.dataset.role = 'mat-req';
-      matEl.textContent = `📦 필요 전리품 재료: ${matText}`;
+      matEl.textContent = `📦 상위 레벨 재료: ${matText}`;
       textWrap.appendChild(matEl);
     }
 
@@ -2703,11 +3133,8 @@ class InnAppController {
 
   private formatUpgradeEffectText(def: UpgradeDef): string {
     const parts: string[] = [];
-    if (def.gpsPerLevel > 0) {
-      parts.push(`초당 +${formatRate(def.gpsPerLevel)}G`);
-    }
     if (def.clickPerLevel > 0) {
-      parts.push(`서빙 +${formatGold(def.clickPerLevel)}G`);
+      parts.push(`서빙·단가 보너스 +${formatGold(def.clickPerLevel)}G`);
     }
     if (def.category === 'menu') {
       parts.push(`영웅 식사 버프 강화`);
@@ -2719,19 +3146,22 @@ class InnAppController {
       parts.push(`수용 손님 증가`);
     }
     if (def.autoServeSpeedBonus) {
-      parts.push(`자동 서빙 가속`);
+      parts.push(`자동 서빙 속도 +${Math.round(def.autoServeSpeedBonus * 100)}%`);
     }
     if (def.spawnRateBonus) {
       parts.push(`방문 빈도 상승`);
     }
     if (def.globalMultiplierBonus) {
-      parts.push(`전체 수익 +${Math.round(def.globalMultiplierBonus * 100)}%`);
+      parts.push(`전체 거래 수익 +${Math.round(def.globalMultiplierBonus * 100)}%`);
     }
     if (def.lootChanceBonus) {
-      parts.push(`전리품 확률 상승`);
+      parts.push(`전리품 팁 확률 상승`);
     }
-    if (def.offlineBonusPerLevel) {
-      parts.push(`방치 효율 +${Math.round(def.offlineBonusPerLevel * 100)}%`);
+    if (def.dailyWagePerLevel) {
+      parts.push(`일일 급료 -${def.dailyWagePerLevel}G/Lv`);
+    }
+    if (def.dailyUpkeepPerLevel) {
+      parts.push(`일일 유지비 -${def.dailyUpkeepPerLevel}G/Lv`);
     }
     return `효과: ${parts.join(' · ')}`;
   }
@@ -2834,9 +3264,9 @@ class InnAppController {
       if (unlocked) {
         const effectsEl = document.createElement('p');
         effectsEl.className = 'upgrade-effects';
-        effectsEl.textContent = `기본 서빙: ${formatGold(
+        effectsEl.textContent = `서빙 행위당 수입: 기본 ${formatGold(
           g.baseGold
-        )}G · 평판 +${g.baseRep} · 전리품 〈${g.lootName}〉 (${Math.round(
+        )}G · 평판 +${g.baseRep} · 전리품 팁 〈${g.lootName}〉 (${Math.round(
           g.lootChance * 100
         )}%)`;
         textWrap.appendChild(effectsEl);

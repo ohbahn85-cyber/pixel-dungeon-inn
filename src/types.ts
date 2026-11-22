@@ -10,8 +10,10 @@ export interface UpgradeDef {
   baseCost: number;
   costScale: number;
   unlockRep: number;
-  gpsPerLevel: number;
+  gpsPerLevel: number; // v4에서는 수동 수입 제거, 하위 호환 참조용(0)
   clickPerLevel: number;
+  dailyWagePerLevel?: number;
+  dailyUpkeepPerLevel?: number;
   repPerServeBonus?: number;
   maxGuestsBonusPerLevel?: number;
   autoServeSpeedBonus?: number;
@@ -122,11 +124,96 @@ export interface ActiveEvent {
   remainingSec: number;
 }
 
+export type RankGoalKind =
+  | 'reputation'
+  | 'dungeon_clear'
+  | 'hero_count'
+  | 'upgrade_total_levels'
+  | 'staff_total_levels'
+  | 'daily_net_profit'
+  | 'potions_crafted'
+  | 'equips_crafted'
+  | 'enhance_success';
+
+export interface InnRankGoalCondition {
+  id: string;
+  kind: RankGoalKind;
+  label: string;
+  target: number;
+  dungeonId?: string;
+}
+
 export interface InnLevelDef {
   level: number;
   title: string;
   requiredRep: number;
   rewardText: string;
+  rewardGold: number;
+  goals: InnRankGoalCondition[];
+}
+
+export interface OptionalQuestDef {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+  rewardGold: number;
+  rewardRep: number;
+}
+
+export type DayPhase = 'morning' | 'day' | 'evening' | 'night';
+
+export type IncomeCategory =
+  | 'foodAndDrink'
+  | 'guestServing'
+  | 'roomAndRest'
+  | 'potionSales'
+  | 'blacksmithSales'
+  | 'lootMargin';
+
+export type ExpenseCategory =
+  | 'wages'
+  | 'upkeep'
+  | 'craftCost'
+  | 'lootPurchase'
+  | 'facilityInvest';
+
+export interface DailyIncomeBreakdown {
+  foodAndDrink: number;
+  guestServing: number;
+  roomAndRest: number;
+  potionSales: number;
+  blacksmithSales: number;
+  lootMargin: number;
+  totalIncome: number;
+}
+
+export interface DailyExpenseBreakdown {
+  wages: number;
+  upkeep: number;
+  craftCost: number;
+  lootPurchase: number;
+  facilityInvest: number;
+  totalOperatingExpense: number;
+  totalWithInvest: number;
+}
+
+export interface DailyFinancialReport {
+  day: number;
+  income: DailyIncomeBreakdown;
+  expense: DailyExpenseBreakdown;
+  netProfit: number; // 영업 순이익 (totalIncome - totalOperatingExpense)
+  netCashFlow: number; // 시설 투자 포함 현금 증감
+  endGold: number;
+  innRank: number;
+  innRankTitle: string;
+  servedCount: number;
+  heroTransactions: number;
+  dungeonWins: number;
+  dungeonFails: number;
+  newHeroesJoined: string[];
+  injuredHeroes: string[];
+  wageArrears: number;
 }
 
 export interface LogEntry {
@@ -400,7 +487,7 @@ export interface HeroState {
   totalRuns: number;
   totalWins: number;
   lastMealTimer: number;
-  // v3 살아있는 여관 에이전트 확장 필드
+  // v3 & v4 살아있는 여관 에이전트 확장 필드
   hunger?: number; // 0(배부름) ~ 100(매우 배고픔)
   fatigue?: number; // 0(상쾌함) ~ 100(극심한 피로)
   morale?: number; // 0 ~ 100
@@ -415,6 +502,7 @@ export interface HeroState {
   targetZone?: InnZoneId;
   activity?: HeroActivityState;
   activityTimer?: number;
+  hesitateTimer?: number; // 신중 성격 등 잠시 멈칫하는 타이머
   intentText?: string;
   partyId?: string | null;
   rallyDungeonId?: string | null;
@@ -486,14 +574,94 @@ export type MonsterSpriteType =
   | 'knight'
   | 'dragon';
 
+export type MonsterBehaviorType =
+  | 'charge'
+  | 'ranged'
+  | 'poison'
+  | 'swarm'
+  | 'heavy';
+
+export type DungeonRoomType =
+  | 'combat'
+  | 'treasure'
+  | 'trap'
+  | 'rest'
+  | 'event'
+  | 'elite'
+  | 'boss';
+
+export interface DungeonRoomNode {
+  id: string;
+  floor: number;
+  branchIndex: number; // 0 또는 1 (갈래 방)
+  type: DungeonRoomType;
+  label: string;
+  icon: string;
+  nextIds: string[];
+}
+
+export interface DungeonEventChoiceOption {
+  id: string;
+  label: string;
+  effectText: string;
+  kind: 'heal' | 'gold' | 'loot' | 'buff_atk' | 'haste';
+}
+
+export interface DungeonEventChoiceDef {
+  id: string;
+  title: string;
+  description: string;
+  options: DungeonEventChoiceOption[];
+}
+
+export interface ActiveDungeonEventPrompt {
+  eventId: string;
+  title: string;
+  description: string;
+  options: DungeonEventChoiceOption[];
+  autoResolveTimer: number;
+  resolvedOptionId?: string;
+}
+
+export type SkillVisualKind =
+  | 'shield_taunt'
+  | 'holy_barrier'
+  | 'heal_light'
+  | 'aoe_magic'
+  | 'arrow_shot'
+  | 'crit_slash'
+  | 'trap_disarm'
+  | 'cleave_axe'
+  | 'iron_wall'
+  | 'rally_buff'
+  | 'monster_projectile'
+  | 'poison_cloud'
+  | 'fire_breath';
+
+export interface ExpeditionSkillEffect {
+  id: number;
+  kind: SkillVisualKind;
+  label: string;
+  color: string;
+  startX: number;
+  startY: number;
+  targetX: number;
+  targetY: number;
+  life: number;
+  maxLife: number;
+}
+
 export interface ExpeditionMonsterUnit {
   id: string;
   name: string;
   spriteType: MonsterSpriteType;
+  behavior: MonsterBehaviorType;
+  behaviorLabel: string;
   maxHp: number;
   currentHp: number;
   atk: number;
   isBoss: boolean;
+  isElite?: boolean;
   hitFlashTimer: number;
   lungeTimer: number;
 }
@@ -529,11 +697,17 @@ export interface ActiveExpedition {
   totalDurationSec: number;
   remainingSec: number;
   expectedSuccessRate: number;
-  // v3 카이로소프트풍 층별 던전 탐험 & 자동 전투 상태
+  // v3 & v4 층별 갈래 방 던전 탐험 & 직업 스킬 자동 전투 상태
   totalFloors?: number;
   currentFloor?: number;
   floorPhase?: 'marching' | 'fighting' | 'floor_clear' | 'completed' | 'retreated';
   marchProgress?: number; // 0..1
+  roomGraph?: DungeonRoomNode[][];
+  currentRoomId?: string;
+  currentRoomType?: DungeonRoomType;
+  visitedRoomIds?: string[];
+  roomResolved?: boolean;
+  activeEventPrompt?: ActiveDungeonEventPrompt | null;
   monsters?: ExpeditionMonsterUnit[];
   partyCombatState?: Record<
     string,
@@ -542,14 +716,21 @@ export interface ActiveExpedition {
       maxHp: number;
       hitFlashTimer: number;
       lungeTimer: number;
+      stanceOffset?: number; // 용감 돌진(+), 신중 후퇴(-)
+      skillIcon?: string | null;
+      skillTimer?: number;
+      combatSpeech?: string | null;
+      combatSpeechTimer?: number;
     }
   >;
+  skillEffects?: ExpeditionSkillEffect[];
   combatRoundTimer?: number;
   floorTransitionTimer?: number;
   combatFloats?: ExpeditionCombatFloatingText[];
   dropVisuals?: ExpeditionDropVisual[];
   floorLogs?: ExpeditionFloorLog[];
   accumulatedLoot?: Record<string, number>;
+  bonusGoldEarned?: number;
   willSucceed?: boolean;
   failAtFloor?: number;
 }
@@ -582,6 +763,8 @@ export interface ShopToolDef {
   description: string;
   baseGoldCost: number;
   costScale: number;
+  dailyWagePerLevel?: number;
+  dailyUpkeepPerLevel?: number;
   materialCostsPerLevel: Record<string, number>;
   materialStartLevel: number;
   maxLevel: number;
@@ -637,6 +820,7 @@ export interface SaveData {
   gold: number;
   totalGoldEarned: number;
   reputation: number;
+  innRank?: number;
   totalServed: number;
   totalLootFound: number;
   upgrades: Record<string, number>;
@@ -644,7 +828,7 @@ export interface SaveData {
   muted: boolean;
   tutorialSeen: boolean;
   lastSavedAt: number;
-  // v2 & v3 순환 시스템 및 살아있는 여관 확장 필드
+  // v2, v3, v4 순환 시스템 · 하루 경제 · 여관 등급 확장 필드
   heroes?: Record<string, HeroState>;
   materials?: Record<string, number>;
   potionTools?: Record<string, number>;
@@ -668,4 +852,12 @@ export interface SaveData {
   totalEnhanceSuccess?: number;
   totalEnhanceDestroyed?: number;
   totalPeddlerSales?: number;
+  // v4 하루 경제 & 등급 목표 확장 필드
+  dayNumber?: number;
+  dayTimeSec?: number;
+  currentDayLedger?: DailyFinancialReport;
+  dayHistory?: DailyFinancialReport[];
+  unpaidWages?: number;
+  completedQuests?: Record<string, boolean>;
+  maxDailyNetProfitReached?: number;
 }

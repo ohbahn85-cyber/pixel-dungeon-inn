@@ -1,9 +1,15 @@
 import {
   DungeonDef,
+  DungeonEventChoiceDef,
+  DungeonRoomNode,
+  DungeonRoomType,
   ExpeditionMonsterUnit,
+  HeroClassId,
   InnZoneId,
+  MonsterBehaviorType,
   MonsterSpriteType,
   PersonalityId,
+  SkillVisualKind,
 } from './types';
 
 export const MAP_WIDTH = 480;
@@ -158,19 +164,14 @@ export function pixelToTile(x: number, y: number): { col: number; row: number } 
   return { col, row };
 }
 
-/**
- * 30x18 타일 이동 가능 그리드 생성 (벽, 카운터, 식탁 중앙, 화로 등은 장애물 처리)
- */
 function buildWalkableGrid(): boolean[][] {
   const grid: boolean[][] = [];
   for (let r = 0; r < GRID_ROWS; r++) {
     const row: boolean[] = [];
     for (let c = 0; c < GRID_COLS; c++) {
-      // 외곽 벽 및 상단 배경 벽
       if (r <= 1 || r >= GRID_ROWS - 1 || c <= 0 || c >= GRID_COLS - 1) {
         row.push(false);
       } else if (r === 2 && c < 20) {
-        // 1층 상단 벽면 (2층 객실 구역 c>=20은 row 3부터 침대 배치)
         row.push(false);
       } else {
         row.push(true);
@@ -179,28 +180,23 @@ function buildWalkableGrid(): boolean[][] {
     grid.push(row);
   }
 
-  // 던전 입구 우측 아치 열기
   grid[14][28] = true;
   grid[13][28] = true;
   grid[15][28] = true;
 
-  // 포션 가게 작업대 선반 (row 3, col 2..7)
   for (let c = 2; c <= 7; c++) {
     grid[3][c] = false;
   }
 
-  // 바 카운터 본체 (row 3..4, col 10..17)
   for (let c = 10; c <= 17; c++) {
     grid[3][c] = false;
     grid[4][c] = false;
   }
 
-  // 2층 난간 분리벽 (row 6, col 21..28 — 계단 col 19..20으로만 오르내림!)
   for (let c = 21; c <= 28; c++) {
     grid[6][c] = false;
   }
 
-  // 1층 식당 테이블 6개 중앙 타일 장애물 (영웅이 테이블을 뚫고 지나가지 않고 통로로 걷도록)
   const tableCenters = [
     [4, 8],
     [9, 8],
@@ -213,16 +209,13 @@ function buildWalkableGrid(): boolean[][] {
     grid[tr][tc] = false;
   }
 
-  // 중앙 거래 가판대 지붕/매대 (row 9, col 15..17)
   for (let c = 15; c <= 17; c++) {
     grid[9][c] = false;
   }
 
-  // 의뢰 게시판 본체 (row 13, col 16..17)
   grid[13][16] = false;
   grid[13][17] = false;
 
-  // 대장간 화로 및 모루 본체 (row 8..9, col 22..23)
   grid[8][22] = false;
   grid[8][23] = false;
   grid[9][22] = false;
@@ -235,9 +228,6 @@ export const WALKABLE_GRID = buildWalkableGrid();
 
 const pathCache = new Map<string, { col: number; row: number }[]>();
 
-/**
- * 격자 위 A* / BFS 최단 경로 탐색 (정적 장애물 캐싱으로 30명 동시 이동 시에도 O(1) 재사용)
- */
 export function findGridPath(
   startCol: number,
   startRow: number,
@@ -257,7 +247,6 @@ export function findGridPath(
     return cached.map((step) => ({ col: step.col, row: step.row }));
   }
 
-  // BFS 최단 경로 탐색 (30x18 = 540타일)
   const queue: { col: number; row: number }[] = [{ col: sc, row: sr }];
   const visited = new Set<number>();
   const parent = new Map<number, number>();
@@ -289,7 +278,6 @@ export function findGridPath(
       }
       const nIdx = nr * GRID_COLS + nc;
       if (visited.has(nIdx)) continue;
-      // 목적지 타일이거나 보행 가능 타일이면 통과
       if (!WALKABLE_GRID[nr]?.[nc] && nIdx !== goalIdx) continue;
 
       visited.add(nIdx);
@@ -319,6 +307,33 @@ export function findGridPath(
   }
   pathCache.set(cacheKey, result);
   return result.map((step) => ({ col: step.col, row: step.row }));
+}
+
+// ============================================================================
+// 성격별 이동 속도 · 말풍선 빈도 · 머뭇거림 특성
+// ============================================================================
+
+export function getPersonalityWalkSpeedMultiplier(personalities: PersonalityId[]): number {
+  let mult = 1.0;
+  if (personalities.includes('hotblooded')) mult += 0.22;
+  if (personalities.includes('brave')) mult += 0.1;
+  if (personalities.includes('playful')) mult += 0.12;
+  if (personalities.includes('cautious')) mult -= 0.15;
+  if (personalities.includes('lone_wolf')) mult -= 0.06;
+  return Math.max(0.78, Math.min(1.32, mult));
+}
+
+export function getPersonalitySpeechCooldownMultiplier(personalities: PersonalityId[]): number {
+  if (personalities.includes('cheerful') || personalities.includes('playful')) {
+    return 0.62; // 명랑·장난기는 말풍선이 훨씬 잦음
+  }
+  if (personalities.includes('hotblooded') || personalities.includes('arrogant')) {
+    return 0.75;
+  }
+  if (personalities.includes('lone_wolf')) {
+    return 1.35; // 고독은 과묵함
+  }
+  return 1.0;
 }
 
 // ============================================================================
@@ -437,7 +452,7 @@ const DEFAULT_SITUATION_QUOTES: Record<SpeechSituation, string[]> = {
   price_good: ['오, 가격도 합리적이네!', '주인장 인심이 후하구먼!'],
   loot_price_low: ['매입 시세가 평소보다 낮네...', '조금 아쉽지만 팔아야지.'],
   loot_sold: ['전리품을 팔아 금화를 챙겼어!', '가방이 가벼워졌군!'],
-  potion_bought: ['탐험 전 포션 한 병은 필수지!', ' 든든한 비약을 챙겼어!'],
+  potion_bought: ['탐험 전 포션 한 병은 필수지!', '든든한 비약을 챙겼어!'],
   equip_bought: ['새 장비가 손에 착 감기는군!', '대장간 솜씨가 훌륭해!'],
   enhance_success: ['강화 성공! 무기가 빛난다!', '+강화 대성공이다!'],
   enhance_fail: ['으악! 장비가 깨졌지만 기본 무기가 있다!', '아깝군... 다시 단조해야지.'],
@@ -466,62 +481,225 @@ export function generateHeroSpeech(
   return pool[Math.floor(rng() * pool.length)];
 }
 
+/**
+ * 던전 전투 및 방 탐색 중 성격이 드러나는 짧은 말풍선 생성
+ */
+export function generateCombatPersonalitySpeech(
+  personalities: PersonalityId[],
+  roomType: DungeonRoomType,
+  rng: () => number
+): string {
+  const p = personalities[0] ?? 'brave';
+  if (roomType === 'treasure') {
+    if (p === 'greedy') return '보물상자는 내가 먼저 연다!';
+    if (p === 'cautious') return '자물쇠 함정부터 확인하죠.';
+    return '오호, 귀한 전리품이군!';
+  }
+  if (roomType === 'trap') {
+    if (p === 'cautious') return '멈춰! 바닥에 함정이 있소!';
+    if (p === 'playful') return '앗, 발밑 조심~ 해제 완료!';
+    return '함정을 돌파한다!';
+  }
+  if (roomType === 'rest') {
+    if (p === 'cheerful' || p === 'merciful') return '잠시 숨 돌리고 상처를 치료해요!';
+    return '모닥불에서 전열을 가다듬자.';
+  }
+  const combatQuotes: Record<PersonalityId, string[]> = {
+    brave: ['내가 선봉에서 뚫는다!', '두려워 말고 돌격하라!'],
+    cautious: ['방어 진형 유지! 빈틈을 노리죠.', '무리하지 말고 침착하게!'],
+    greedy: ['저 녀석 비싼 재료를 가진 눈치야!', '전리품은 내 차지다!'],
+    loyal: ['내 방패 뒤로 숨으시오!', '동료는 내가 지킨다!'],
+    hotblooded: ['다 부숴버려!! 크하하!', '거침없이 밀어붙여!'],
+    cheerful: ['다 같이 힘내요! 거의 다 왔어요!', '우리 파티 호흡 최고!'],
+    lone_wolf: ['...급소를 노린다.', '...단숨에 끝내지.'],
+    arrogant: ['내 화려한 기술을 똑똑히 보라고!', '이 몸 앞에선 한 주먹거리군!'],
+    merciful: ['다치지 않게 제가 엄호할게요!', '빛의 가호여, 함께하소서!'],
+    playful: ['이번 일격은 꽤 따끔할걸~?', '빈틈 발견! 얍!'],
+  };
+  const list = combatQuotes[p] ?? combatQuotes.brave;
+  return list[Math.floor(rng() * list.length)];
+}
+
 // ============================================================================
-// 던전 층별 몬스터 & 보스 생성기 (카이로소프트풍 층별 전투 연출용)
+// 직업별 전투 기술(Class Combat Skills) 정의
 // ============================================================================
 
-const DUNGEON_MONSTER_THEMES: Record<
-  string,
-  {
-    minionName: string;
-    eliteName: string;
-    bossName: string;
-    sprite: MonsterSpriteType;
-  }
-> = {
-  dungeon_slime: {
-    minionName: '초록 동굴 슬라임',
-    eliteName: '맹독 바위 슬라임',
-    bossName: '👑 대왕 젤리 슬라임',
-    sprite: 'slime',
+export interface ClassSkillDef {
+  classId: HeroClassId;
+  skillName: string;
+  shortLabel: string;
+  icon: string;
+  visualKind: SkillVisualKind;
+  color: string;
+  isAoe?: boolean;
+  isHeal?: boolean;
+  isShield?: boolean;
+}
+
+export const CLASS_COMBAT_SKILLS: Record<HeroClassId, ClassSkillDef> = {
+  warrior: {
+    classId: 'warrior',
+    skillName: '강철 도발 & 방패 막기',
+    shortLabel: '🛡️도발·방벽',
+    icon: '🛡️',
+    visualKind: 'shield_taunt',
+    color: '#78b2bf',
+    isShield: true,
   },
-  dungeon_goblin: {
-    minionName: '고블린 정찰병',
-    eliteName: '고블린 철갑 투사',
-    bossName: '👑 고블린 족장 그룩',
-    sprite: 'goblin',
+  paladin: {
+    classId: 'paladin',
+    skillName: '태양의 성광 수호',
+    shortLabel: '✨성광방패',
+    icon: '✨',
+    visualKind: 'holy_barrier',
+    color: '#ebd186',
+    isShield: true,
+    isHeal: true,
   },
-  dungeon_shadow_forest: {
-    minionName: '그림자 늑대',
-    eliteName: '고대 덩굴 망령',
-    bossName: '👑 안개 숲의 알파 펜리르',
-    sprite: 'wolf',
+  rogue: {
+    classId: 'rogue',
+    skillName: '그림자 급소 일격',
+    shortLabel: '🗡️급소치명타',
+    icon: '🗡️',
+    visualKind: 'crit_slash',
+    color: '#e09f67',
   },
-  dungeon_ruined_tower: {
-    minionName: '룬 경비 골렘',
-    eliteName: '비전 마력 구체',
-    bossName: '👑 별빛 아크골렘 수호자',
-    sprite: 'golem',
+  archer: {
+    classId: 'archer',
+    skillName: '엘프 관통 바람화살',
+    shortLabel: '🏹관통화살',
+    icon: '🏹',
+    visualKind: 'arrow_shot',
+    color: '#7eb38a',
   },
-  dungeon_dwarf_mine: {
-    minionName: '광산 동굴 트롤',
-    eliteName: '용암 강철 기갑병',
-    bossName: '👑 미스릴 거신 크라그',
-    sprite: 'troll',
+  mage: {
+    classId: 'mage',
+    skillName: '별빛 유성 범위 폭격',
+    shortLabel: '🔮범위마법',
+    icon: '🔮',
+    visualKind: 'aoe_magic',
+    color: '#b592c9',
+    isAoe: true,
   },
-  dungeon_abyss_sanctum: {
-    minionName: '타락한 성소 기사',
-    eliteName: '심연의 암흑 집행관',
-    bossName: '👑 심연의 대심판관 발타자르',
-    sprite: 'knight',
+  cleric: {
+    classId: 'cleric',
+    skillName: '성스러운 치유의 빛',
+    shortLabel: '💚성광치유',
+    icon: '💚',
+    visualKind: 'heal_light',
+    color: '#7eb38a',
+    isHeal: true,
   },
-  dungeon_dragon_lair: {
-    minionName: '화산 화염 드레이크',
-    eliteName: '홍련의 용인 근위병',
-    bossName: '👑 고대 화룡 이그니우스',
-    sprite: 'dragon',
+  berserker: {
+    classId: 'berserker',
+    skillName: '광란의 회전 도끼참격',
+    shortLabel: '🪓광풍참격',
+    icon: '🪓',
+    visualKind: 'cleave_axe',
+    color: '#c7635b',
+    isAoe: true,
+  },
+  dwarf_mercenary: {
+    classId: 'dwarf_mercenary',
+    skillName: '미스릴 철벽 & 대지강타',
+    shortLabel: '⚒️미스릴철벽',
+    icon: '⚒️',
+    visualKind: 'iron_wall',
+    color: '#d6964d',
+    isShield: true,
+  },
+  traveler: {
+    classId: 'traveler',
+    skillName: '바람길 전술 독려',
+    shortLabel: '🧭전술독려',
+    icon: '🧭',
+    visualKind: 'rally_buff',
+    color: '#ebd186',
   },
 };
+
+// ============================================================================
+// 갈래 있는 던전 층/방 그래프 생성기 & 이벤트 선택지 풀
+// ============================================================================
+
+export const ROOM_TYPE_META: Record<
+  DungeonRoomType,
+  { label: string; icon: string; color: string }
+> = {
+  combat: { label: '전투방', icon: '⚔️', color: '#d4bfa8' },
+  treasure: { label: '보물방', icon: '🎁', color: '#ebd186' },
+  trap: { label: '함정방', icon: '⚙️', color: '#e09f67' },
+  rest: { label: '모닥불 휴식', icon: '🏕️', color: '#7eb38a' },
+  event: { label: '미지의 이벤트', icon: '❓', color: '#78b2bf' },
+  elite: { label: '정예 수호자', icon: '💀', color: '#c7635b' },
+  boss: { label: '계층 보스방', icon: '👑', color: '#ebd186' },
+};
+
+export const DUNGEON_ROOM_EVENTS: DungeonEventChoiceDef[] = [
+  {
+    id: 'ev_ancient_statue',
+    title: '🗿 고대 수호자의 이끼 낀 석상',
+    description: '갈래길 한가운데서 희미한 마력을 뿜어내는 고대 석상과 보석함을 발견했습니다.',
+    options: [
+      {
+        id: 'pray',
+        label: '🙏 경건히 기도 올리기',
+        effectText: '파티 전원 HP 25% 회복',
+        kind: 'heal',
+      },
+      {
+        id: 'gem',
+        label: '💎 석상 밑 보석함 열기',
+        effectText: '파티 보너스 골드 +24G 획득',
+        kind: 'gold',
+      },
+      {
+        id: 'absorb',
+        label: '⚔️ 석상의 투기 흡수',
+        effectText: '이번 원정 전투 사기·화력 상승',
+        kind: 'buff_atk',
+      },
+    ],
+  },
+  {
+    id: 'ev_alchemist_spring',
+    title: '⛲ 발광하는 지하 연금 샘물',
+    description: '맑은 마력 샘물 주변에 희귀한 던전 약초와 광석이 자라나고 있습니다.',
+    options: [
+      {
+        id: 'drink',
+        label: '🧪 샘물 마시고 숨 돌리기',
+        effectText: '파티 전원 HP 30% 회복',
+        kind: 'heal',
+      },
+      {
+        id: 'harvest',
+        label: '🌿 주변 희귀 전리품 채집',
+        effectText: '현재 던전 전리품 즉시 +1개 획득',
+        kind: 'loot',
+      },
+    ],
+  },
+  {
+    id: 'ev_lost_cart',
+    title: '🛒 버려진 탐사대의 보급 수레',
+    description: '이전 모험가들이 남겨둔 보급 수레와 비밀 지름길 지도가 놓여 있습니다.',
+    options: [
+      {
+        id: 'salvage',
+        label: '🎒 보급품 상자 수색하기',
+        effectText: '전리품 +1개 & 금화 +15G 획득',
+        kind: 'loot',
+      },
+      {
+        id: 'shortcut',
+        label: '🗺️ 지름길 통로로 진입',
+        effectText: '남은 층 돌파 속도 가속 (-4초)',
+        kind: 'haste',
+      },
+    ],
+  },
+];
 
 export function getDungeonTotalFloors(dungeon: DungeonDef): number {
   if (dungeon.tier <= 2) return 3;
@@ -529,14 +707,194 @@ export function getDungeonTotalFloors(dungeon: DungeonDef): number {
   return 5;
 }
 
+/**
+ * 시드/난수 기반으로 매 원정마다 조금씩 다른 갈래 방(2갈래 분기) 구조를 생성합니다.
+ * 1층: 입구 전투방 (1개)
+ * 중간층(2 ~ N-1층): 매 층마다 상단/하단 2개의 갈래 방 (전투, 보물, 함정, 휴식, 이벤트, 정예 조합)
+ * 최종층(N층): 보스방 (1개)
+ */
+export function createDungeonRoomGraph(
+  dungeon: DungeonDef,
+  rng: () => number
+): DungeonRoomNode[][] {
+  const totalFloors = getDungeonTotalFloors(dungeon);
+  const graph: DungeonRoomNode[][] = [];
+
+  const midRoomPools: DungeonRoomType[][] = [
+    ['combat', 'treasure'],
+    ['trap', 'event'],
+    ['elite', 'rest'],
+    ['treasure', 'combat'],
+    ['event', 'elite'],
+    ['rest', 'trap'],
+  ];
+
+  for (let f = 1; f <= totalFloors; f++) {
+    if (f === 1) {
+      graph.push([
+        {
+          id: `f1_b0`,
+          floor: 1,
+          branchIndex: 0,
+          type: 'combat',
+          label: '1F 전초전',
+          icon: '⚔️',
+          nextIds: totalFloors > 1 ? ['f2_b0', 'f2_b1'] : [],
+        },
+      ]);
+    } else if (f === totalFloors) {
+      graph.push([
+        {
+          id: `f${f}_b0`,
+          floor: f,
+          branchIndex: 0,
+          type: 'boss',
+          label: `${f}F 보스방`,
+          icon: '👑',
+          nextIds: [],
+        },
+      ]);
+    } else {
+      const pair =
+        midRoomPools[Math.floor(rng() * midRoomPools.length)] ??
+        midRoomPools[0];
+      const flip = rng() < 0.5;
+      const typeA: DungeonRoomType = flip ? pair[1] : pair[0];
+      const typeB: DungeonRoomType = flip ? pair[0] : pair[1];
+      const metaA = ROOM_TYPE_META[typeA];
+      const metaB = ROOM_TYPE_META[typeB];
+      const nextFloor = f + 1;
+      const nextIds =
+        nextFloor === totalFloors
+          ? [`f${nextFloor}_b0`]
+          : [`f${nextFloor}_b0`, `f${nextFloor}_b1`];
+
+      graph.push([
+        {
+          id: `f${f}_b0`,
+          floor: f,
+          branchIndex: 0,
+          type: typeA,
+          label: `${f}F ${metaA.label}`,
+          icon: metaA.icon,
+          nextIds,
+        },
+        {
+          id: `f${f}_b1`,
+          floor: f,
+          branchIndex: 1,
+          type: typeB,
+          label: `${f}F ${metaB.label}`,
+          icon: metaB.icon,
+          nextIds,
+        },
+      ]);
+    }
+  }
+
+  return graph;
+}
+
+// ============================================================================
+// 던전 층별 몬스터 & 행동 특성 생성기
+// ============================================================================
+
+const DUNGEON_MONSTER_THEMES: Record<
+  string,
+  {
+    minionName: string;
+    minionBehavior: MonsterBehaviorType;
+    eliteName: string;
+    eliteBehavior: MonsterBehaviorType;
+    bossName: string;
+    bossBehavior: MonsterBehaviorType;
+    sprite: MonsterSpriteType;
+  }
+> = {
+  dungeon_slime: {
+    minionName: '초록 무리 슬라임',
+    minionBehavior: 'swarm',
+    eliteName: '맹독 산성 슬라임',
+    eliteBehavior: 'poison',
+    bossName: '👑 대왕 젤리 슬라임',
+    bossBehavior: 'heavy',
+    sprite: 'slime',
+  },
+  dungeon_goblin: {
+    minionName: '고블린 단검 무리',
+    minionBehavior: 'swarm',
+    eliteName: '고블린 독화살 저격수',
+    eliteBehavior: 'ranged',
+    bossName: '👑 고블린 돌격족장 그룩',
+    bossBehavior: 'charge',
+    sprite: 'goblin',
+  },
+  dungeon_shadow_forest: {
+    minionName: '그림자 돌진 늑대',
+    minionBehavior: 'charge',
+    eliteName: '고대 맹독 덩굴망령',
+    eliteBehavior: 'poison',
+    bossName: '👑 안개 숲의 알파 펜리르',
+    bossBehavior: 'charge',
+    sprite: 'wolf',
+  },
+  dungeon_ruined_tower: {
+    minionName: '룬 비전 포격구체',
+    minionBehavior: 'ranged',
+    eliteName: '강철 마력 수호골렘',
+    eliteBehavior: 'heavy',
+    bossName: '👑 별빛 아크골렘 수호자',
+    bossBehavior: 'ranged',
+    sprite: 'golem',
+  },
+  dungeon_dwarf_mine: {
+    minionName: '광산 돌격 트롤',
+    minionBehavior: 'charge',
+    eliteName: '용암 화염방사 기갑병',
+    eliteBehavior: 'ranged',
+    bossName: '👑 미스릴 거신 크라그',
+    bossBehavior: 'heavy',
+    sprite: 'troll',
+  },
+  dungeon_abyss_sanctum: {
+    minionName: '타락한 성소 돌격기사',
+    minionBehavior: 'charge',
+    eliteName: '심연의 저주 마도관',
+    eliteBehavior: 'poison',
+    bossName: '👑 심연의 대심판관 발타자르',
+    bossBehavior: 'heavy',
+    sprite: 'knight',
+  },
+  dungeon_dragon_lair: {
+    minionName: '화산 화염 드레이크',
+    minionBehavior: 'charge',
+    eliteName: '홍련의 화염구 술사',
+    eliteBehavior: 'ranged',
+    bossName: '👑 고대 화룡 이그니우스',
+    bossBehavior: 'heavy',
+    sprite: 'dragon',
+  },
+};
+
+export const MONSTER_BEHAVIOR_LABELS: Record<MonsterBehaviorType, string> = {
+  charge: '🐗돌진',
+  ranged: '🏹원거리',
+  poison: '🧪맹독',
+  swarm: '🐾무리',
+  heavy: '🔥강타/브레스',
+};
+
 export function createFloorMonsters(
   dungeon: DungeonDef,
   floor: number,
-  totalFloors: number
+  totalFloors: number,
+  roomType: DungeonRoomType = 'combat'
 ): ExpeditionMonsterUnit[] {
   const theme =
     DUNGEON_MONSTER_THEMES[dungeon.id] ?? DUNGEON_MONSTER_THEMES.dungeon_slime;
-  const isBossFloor = floor >= totalFloors;
+  const isBossFloor = floor >= totalFloors || roomType === 'boss';
+  const isEliteRoom = roomType === 'elite';
+
   const baseHp = Math.round(
     (dungeon.requiredStats.hp * 0.42 + dungeon.recommendedPower * 0.45) *
       (0.75 + (floor / totalFloors) * 0.45)
@@ -555,6 +913,8 @@ export function createFloorMonsters(
         id: `${dungeon.id}_f${floor}_boss`,
         name: theme.bossName,
         spriteType: theme.sprite,
+        behavior: theme.bossBehavior,
+        behaviorLabel: MONSTER_BEHAVIOR_LABELS[theme.bossBehavior],
         maxHp: Math.round(baseHp * 1.45),
         currentHp: Math.round(baseHp * 1.45),
         atk: Math.round(baseAtk * 1.25),
@@ -566,9 +926,44 @@ export function createFloorMonsters(
         id: `${dungeon.id}_f${floor}_guard`,
         name: theme.eliteName,
         spriteType: theme.sprite,
+        behavior: theme.eliteBehavior,
+        behaviorLabel: MONSTER_BEHAVIOR_LABELS[theme.eliteBehavior],
         maxHp: Math.round(baseHp * 0.65),
         currentHp: Math.round(baseHp * 0.65),
         atk: Math.round(baseAtk * 0.8),
+        isBoss: false,
+        isElite: true,
+        hitFlashTimer: 0,
+        lungeTimer: 0,
+      },
+    ];
+  }
+
+  if (isEliteRoom) {
+    return [
+      {
+        id: `${dungeon.id}_f${floor}_elite1`,
+        name: `💀 ${theme.eliteName}`,
+        spriteType: theme.sprite,
+        behavior: theme.eliteBehavior,
+        behaviorLabel: MONSTER_BEHAVIOR_LABELS[theme.eliteBehavior],
+        maxHp: Math.round(baseHp * 1.05),
+        currentHp: Math.round(baseHp * 1.05),
+        atk: Math.round(baseAtk * 1.1),
+        isBoss: false,
+        isElite: true,
+        hitFlashTimer: 0,
+        lungeTimer: 0,
+      },
+      {
+        id: `${dungeon.id}_f${floor}_m2`,
+        name: theme.minionName,
+        spriteType: theme.sprite,
+        behavior: theme.minionBehavior,
+        behaviorLabel: MONSTER_BEHAVIOR_LABELS[theme.minionBehavior],
+        maxHp: Math.round(baseHp * 0.65),
+        currentHp: Math.round(baseHp * 0.65),
+        atk: Math.round(baseAtk * 0.85),
         isBoss: false,
         hitFlashTimer: 0,
         lungeTimer: 0,
@@ -582,10 +977,16 @@ export function createFloorMonsters(
       id: `${dungeon.id}_f${floor}_m1`,
       name: isMidFloor ? theme.eliteName : theme.minionName,
       spriteType: theme.sprite,
+      behavior: isMidFloor ? theme.eliteBehavior : theme.minionBehavior,
+      behaviorLabel:
+        MONSTER_BEHAVIOR_LABELS[
+          isMidFloor ? theme.eliteBehavior : theme.minionBehavior
+        ],
       maxHp: Math.round(baseHp * 0.8),
       currentHp: Math.round(baseHp * 0.8),
       atk: baseAtk,
       isBoss: false,
+      isElite: isMidFloor,
       hitFlashTimer: 0,
       lungeTimer: 0,
     },
@@ -593,6 +994,8 @@ export function createFloorMonsters(
       id: `${dungeon.id}_f${floor}_m2`,
       name: theme.minionName,
       spriteType: theme.sprite,
+      behavior: theme.minionBehavior,
+      behaviorLabel: MONSTER_BEHAVIOR_LABELS[theme.minionBehavior],
       maxHp: Math.round(baseHp * 0.65),
       currentHp: Math.round(baseHp * 0.65),
       atk: Math.round(baseAtk * 0.85),

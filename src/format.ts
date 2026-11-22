@@ -47,7 +47,17 @@ export function formatKoreanNumber(value: number, allowDecimalUnderTen = false):
  * 골드 표시용 (정수 기준, 1만 이상은 만/억/조 단위)
  */
 export function formatGold(value: number): string {
+  if (!Number.isFinite(value)) return '0';
+  if (value < 0) {
+    return `-${formatKoreanNumber(Math.floor(Math.abs(value)), false)}`;
+  }
   return formatKoreanNumber(Math.floor(value), false);
+}
+
+export function formatSignedGold(value: number): string {
+  if (!Number.isFinite(value)) return '0';
+  const sign = value > 0 ? '+' : value < 0 ? '-' : '';
+  return `${sign}${formatKoreanNumber(Math.floor(Math.abs(value)), false)}`;
 }
 
 /**
