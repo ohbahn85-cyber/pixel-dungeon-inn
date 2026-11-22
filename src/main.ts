@@ -581,6 +581,13 @@ class InnAppController {
       `;
     }
 
+    const closeBtn = document.getElementById('btn-close-daily-report');
+    if (closeBtn) {
+      closeBtn.textContent = isEndOfDay
+        ? '🌅 확인하고 다음 날 영업 시작하기'
+        : '✅ 장부 확인하고 영업 계속하기';
+    }
+
     this.elDailyReportModal.classList.remove('hidden');
   }
 
