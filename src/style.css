@@ -1035,6 +1035,27 @@ body {
   padding: 12px 0;
 }
 
+.credits-box {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid #3a2f28;
+  color: #8a7a6a;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.credits-box p {
+  margin: 0 0 4px;
+  color: #a09080;
+}
+.credits-box ul {
+  margin: 0;
+  padding-left: 16px;
+}
+.credits-box a {
+  color: #c4a882;
+  text-decoration: none;
+}
+
 .empty-hint {
   text-align: center;
   padding: 16px;

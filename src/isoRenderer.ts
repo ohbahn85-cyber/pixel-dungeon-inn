@@ -4,6 +4,7 @@ import {
   PixelSpriteAtlas,
   createPixelSpriteAtlas,
 } from './pixelSprites';
+import { getArt } from './artAtlas';
 import {
   DUNGEON_DOOR,
   ENTRANCE,
@@ -25,12 +26,12 @@ import {
 export { ROOM_ZONES, getZoneName };
 export type { RoomZone };
 
-const WORLD_W = 384;
-const WORLD_H = 256;
-const TILE_W = 24;
-const TILE_H = 12;
-const ORIGIN_X = 192;
-const ORIGIN_Y = 50;
+const WORLD_W = 416;
+const WORLD_H = 288;
+const TILE_W = 32;
+const TILE_H = 16;
+const ORIGIN_X = 208;
+const ORIGIN_Y = 44;
 
 type PropBlit = {
   sprite: HTMLCanvasElement;
@@ -38,6 +39,8 @@ type PropBlit = {
   gy: number;
   gz?: number;
   occlude?: boolean;
+  billboard?: boolean;
+  scale?: number;
 };
 
 type DrawItem = {
@@ -251,45 +254,63 @@ export class IsoRenderer {
     for (const pop of pops) this.drawFloatingPopScreen(pop);
   }
 
-  private blitTile(atlas: PixelSpriteAtlas, gx: number, gy: number): void {
-    const checker = (gx + gy) % 2 === 0;
-    let spr = checker ? atlas.tiles.innLight : atlas.tiles.innDark;
+  private fillIsoDiamond(x: number, y: number, color: string): void {
+    const ctx = this.worldCtx;
+    ctx.beginPath();
+    ctx.moveTo(x, y - TILE_H / 2);
+    ctx.lineTo(x + TILE_W / 2, y);
+    ctx.lineTo(x, y + TILE_H / 2);
+    ctx.lineTo(x - TILE_W / 2, y);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
 
-    // 복도와 출입 동선의 패인 마루 (직사각 러그가 아님)
+  private blitTile(atlas: PixelSpriteAtlas, gx: number, gy: number): void {
+    const art = getArt();
+    const checker = (gx + gy) % 2 === 0;
+    const p = this.isoToWorld(gx, gy, 0);
+
     const worn =
       ((gx === 6 || gx === 7) && gy >= 2 && gy <= 12) ||
       (gx === 5 && gy >= 3 && gy <= 6) ||
-      (gx === 8 && (gy === 2 || gy === 3 || gy === 8 || gy === 9)) ||
-      (gx === 3 && gy === 3) ||
-      (gx === 4 && gy === 8);
-    // 대장간 석재는 용광로 주변만 불규칙하게
+      (gx === 8 && (gy === 2 || gy === 3 || gy === 8 || gy === 9));
     const smithPad =
       (gx >= 9 && gx <= 11 && gy >= 1 && gy <= 2) ||
       (gx === 9 && gy === 3) ||
-      (gx === 8 && gy === 1) ||
-      (gx === 10 && gy === 3);
-    // 식탁 아래 겹치는 작은 러그
+      (gx === 8 && gy === 1);
     const diningRug =
       (gx === 4 && (gy === 3 || gy === 4)) ||
       (gx === 3 && gy === 4) ||
       (gx === 5 && gy === 4);
-    // 가마솥 발치만 차가운 석판
     const potionRug = (gx === 3 && (gy === 9 || gy === 10)) || (gx === 2 && gy === 9);
-    // 상점 카운터와 현관으로 이어지는 러너
     const tradeRug =
       (gx === 8 && (gy === 9 || gy === 10)) ||
       (gx === 9 && gy === 10) ||
       (gx === 7 && gy === 11);
-    const mat = (gx === 6 || gx === 7) && gy >= 11 && gy <= 12;
 
+    if (art) {
+      // 22열은 투명한 벽 타일이라 구멍을 낸다. 바닥은 불투명 나무/석재만 쓴다.
+      const base = smithPad
+        ? (checker ? '#6a5a4e' : '#5a4c42')
+        : (checker ? '#c9844a' : '#b6753f');
+      this.fillIsoDiamond(p.x, p.y, base);
+      let spr;
+      if (smithPad) spr = art.iso('caves', checker ? 9 : 10, 5);
+      else if (worn) spr = art.iso('indoor', checker ? 23 : 24, 2);
+      else spr = art.iso('indoor', checker ? 23 : 24, 1);
+      this.worldCtx.imageSmoothingEnabled = false;
+      this.worldCtx.drawImage(spr, Math.round(p.x - spr.width / 2), Math.round(p.y - TILE_H / 2));
+      return;
+    }
+
+    // 폴백: 예전 코드 그린 타일
+    let spr = checker ? atlas.tiles.innLight : atlas.tiles.innDark;
     if (smithPad) spr = checker ? atlas.tiles.bsLight : atlas.tiles.bsDark;
     else if (diningRug) spr = checker ? atlas.tiles.innCarpetLight : atlas.tiles.innCarpetDark;
     else if (potionRug) spr = checker ? atlas.tiles.potLight : atlas.tiles.potDark;
     else if (tradeRug) spr = checker ? atlas.tiles.tradeLight : atlas.tiles.tradeDark;
-    else if (mat) spr = checker ? atlas.tiles.corridorDark : atlas.tiles.innDark;
     else if (worn) spr = checker ? atlas.tiles.innWornLight : atlas.tiles.innWornDark;
-
-    const p = this.isoToWorld(gx, gy, 0);
     this.worldCtx.drawImage(spr, Math.round(p.x - TILE_W / 2), Math.round(p.y - TILE_H / 2));
   }
 
@@ -414,6 +435,8 @@ export class IsoRenderer {
     const cauldron = a.potCauldron[frame % a.potCauldron.length];
     const torch = a.wallTorch[torchFrame];
     const candle = a.candleFrames[candleFrame];
+    const art = getArt();
+    if (art) return this.collectKenneyProps(art, a, frame, torchFrame);
     const list: PropBlit[] = [
       // —— 식당·부엌: 벽난로+선반 바, 각도 있는 식탁 ——
       { sprite: hearth, gx: 2.15, gy: 1.08, gz: 4, occlude: true },
@@ -521,6 +544,104 @@ export class IsoRenderer {
     return list;
   }
 
+
+  private collectKenneyProps(
+    art: NonNullable<ReturnType<typeof getArt>>,
+    a: PixelSpriteAtlas['props'],
+    frame: number,
+    torchFrame: number
+  ): PropBlit[] {
+    const iso = (
+      sheet: 'indoor' | 'rpg' | 'caves' | 'tiny',
+      c: number, r: number, w = 1, h = 1,
+      gx = 0, gy = 0, occlude = true
+    ): PropBlit => ({
+      sprite: art.iso(sheet, c, r, w, h),
+      gx, gy, gz: 1, occlude, billboard: false,
+    });
+    const bill = (
+      sheet: 'indoor' | 'rpg' | 'caves' | 'tiny',
+      c: number, r: number, w = 1, h = 1,
+      gx = 0, gy = 0, gz = 1, occlude = true, scale = 1
+    ): PropBlit => ({
+      sprite: art.slice(sheet, c, r, w, h),
+      gx, gy, gz, occlude, billboard: true, scale,
+    });
+    const spr = (
+      sprite: HTMLCanvasElement, gx: number, gy: number, gz = 1, occlude = false, scale = 1
+    ): PropBlit => ({ sprite, gx, gy, gz, occlude, billboard: true, scale });
+
+    const list: PropBlit[] = [
+      // 식당: 벽 쪽 바와 의자, 식탁, 화덕
+      iso('indoor', 3, 8, 3, 1, 1.55, 3.35),
+      iso('indoor', 3, 7, 2, 1, 1.55, 4.15),
+      iso('indoor', 0, 3, 1, 1, 2.28, 2.62),
+      iso('indoor', 1, 3, 1, 1, 2.32, 3.52),
+      iso('indoor', 2, 3, 1, 1, 2.12, 4.48),
+      iso('indoor', 0, 0, 2, 2, 4.4, 3.55),
+      iso('indoor', 0, 9, 1, 1, 4.4, 3.7, false),
+      iso('indoor', 0, 4, 1, 1, 3.58, 3.22),
+      iso('indoor', 1, 4, 1, 1, 5.2, 3.3),
+      iso('indoor', 2, 4, 1, 1, 4.08, 4.42),
+      iso('indoor', 0, 5, 1, 1, 5.1, 4.2),
+      iso('indoor', 3, 0, 2, 1, 5.55, 1.88),
+      iso('indoor', 2, 5, 1, 1, 5.95, 2.48),
+      bill('indoor', 0, 12, 2, 1, 1.45, 1.15, 6, true, 2),
+      bill('indoor', 4, 12, 2, 1, 1.55, 1.55, 6, true, 2),
+      bill('rpg', 13, 0, 1, 1, 2.15, 1.05, 8, true, 2),
+      bill('rpg', 19, 7, 1, 1, 1.2, 1.15, 16, false, 2),
+      iso('indoor', 4, 5, 2, 1, 3.15, 5.22),
+      iso('caves', 8, 16, 1, 1, 1.22, 5.15),
+      bill('indoor', 18, 0, 1, 1, 5.75, 5.55, 3, true, 2),
+      bill('indoor', 19, 1, 1, 2, 4.35, 3.35, 12, false, 1),
+      spr(a.noticeBoard, 3.35, 0.88, 16, false),
+      spr(a.roomSigns.inn, 4.2, 0.85, 16, false),
+
+      // 대장간
+      bill('tiny', 4, 2, 1, 1, 9.35, 1.2, 4, true, 2),
+      bill('rpg', 17, 7, 1, 1, 10.15, 1.15, 3, true, 2),
+      iso('caves', 8, 16, 1, 1, 8.42, 2.88),
+      bill('tiny', 7, 8, 1, 1, 11.25, 1.15, 8, true, 2),
+      bill('tiny', 9, 8, 1, 1, 11.5, 1.55, 8, true, 2),
+      bill('tiny', 9, 9, 1, 1, 11.35, 2.05, 8, true, 2),
+      iso('caves', 8, 16, 1, 1, 11.05, 4.18),
+      iso('caves', 9, 16, 1, 1, 11.28, 4.98),
+      bill('rpg', 19, 7, 1, 1, 7.85, 1.12, 16, false, 2),
+      spr(a.roomSigns.blacksmith, 10.4, 0.85, 16, false),
+
+      // 포션 공방: 세운 선반, 가마솥
+      bill('indoor', 4, 12, 2, 1, 1.35, 8.15, 6, true, 2),
+      bill('indoor', 6, 12, 2, 1, 1.35, 9.5, 6, true, 2),
+      bill('indoor', 4, 14, 2, 1, 1.35, 10.8, 6, true, 2),
+      iso('indoor', 4, 9, 1, 1, 3.1, 9.5, false),
+      bill('tiny', 2, 6, 1, 1, 3.15, 9.6, 4, true, 2),
+      bill('tiny', 6, 9, 1, 1, 4.45, 11.05, 4, true, 2),
+      bill('tiny', 7, 9, 1, 1, 2.15, 8.25, 14, false, 2),
+      bill('tiny', 8, 9, 1, 1, 1.55, 11.2, 14, false, 2),
+      bill('indoor', 17, 0, 1, 1, 4.85, 8.15, 3, true, 2),
+      spr(a.roomSigns.potion, 1.45, 7.15, 14, false),
+
+      // 교역소
+      iso('indoor', 3, 8, 3, 1, 8.7, 9.45),
+      iso('indoor', 2, 9, 1, 1, 8.8, 9.8, false),
+      iso('tiny', 5, 6, 1, 1, 10.9, 9.1),
+      iso('tiny', 6, 6, 1, 1, 11.25, 10.35),
+      iso('caves', 8, 16, 1, 1, 11.15, 8.05),
+      bill('tiny', 10, 2, 1, 1, 6.5, 12.05, 2, true, 2),
+      bill('indoor', 18, 0, 1, 1, 9.15, 11.25, 3, true, 2),
+      bill('rpg', 19, 7, 1, 1, 8.7, 9.15, 14, false, 2),
+      spr(a.roomSigns.trade, 7.55, 11.32, 8, false),
+
+      // 사다리(다락 쪽)
+      bill('tiny', 7, 6, 1, 2, 2.15, 6.15, 4, true, 2),
+      bill('indoor', 19, 1, 1, 2, 1.7, 3.3, 12, false, 1),
+    ];
+
+    void frame;
+    void torchFrame;
+    return list;
+  }
+
   private blitProp(p: PropBlit): void {
     const pos = this.isoToWorld(p.gx, p.gy, p.gz ?? 0);
     if ((p.gz ?? 0) < 8 && p.occlude) {
@@ -535,9 +656,15 @@ export class IsoRenderer {
         }
       }
     }
-    const x = Math.round(pos.x - p.sprite.width / 2);
-    const y = Math.round(pos.y - p.sprite.height + 6);
-    this.worldCtx.drawImage(p.sprite, x, y);
+    const scale = p.scale ?? 1;
+    const w = p.sprite.width * scale;
+    const h = p.sprite.height * scale;
+    const x = Math.round(pos.x - w / 2);
+    const y = p.billboard
+      ? Math.round(pos.y - h + 6)
+      : Math.round(pos.y - h * 0.55);
+    this.worldCtx.imageSmoothingEnabled = false;
+    this.worldCtx.drawImage(p.sprite, 0, 0, p.sprite.width, p.sprite.height, x, y, w, h);
   }
 
   private actorArchetype(actor: MapActor): ActorArchetypeId {
@@ -561,6 +688,19 @@ export class IsoRenderer {
     const state = this.animState(actor);
     const speed = state === 'walk' ? 8 : state === 'work' ? 7 : 3;
     const frame = Math.floor(timeSec * speed + actor.bouncePhase) & 3;
+    const art = getArt();
+    const pos = this.isoToWorld(actor.gridX, actor.gridY, 2);
+    if (art) {
+      const kind = this.actorArchetype(actor);
+      const spr = art.character(kind, actor.facing, frame);
+      const scale = 2;
+      const x = Math.round(pos.x - (spr.width * scale) / 2);
+      const bob = state === 'walk' ? (frame & 1) : 0;
+      const y = Math.round(pos.y - spr.height * scale + 6 - bob);
+      this.worldCtx.imageSmoothingEnabled = false;
+      this.worldCtx.drawImage(spr, 0, 0, spr.width, spr.height, x, y, spr.width * scale, spr.height * scale);
+      return;
+    }
     const spr = atlas.getCharacterSprite(
       this.actorArchetype(actor),
       state,
@@ -568,7 +708,6 @@ export class IsoRenderer {
       frame,
       actor.weaponType
     );
-    const pos = this.isoToWorld(actor.gridX, actor.gridY, 2);
     const x = Math.round(pos.x - spr.width / 2);
     const y = Math.round(pos.y - spr.height + 4);
     this.worldCtx.drawImage(spr, x, y);

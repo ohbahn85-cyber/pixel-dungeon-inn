@@ -11,6 +11,8 @@ import {
   WEAPON_TYPE_META,
 } from './data';
 import { IsoRenderer } from './isoRenderer';
+import { loadArt } from './artAtlas';
+import { installKenneyReels } from './assetReels';
 import { DungeonRenderer } from './dungeonRenderer';
 import { HERO_WAYPOINTS, STAFF_HOME, findPath, nearestWalkable } from './innMap';
 import {
@@ -186,6 +188,13 @@ class KairoSlotInnApp {
     this.bindUIEvents();
     this.updateTopHud();
     this.syncExpeditionChip();
+
+    try {
+      const art = await loadArt();
+      installKenneyReels(art);
+    } catch (err) {
+      console.warn('아트 팩을 불러오지 못해 기본 그림을 씁니다', err);
+    }
 
     if (new URLSearchParams(location.search).has('shot')) {
       (window as unknown as { __game: unknown }).__game = this.shotApi();
@@ -1544,6 +1553,16 @@ class KairoSlotInnApp {
           <input type="file" id="input-import-json" accept=".json" style="display:none;" />
         </label>
         <button id="btn-reset-save" class="kairo-btn-discard">새로 시작</button>
+      </div>
+      <div class="credits-box">
+        <p>도트 에셋 · 전부 CC0</p>
+        <ul>
+          <li>Kenney Vleugels · Roguelike Indoor · <a href="https://kenney.nl" target="_blank" rel="noreferrer">kenney.nl</a></li>
+          <li>Kenney · Lynn Evers · Roguelike / RPG · <a href="https://kenney.nl" target="_blank" rel="noreferrer">kenney.nl</a></li>
+          <li>Kenney · Roguelike Caves · <a href="https://kenney.nl" target="_blank" rel="noreferrer">kenney.nl</a></li>
+          <li>Kenney · Tiny Dungeon · <a href="https://kenney.nl" target="_blank" rel="noreferrer">kenney.nl</a></li>
+          <li>Kenney · Lynn Evers · Pixel UI · <a href="https://kenney.nl" target="_blank" rel="noreferrer">kenney.nl</a></li>
+        </ul>
       </div>
     `;
   }
