@@ -17,7 +17,6 @@ import {
   THEME_FLOOR,
   THEME_PARTICLE,
 } from './dungeonArt';
-import { getArt } from './artAtlas';
 
 const WORLD_W = 320;
 const WORLD_H = 180;
@@ -501,38 +500,6 @@ export class DungeonRenderer {
 
   private drawFloor(theme: ThemeId): void {
     const ctx = this.wctx;
-    const art = getArt();
-    if (art) {
-      const tw = 32;
-      const th = 16;
-      const originX = 160;
-      const originY = 86;
-      for (let gy = 0; gy < 8; gy++) {
-        for (let gx = 0; gx < 10; gx++) {
-          const sx = originX + (gx - gy) * (tw / 2);
-          const sy = originY + (gx + gy) * (th / 2);
-          if (sy < 70 || sy > 175 || sx < -24 || sx > 344) continue;
-          const v = (gx * 3 + gy * 5) % 4;
-          let spr;
-          if (theme === 'dungeon_1') {
-            spr = art.iso('rpg', v === 0 ? 5 : 5, v === 2 ? 1 : 0);
-            if (v === 3) spr = art.iso('rpg', 6, 1);
-          } else if (theme === 'dungeon_2') {
-            spr = art.iso('caves', 9 + (v % 3), v < 2 ? 0 : 1);
-            if (v === 3) spr = art.iso('caves', 1, 10);
-          } else if (theme === 'dungeon_3') {
-            spr = art.iso('caves', 9 + (v % 3), 5);
-            if (v === 0) spr = art.isoTint('caves', 9, 4, 1, 1, 35, 1.15, 1.08);
-          } else {
-            spr = art.isoTint('caves', 9 + (v % 3), 5, 1, 1, -15, 1.2, 0.82);
-            if (v === 2) spr = art.isoTint('tiny', 2, 4, 1, 1, -20, 1.25, 0.9);
-          }
-          ctx.imageSmoothingEnabled = false;
-          ctx.drawImage(spr, Math.round(sx - spr.width / 2), Math.round(sy - th / 2));
-        }
-      }
-      return;
-    }
     const [hi, mid, lo, out] = THEME_FLOOR[theme];
     const tw = 22;
     const th = 11;
@@ -586,34 +553,7 @@ export class DungeonRenderer {
             { x: 276, y: 140, k: 1, s: 3 },
             { x: 302, y: 128, k: 0, s: 2 },
           ];
-    const art = getArt();
     for (const s of spots) {
-      if (art) {
-        let tile;
-        // 배경이 네모로 남는 타일(꽃밭, 크리스탈 카드)은 쓰지 않는다.
-        if (theme === 'dungeon_1') {
-          const picks: [number, number][] = [[0, 3], [1, 3], [2, 3], [0, 4]];
-          const [c, r] = picks[s.k % picks.length];
-          tile = art.slice('caves', c, r);
-        } else if (theme === 'dungeon_2') {
-          const picks: [number, number][] = [[0, 5], [1, 5], [2, 5], [3, 5]];
-          const [c, r] = picks[s.k % picks.length];
-          tile = art.slice('caves', c, r);
-        } else if (theme === 'dungeon_3') {
-          const picks: [number, number][] = [[8, 16], [9, 16], [6, 7], [7, 7]];
-          const [c, r] = picks[s.k % picks.length];
-          tile = art.slice('caves', c, r);
-        } else {
-          const picks: [number, number, 'caves' | 'tiny'][] = [
-            [12, 16, 'caves'], [13, 16, 'caves'], [4, 2, 'tiny'], [8, 16, 'caves'],
-          ];
-          const [c, r, sh] = picks[s.k % picks.length];
-          tile = art.slice(sh, c, r);
-        }
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(tile, 0, 0, tile.width, tile.height, s.x, s.y, tile.width * s.s, tile.height * s.s);
-        continue;
-      }
       const spr = getThemeProp(theme, s.k, f);
       ctx.drawImage(spr, 0, 0, spr.width, spr.height, s.x, s.y, spr.width * s.s, spr.height * s.s);
     }
@@ -660,10 +600,7 @@ export class DungeonRenderer {
       const y = 126 - (i % 2) * 12 + (dead ? 6 : 0);
       const state = dead ? 'idle' : this.partyLunge > 0.2 ? 'work' : this.walkIn > 0 ? 'walk' : 'idle';
       const frame = Math.floor(t * (state === 'walk' ? 8 : 4)) & 3;
-      const art = getArt();
-      const spr = art
-        ? art.character(this.heroArchetype(hero), 'se', frame)
-        : atlas.getCharacterSprite(this.heroArchetype(hero), state, 'se', frame);
+      const spr = atlas.getCharacterSprite(this.heroArchetype(hero), state, 'se', frame);
       if (dead) ctx.globalAlpha = 0.45;
       ctx.imageSmoothingEnabled = false;
       ctx.drawImage(spr, 0, 0, spr.width, spr.height, x, y - spr.height * 2 + 10, spr.width * 2, spr.height * 2);
@@ -672,10 +609,7 @@ export class DungeonRenderer {
 
     const state = this.monState(t);
     const frame = Math.floor(t * (state === 'idle' ? 4 : 8));
-    const art = getArt();
-    const mon = art
-      ? art.monster(theme, run.isBoss, state, frame)
-      : getMonsterSprite(theme, run.isBoss, state, frame);
+    const mon = getMonsterSprite(theme, run.isBoss, state, frame);
     const monScale = run.isBoss ? 3 : 2;
     const mw = mon.width * monScale;
     const mh = mon.height * monScale;

@@ -774,10 +774,6 @@ export function getReelSprite(id: ReelId): HTMLCanvasElement {
   return spr;
 }
 
-export function overrideReelSprite(id: ReelId, spr: HTMLCanvasElement): void {
-  CACHE.set(id, spr);
-}
-
 export function isReelId(value: string): value is ReelId {
   return CACHE.has(value as ReelId) || buildable(value);
 }
