@@ -11,6 +11,7 @@ import {
   WEAPON_TYPE_META,
 } from './data';
 import { IsoRenderer } from './isoRenderer';
+import { HERO_WAYPOINTS, STAFF_HOME, findPath, nearestWalkable } from './innMap';
 import {
   calculateSlotProbabilities,
   getEffectiveHeroLevelCap,
@@ -157,11 +158,11 @@ class KairoSlotInnApp {
       StaffRoleId,
       { gx: number; gy: number; tool: string; badge: string }
     > = {
-      chef: { gx: 2.3, gy: 2.3, tool: '🍳', badge: '👨‍🍳요리사' },
-      forger: { gx: 9.4, gy: 2.4, tool: '🔨', badge: '🔨제작' },
-      enhancer: { gx: 11.1, gy: 3.5, tool: '⚒️', badge: '⚒️강화' },
-      enchanter: { gx: 12.1, gy: 2.4, tool: '✨', badge: '✨인챈트' },
-      alchemist: { gx: 3.3, gy: 10.2, tool: '🧪', badge: '🧪연금' },
+      chef: { gx: STAFF_HOME.chef.gx, gy: STAFF_HOME.chef.gy, tool: '🍳', badge: '👨‍🍳요리사' },
+      forger: { gx: STAFF_HOME.forger.gx, gy: STAFF_HOME.forger.gy, tool: '🔨', badge: '🔨제작' },
+      enhancer: { gx: STAFF_HOME.enhancer.gx, gy: STAFF_HOME.enhancer.gy, tool: '⚒️', badge: '⚒️강화' },
+      enchanter: { gx: STAFF_HOME.enchanter.gx, gy: STAFF_HOME.enchanter.gy, tool: '✨', badge: '✨인챈트' },
+      alchemist: { gx: STAFF_HOME.alchemist.gx, gy: STAFF_HOME.alchemist.gy, tool: '🧪', badge: '🧪연금' },
     };
 
     (Object.keys(staffCoords) as StaffRoleId[]).forEach((role) => {
@@ -206,8 +207,9 @@ class KairoSlotInnApp {
         prev.weaponType = wp?.type ?? classMeta.favWeapon;
         nextActors.push(prev);
       } else {
-        const startX = 3 + Math.random() * 7;
-        const startY = 3 + Math.random() * 7;
+        const home = nearestWalkable(4 + Math.random() * 4, 5 + Math.random() * 3);
+        const startX = home.x;
+        const startY = home.y;
         nextActors.push({
           id: hero.id,
           name: hero.name,
@@ -296,7 +298,7 @@ class KairoSlotInnApp {
           (1 + passiveGoldPct / 100)
       );
       this.save.gold += baseEarn;
-      this.spawnPop(3.8, 3.6, `+${baseEarn}G 숙박·상점`, '#fde047');
+      this.spawnPop(4.2, 5.2, `+${baseEarn}G`, '#fde047');
       this.updateTopHud();
     }
   }
@@ -305,13 +307,7 @@ class KairoSlotInnApp {
    * 캐릭터들이 상황에 맞게 자연스럽고 부드럽게 이동하고 행동하며 카이로소프트풍 말풍선을 띄웁니다.
    */
   private updateActorsBehavior(dt: number): void {
-    const waypoints = [
-      { gx: 3.5, gy: 3.5, room: 'inn', lines: ['맛있는 냄새!', '푹 쉬었다~', '요리 슬롯 돌리자!'] },
-      { gx: 10.5, gy: 3.8, room: 'blacksmith', lines: ['새 무기!', '강화 대박!', '모루 소리!'] },
-      { gx: 3.5, gy: 10.5, room: 'potion', lines: ['포션 챙겨가자!', '보글보글 신기해', '회복약 필수!'] },
-      { gx: 10.5, gy: 10.5, room: 'trade', lines: ['재료 산다!', '가루 교환!', '시세 좋다!'] },
-      { gx: 7.0, gy: 7.0, room: 'corridor', lines: ['던전 가고 싶다!', '컨디션 최고!', 'Ugh... 배고파'] },
-    ];
+    const waypoints = HERO_WAYPOINTS;
 
     for (const actor of this.actors) {
       if (actor.speechTimer > 0) {
@@ -342,29 +338,46 @@ class KairoSlotInnApp {
         continue;
       }
 
-      // 영웅들의 부드러운 이동 및 시설 방문
+      // 영웅: 가구를 피해 타일 경로로 구역 사이를 걸어 다님
       if (actor.state === 'walk') {
-        const dx = actor.targetX - actor.gridX;
-        const dy = actor.targetY - actor.gridY;
-        const dist = Math.hypot(dx, dy);
-        const speed = 1.85; // 자연스럽고 부드러운 이동 속도
-
-        if (dist <= speed * dt) {
-          actor.gridX = actor.targetX;
-          actor.gridY = actor.targetY;
+        const path = actor.path || [];
+        const idx = actor.pathIndex ?? 0;
+        const step = path[idx];
+        if (!step) {
           actor.state = 'idle';
           actor.stateTimer = 2.2 + Math.random() * 3.0;
         } else {
-          actor.gridX += (dx / dist) * speed * dt;
-          actor.gridY += (dy / dist) * speed * dt;
-          actor.facing = dx >= 0 ? (dy >= 0 ? 'se' : 'ne') : dy >= 0 ? 'sw' : 'nw';
+          const dx = step.x - actor.gridX;
+          const dy = step.y - actor.gridY;
+          const dist = Math.hypot(dx, dy);
+          const speed = 1.85;
+          if (dist <= speed * dt) {
+            actor.gridX = step.x;
+            actor.gridY = step.y;
+            actor.pathIndex = idx + 1;
+            if ((actor.pathIndex ?? 0) >= path.length) {
+              actor.state = 'idle';
+              actor.stateTimer = 2.2 + Math.random() * 3.0;
+              actor.path = [];
+            }
+          } else {
+            actor.gridX += (dx / dist) * speed * dt;
+            actor.gridY += (dy / dist) * speed * dt;
+            actor.facing = dx >= 0 ? (dy >= 0 ? 'se' : 'ne') : dy >= 0 ? 'sw' : 'nw';
+          }
         }
       } else {
         actor.stateTimer -= dt;
         if (actor.stateTimer <= 0) {
           const wp = waypoints[Math.floor(Math.random() * waypoints.length)];
-          actor.targetX = wp.gx + (Math.random() - 0.5) * 2.2;
-          actor.targetY = wp.gy + (Math.random() - 0.5) * 2.2;
+          const dest = nearestWalkable(
+            wp.gx + (Math.random() - 0.5) * 1.2,
+            wp.gy + (Math.random() - 0.5) * 1.2
+          );
+          actor.targetX = dest.x;
+          actor.targetY = dest.y;
+          actor.path = findPath(actor.gridX, actor.gridY, dest.x, dest.y);
+          actor.pathIndex = 0;
           actor.state = 'walk';
 
           if (Math.random() < 0.45 && !actor.speechText) {
@@ -2143,7 +2156,7 @@ class KairoSlotInnApp {
       const fac = this.save.facilities[pd.facilityId];
       fac.level += pd.greatLevelUp ? 2 : 1;
       fac.passives.push(pd.facilityPassive);
-      this.spawnPop(7, 7, `${fac.name} Lv.${fac.level} 달성!`, '#fde047');
+      this.spawnPop(6.5, 7.2, `${fac.name} Lv.${fac.level}`, '#fde047');
     }
 
     this.pendingDecision = null;
@@ -2166,7 +2179,7 @@ class KairoSlotInnApp {
     const finalScrap = Math.round(pd.scrapRefund * (1 + scrapBonusPct / 100));
 
     this.save.scrap += finalScrap;
-    this.spawnPop(10.5, 10.5, `+${finalScrap} 마일리지 가루`, '#c084fc');
+    this.spawnPop(8.6, 8.4, `+${finalScrap} 가루`, '#c084fc');
 
     this.pendingDecision = null;
     this.updateTopHud();

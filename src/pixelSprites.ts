@@ -248,16 +248,25 @@ export function bakeIsoTileSprite(
  * side === 'left' (북서쪽 벽: 오른쪽 아래에서 왼쪽 아래로 내려감)
  * side === 'right' (북동쪽 벽: 왼쪽 위에서 오른쪽 아래로 내려감)
  */
+export type WallDecor =
+  | 'plain'
+  | 'window'
+  | 'shelf'
+  | 'banner'
+  | 'dungeon'
+  | 'dungeonActive';
+
 export function bakeIsoWallSegment(
   side: 'left' | 'right',
   wallLight: string,
   wallMain: string,
   wallDark: string,
   trimGold: string,
-  wainscot: string
+  wainscot: string,
+  decor: WallDecor = 'plain'
 ): HTMLCanvasElement {
   const W = 12;
-  const H = 24;
+  const H = 42;
   const canvas = document.createElement('canvas');
   canvas.width = W;
   canvas.height = H;
@@ -275,7 +284,7 @@ export function bakeIsoWallSegment(
     data[i + 3] = a;
   };
 
-  const wallH = 16;
+  const wallH = 32;
   for (let x = 0; x < W; x++) {
     const slopeY = side === 'right' ? Math.floor(x / 2) : Math.floor((W - 1 - x) / 2);
     const topY = slopeY;
@@ -313,6 +322,62 @@ export function bakeIsoWallSegment(
         if (relY > 2 && relY < wallH - 1 && relY % 2 === 0) col = wallDark;
       }
       setPx(x, y, col);
+    }
+  }
+
+  const paint = (lx: number, relY: number, hex: string) => {
+    const slopeY = side === 'right' ? Math.floor(lx / 2) : Math.floor((W - 1 - lx) / 2);
+    setPx(lx, slopeY + relY, hex);
+  };
+
+  if (decor === 'window') {
+    for (let lx = 2; lx <= 9; lx++) {
+      for (let ry = 8; ry <= 21; ry++) {
+        const edge = lx === 2 || lx === 9 || ry === 8 || ry === 21 || lx === 5 || ry === 14;
+        if (edge) paint(lx, ry, PAL.O);
+        else if (ry <= 13 && lx <= 4) paint(lx, ry, '#fae078');
+        else if (ry <= 16) paint(lx, ry, '#e8c468');
+        else paint(lx, ry, '#d6ac47');
+      }
+    }
+  } else if (decor === 'shelf') {
+    for (let lx = 1; lx <= 10; lx++) {
+      paint(lx, 16, PAL.O);
+      paint(lx, 17, PAL.n);
+      paint(lx, 18, PAL.u);
+    }
+    paint(2, 14, PAL.r);
+    paint(2, 15, PAL.R);
+    paint(5, 13, PAL.a);
+    paint(5, 14, PAL.P);
+    paint(5, 15, PAL.q);
+    paint(8, 14, PAL.v);
+    paint(8, 15, PAL.G);
+    paint(3, 15, PAL.Y);
+  } else if (decor === 'banner') {
+    for (let ry = 6; ry <= 22; ry++) {
+      for (let lx = 3; lx <= 8; lx++) {
+        if (lx === 3 || lx === 8 || ry === 6 || ry === 22) paint(lx, ry, PAL.O);
+        else if ((lx + ry) % 2 === 0) paint(lx, ry, ry < 10 ? PAL.Y : PAL.r);
+        else paint(lx, ry, ry < 10 ? PAL.y : PAL.c);
+      }
+    }
+    paint(5, 5, PAL.K);
+    paint(6, 5, PAL.K);
+  } else if (decor === 'dungeon' || decor === 'dungeonActive') {
+    const glow = decor === 'dungeonActive' ? PAL.R : PAL.P;
+    const mid = decor === 'dungeonActive' ? PAL.f : PAL.a;
+    const deep = decor === 'dungeonActive' ? PAL.C : PAL.Q;
+    for (let lx = 0; lx <= 11; lx++) {
+      for (let ry = 6; ry <= 32; ry++) {
+        const archTop = (lx <= 1 || lx >= 10) && ry < 10;
+        if (archTop) continue;
+        if (lx === 0 || lx === 11 || ry === 6) paint(lx, ry, PAL.J);
+        else if (lx === 1 || lx === 10 || ry === 7) paint(lx, ry, PAL.i);
+        else if ((lx + ry) % 3 === 0) paint(lx, ry, glow);
+        else if (ry > 22) paint(lx, ry, deep);
+        else paint(lx, ry, mid);
+      }
     }
   }
 
@@ -1306,6 +1371,213 @@ export function bakeChibiCharacterFrame(
   return canvas;
 }
 
+
+function bakeIsoLowRail(side: 'left' | 'right'): HTMLCanvasElement {
+  const W = 12;
+  const H = 14;
+  const canvas = document.createElement('canvas');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d')!;
+  const img = ctx.createImageData(W, H);
+  const data = img.data;
+  const setPx = (x: number, y: number, hex: string) => {
+    if (x < 0 || x >= W || y < 0 || y >= H) return;
+    const [r, g, b, a] = hexToRgba(hex);
+    const i = (y * W + x) * 4;
+    data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = a;
+  };
+  const railH = 6;
+  for (let x = 0; x < W; x++) {
+    const slopeY = side === 'right' ? Math.floor(x / 2) : Math.floor((W - 1 - x) / 2);
+    for (let ry = 0; ry <= railH; ry++) {
+      let col = side === 'left' ? PAL.u : PAL.n;
+      if (ry === 0 || ry === railH || x === 0 || x === W - 1) col = PAL.O;
+      else if (ry === 1) col = PAL.W;
+      else if (ry >= railH - 1) col = PAL.m;
+      setPx(x, slopeY + ry, col);
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return canvas;
+}
+
+function buildPillarSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    '...OOOOOO...',
+    '..OWuuuuWO..',
+    '..OWWuuWWO..',
+    '..OWuuuuWO..',
+    '..OnuuuunO..',
+    '..OWuuuuWO..',
+    '..OWWuuWWO..',
+    '..OWuuuuWO..',
+    '..OnuuuunO..',
+    '..OWuuuuWO..',
+    '..OWWuuWWO..',
+    '.OOWuuuuWOO.',
+    '.OmmWWWummO.',
+    '.OmmmmmmmmO.',
+    '..OOOOOOOO..',
+  ]);
+}
+
+function buildChairSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    '..OOOO....',
+    '.OWuuWO...',
+    '.OWuuWO...',
+    '.OnuunOOOO',
+    '.OWuuWWWuO',
+    '.OWuuuuuuO',
+    '.OnnunnunO',
+    '.OmO..OmO.',
+    '.OmO..OmO.',
+    '.OOO..OOO.',
+  ]);
+}
+
+function buildBarrelSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    '...OOOOOO...',
+    '..OWuuuuWO..',
+    '.OOOOOOOOOO.',
+    '.OWuuuuuuuO.',
+    '.OWuuYuuuuO.',
+    '.OOOOOOOOOO.',
+    '.OnuuuuuunO.',
+    '.OnuuuuuunO.',
+    '.OOOOOOOOOO.',
+    '..OmmmmmmO..',
+    '...OOOOOO...',
+  ]);
+}
+
+function buildPlantPotSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    '....G..v.G..',
+    '...GvGGvGv..',
+    '..GvvhvvvG..',
+    '..vGhHGhvG..',
+    '...vhhhv....',
+    '....OhO.....',
+    '...ORrRRO...',
+    '...OrccrO...',
+    '...OccccO...',
+    '....OOOO....',
+  ]);
+}
+
+function buildCandleFrames(): HTMLCanvasElement[] {
+  return [0, 1, 2].map((f) =>
+    bakeGridSprite([
+      f === 1 ? '...F...' : '..F.f..',
+      f === 2 ? '..fYf..' : '...Y...',
+      '...w...',
+      '..OwwO.',
+      '..OwwO.',
+      '..OggO.',
+      '...OO..',
+    ])
+  );
+}
+
+function buildStairsSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    'OOOO..............',
+    'OWuWOOOOO.........',
+    'OWuuWWuuWOOOO.....',
+    'OnuuuuuuuuuuWOOO..',
+    'OWuuuWWWWuuuuuuWO.',
+    'OnnnnnnnnuuuuuunO.',
+    'OWuuuuuuunnnnnnnO.',
+    'OWuuWWWWuuuuuuuWO.',
+    'OnnnnnnnuuuuuuunO.',
+    '.OWuuuuunnnnnnnO..',
+    '.OWuuuuuuuuuuWO...',
+    '..OnnnnnnnnnnO....',
+    '...OOOOOOOOOO.....',
+  ]);
+}
+
+function buildDoormatSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    '....OOOOOOOOOO....',
+    '..OOnnnnnnnnnnOO..',
+    '.OnnWWWnnnWWWnnnO.',
+    '.OnnuuunnnuuunnnO.',
+    '.OnnWWWnnnWWWnnnO.',
+    '.OnnuuunnnuuunnnO.',
+    '..OOnnnnnnnnnnOO..',
+    '....OOOOOOOOOO....',
+  ]);
+}
+
+function buildHerbRackSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    '.OOOOOOOOOOOOOO.',
+    '.OnuuuuuuuuuunO.',
+    '.OOOOOOOOOOOOOO.',
+    '..v.G.v.h.G.v..',
+    '..GvG.hGv.hGv..',
+    '..hvh.Gvh.vGh..',
+    '...h...h...h...',
+    '...H...v...H...',
+  ]);
+}
+
+function buildChimneyHoodSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    '......OOOOOO......',
+    '.....OJjjjjJO.....',
+    '....OJiiiiiiJO....',
+    '...OJiiiiiiiiJO...',
+    '..OJjjjjjjjjjjJO..',
+    '.OOOOOOOOOOOOOOOO.',
+    '.OJjjjOOOOJJjjjJO.',
+    '.OJjJO....OOJjJO..',
+    '..OOO......OOO....',
+  ]);
+}
+
+function buildBarCounterSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    '................OOOO........',
+    '..............OOYyyYOO......',
+    '...........OOOWuuuuuWOOO....',
+    '........OOOWWWWWWWWWWWWWOO..',
+    '......OOWWuuuuuuuuuuuuuuWWO.',
+    '.....OWWuuOwwOuuOYyOuuOfrOW.',
+    '....OWuuuuOggOuuOkkOuuOrruO.',
+    '....OWuuuuuuuuuuuuuuuuuuuuO.',
+    '.....OWWnnnnnnnnnnnnnnnnWWO.',
+    '......OOmmmmmmmmmmmmmmmmOO..',
+    '......OmO..OOOOOOOO..OmO....',
+    '......OmO..OmmOOmmO..OmO....',
+    '......OOO..OOOOOOOO..OOO....',
+  ]);
+}
+
+function buildEntranceDoorSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    '......OOOOOOOOOO......',
+    '.....OnuuuuuuuunO.....',
+    '....OnuWWWWWWWWWunO...',
+    '...OnuWuuuuuuuuuWunO..',
+    '...OnuWuOOOOOOOWunO...',
+    '...OnuWuOnnnnnOWunO...',
+    '...OnuWuOnYyynOWunO...',
+    '...OnuWuOnYyynOWunO...',
+    '...OnuWuOnnnnnOWunO...',
+    '...OnuWuOOOOOOOWunO...',
+    '...OnuWuuuuuuuuuWunO..',
+    '...OnuWuuuuuuuuuWunO..',
+    '...OnuWWWWWWWWWunO...',
+    '...OnuuuuuuuuuuuunO...',
+    '....OOOOOOOOOOOOOO....',
+  ]);
+}
+
 // ============================================================================
 // 마이크로 픽셀 비트맵 숫자/문자 렌더러 (간판 레벨 L1..L9 등 캔버스 내 픽셀 전용)
 // ============================================================================
@@ -1379,7 +1651,20 @@ export interface PixelSpriteAtlas {
     corridorDark: HTMLCanvasElement;
     lavaFrames: HTMLCanvasElement[];
   };
-  walls: Record<FacilityId, { left: HTMLCanvasElement; right: HTMLCanvasElement }>;
+  innWalls: {
+    leftPlain: HTMLCanvasElement;
+    rightPlain: HTMLCanvasElement;
+    leftWindow: HTMLCanvasElement;
+    rightWindow: HTMLCanvasElement;
+    leftShelf: HTMLCanvasElement;
+    rightShelf: HTMLCanvasElement;
+    leftBanner: HTMLCanvasElement;
+    rightBanner: HTMLCanvasElement;
+    rightDungeon: HTMLCanvasElement;
+    rightDungeonActive: HTMLCanvasElement;
+    lowRailLeft: HTMLCanvasElement;
+    lowRailRight: HTMLCanvasElement;
+  };
   props: {
     innHearth: HTMLCanvasElement[];
     innTable: HTMLCanvasElement;
@@ -1399,6 +1684,17 @@ export interface PixelSpriteAtlas {
     roomSigns: Record<FacilityId, HTMLCanvasElement>;
     dungeonArchIdle: HTMLCanvasElement[];
     dungeonArchActive: HTMLCanvasElement[];
+    pillar: HTMLCanvasElement;
+    chair: HTMLCanvasElement;
+    barrel: HTMLCanvasElement;
+    plant: HTMLCanvasElement;
+    candleFrames: HTMLCanvasElement[];
+    stairs: HTMLCanvasElement;
+    doormat: HTMLCanvasElement;
+    herbRack: HTMLCanvasElement;
+    chimneyHood: HTMLCanvasElement;
+    barCounter: HTMLCanvasElement;
+    entranceDoor: HTMLCanvasElement;
   };
   getCharacterSprite: (
     archetype: ActorArchetypeId,
@@ -1552,23 +1848,19 @@ export function createPixelSpriteAtlas(): PixelSpriteAtlas {
         )
       ),
     },
-    walls: {
-      inn: {
-        left: bakeIsoWallSegment('left', '#d6a469', '#ba854a', '#946431', '#e8c468', '#6e451f'),
-        right: bakeIsoWallSegment('right', '#c29057', '#9e6d38', '#7a5125', '#d6ac47', '#593718'),
-      },
-      blacksmith: {
-        left: bakeIsoWallSegment('left', '#9c7156', '#7d563e', '#5e3e2b', '#c99b59', '#452c1e'),
-        right: bakeIsoWallSegment('right', '#875f46', '#694631', '#4d3222', '#b08346', '#362217'),
-      },
-      potion: {
-        left: bakeIsoWallSegment('left', '#7997a3', '#5c7885', '#445b66', '#b89fd1', '#354852'),
-        right: bakeIsoWallSegment('right', '#66838f', '#4b6470', '#374b54', '#9d84b8', '#293840'),
-      },
-      trade: {
-        left: bakeIsoWallSegment('left', '#8ca172', '#6e8255', '#53633e', '#d6ac47', '#424f31'),
-        right: bakeIsoWallSegment('right', '#798c60', '#5c6e45', '#445232', '#ba9238', '#333d25'),
-      },
+    innWalls: {
+      leftPlain: bakeIsoWallSegment('left', '#d6b07a', '#c49a62', '#9e7540', '#e8c468', '#6e451f'),
+      rightPlain: bakeIsoWallSegment('right', '#d6b07a', '#c49a62', '#9e7540', '#e8c468', '#6e451f'),
+      leftWindow: bakeIsoWallSegment('left', '#d6b07a', '#c49a62', '#9e7540', '#e8c468', '#6e451f', 'window'),
+      rightWindow: bakeIsoWallSegment('right', '#d6b07a', '#c49a62', '#9e7540', '#e8c468', '#6e451f', 'window'),
+      leftShelf: bakeIsoWallSegment('left', '#d6b07a', '#c49a62', '#9e7540', '#e8c468', '#6e451f', 'shelf'),
+      rightShelf: bakeIsoWallSegment('right', '#d6b07a', '#c49a62', '#9e7540', '#e8c468', '#6e451f', 'shelf'),
+      leftBanner: bakeIsoWallSegment('left', '#d6b07a', '#c49a62', '#9e7540', '#e8c468', '#6e451f', 'banner'),
+      rightBanner: bakeIsoWallSegment('right', '#d6b07a', '#c49a62', '#9e7540', '#e8c468', '#6e451f', 'banner'),
+      rightDungeon: bakeIsoWallSegment('right', '#d6b07a', '#c49a62', '#9e7540', '#e8c468', '#6e451f', 'dungeon'),
+      rightDungeonActive: bakeIsoWallSegment('right', '#d6b07a', '#c49a62', '#9e7540', '#e8c468', '#6e451f', 'dungeonActive'),
+      lowRailLeft: bakeIsoLowRail('left'),
+      lowRailRight: bakeIsoLowRail('right'),
     },
     props: {
       innHearth: buildInnHearthFrames(),
@@ -1594,6 +1886,17 @@ export function createPixelSpriteAtlas(): PixelSpriteAtlas {
       },
       dungeonArchIdle: buildDungeonArchFrames(false),
       dungeonArchActive: buildDungeonArchFrames(true),
+      pillar: buildPillarSprite(),
+      chair: buildChairSprite(),
+      barrel: buildBarrelSprite(),
+      plant: buildPlantPotSprite(),
+      candleFrames: buildCandleFrames(),
+      stairs: buildStairsSprite(),
+      doormat: buildDoormatSprite(),
+      herbRack: buildHerbRackSprite(),
+      chimneyHood: buildChimneyHoodSprite(),
+      barCounter: buildBarCounterSprite(),
+      entranceDoor: buildEntranceDoorSprite(),
     },
     getCharacterSprite(archetype, state, facing, frameIdx, weapon) {
       const f = frameIdx & 3;
