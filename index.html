@@ -1,582 +1,120 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover"
-    />
-    <meta name="theme-color" content="#221914" />
-    <meta
-      name="description"
-      content="여관 전체 픽셀 맵을 중심으로 30명의 고유 영웅이 식사·숙박·거래·쇼핑을 하며 골드를 소비하고, 일일 급료·유지비 결산과 갈래 방 던전 탐험을 통해 왕국 최고의 여관으로 성장하는 도트 경영 시뮬레이션 RPG"
-    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>픽셀 던전 여관: 카이로 슬롯 타이쿤 (Pixel Dungeon Inn)</title>
+    <meta name="description" content="카이로소프트 스타일 쿼터뷰 여관·대장간·포션가게·거래처 경영 & 슬롯머신 RPG" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      rel="icon"
-      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' rx='3' fill='%23453024'/><rect x='4' y='5' width='7' height='8' fill='%23e6c274'/><rect x='3' y='3' width='9' height='3' fill='%23f6efe2'/><rect x='11' y='6' width='2' height='5' fill='%23e6c274'/></svg>"
+      href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@500;700;900&display=swap"
+      rel="stylesheet"
     />
-    <title>던전 여관: 살아있는 모험가의 쉼터 — 등급 목표 &amp; 하루 경제</title>
   </head>
   <body>
-    <div id="app" class="app-shell">
-      <!-- 1. 상단 얇은 HUD: 여관 등급, 시각(낮/밤), 보유 골드 & 오늘 순이익, 항상 보이는 현재 등급 목표 -->
-      <header class="inn-hud" role="banner">
-        <div class="hud-top-bar">
-          <div class="hud-brand-group">
-            <span class="brand-icon" aria-hidden="true">🍻</span>
-            <div class="hud-title-wrap">
-              <div class="hud-rank-line">
-                <span id="inn-level-badge" class="inn-level-badge">Lv.1 변두리 작은 여관</span>
-                <span id="stat-day-clock" class="hud-clock-badge">1일차 · 🌅 아침 06:00</span>
-                <span id="inn-rep-text" class="hud-meta-pill">평판 0</span>
-                <span id="inn-hero-badge" class="hud-meta-pill">영웅 4/30명</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- 핵심 경제 지표 (초당 자동 골드 삭제 -> 보유 골드 / 오늘 순이익 / 일일 급료·유지비) -->
-          <div class="hud-economy-strip" role="region" aria-label="여관 하루 경제 지표">
-            <div class="hud-stat-chip gold-chip-box">
-              <span class="hud-stat-label">보유 골드</span>
-              <strong id="stat-gold" class="hud-stat-val">45 G</strong>
-            </div>
-            <div class="hud-stat-chip profit-chip-box">
-              <span class="hud-stat-label">오늘 영업 순이익</span>
-              <strong id="stat-today-profit" class="hud-stat-val">+0 G</strong>
-            </div>
-            <div class="hud-stat-chip upkeep-chip-box">
-              <span class="hud-stat-label">일일 급료·유지비</span>
-              <strong id="stat-daily-fixed" class="hud-stat-val">-6 G/일</strong>
-            </div>
-          </div>
-
-          <!-- 상단 퀵 액션 & 유틸 버튼 (터치 44px 보장) -->
-          <div class="hud-actions">
-            <button
-              id="btn-serve-now"
-              type="button"
-              class="hud-action-btn primary-hud-btn"
-              title="대기 손님 서빙 또는 손님 맞이"
-            >
-              <span id="serve-btn-label">🍻 손님 서빙</span>
-            </button>
-            <button
-              id="btn-random-event"
-              type="button"
-              class="hud-action-btn"
-              title="여관 소문내기 이벤트"
-            >
-              <span id="event-btn-label">🎲 소문내기</span>
-            </button>
-            <button
-              id="btn-open-daily-report"
-              type="button"
-              class="hud-action-btn"
-              title="오늘 장부 및 최근 결산 보기"
-            >
-              📊 장부
-            </button>
-            <button
-              id="btn-sound"
-              type="button"
-              class="hud-icon-btn"
-              aria-label="효과음 켜기 또는 끄기"
-              title="효과음 켜기/끄기"
-            >
-              🔊
-            </button>
-            <button
-              id="btn-help"
-              type="button"
-              class="hud-icon-btn"
-              aria-label="도움말 열기"
-              title="도움말"
-            >
-              📖
-            </button>
-            <button
-              id="btn-reset"
-              type="button"
-              class="hud-icon-btn danger-btn"
-              aria-label="초기화"
-              title="처음부터 다시"
-            >
-              🔄
-            </button>
-          </div>
+    <div id="app-shell">
+      <!-- 상단 카이로소프트풍 HUD 바 (좌측 5Y 4M 3W 우드 플래그 + 우측 골드/마일리지/영웅 플래그) -->
+      <header id="kairo-top-hud">
+        <div class="kairo-calendar-plaque">
+          <span class="blossom-icon">🌸</span>
+          <strong id="hud-calendar">1Y  1M  1W</strong>
+          <div class="week-gauge"><div class="week-gauge-fill"></div></div>
         </div>
 
-        <!-- 항상 보이는 현재 등급 목표 & 진행도 바 -->
-        <div class="hud-goal-bar" aria-live="polite">
-          <div class="hud-goal-header">
-            <span id="next-goal-text" class="next-goal-text">
-              🎯 다음 등급 목표 확인 중...
-            </span>
-            <div id="hud-goal-chips" class="hud-goal-chips"></div>
+        <div class="kairo-title-banner">
+          <h1>🏰 픽셀 던전 여관: 슬롯 타이쿤</h1>
+        </div>
+
+        <div class="kairo-resource-cluster">
+          <div class="res-pill gold-pill" title="보유 골드">
+            <span class="res-icon">🪙</span>
+            <strong id="hud-gold">850G</strong>
           </div>
-          <div class="goal-progress-track">
-            <div id="goal-progress-fill" class="goal-progress-fill" style="width: 10%"></div>
+          <div class="res-pill scrap-pill" title="슬롯 [버리기]로 모은 마일리지 가루 (거래처에서 확정 교환)">
+            <span class="res-icon">♻️</span>
+            <small>가루</small>
+            <strong id="hud-scrap">15</strong>
+          </div>
+          <div class="res-pill hero-pill" title="여관 소속 영웅 수">
+            <span class="res-icon">🦸</span>
+            <strong id="hud-heroes">2명</strong>
           </div>
         </div>
       </header>
 
-      <!-- 2. 메인 스테이지: 여관 전체 맵이 화면 대부분을 차지하는 주인공 영역 -->
-      <main class="inn-stage-main" aria-label="여관 전체 맵 및 원정 무대">
-        <!-- 활성 랜덤 이벤트 배너 (맵 상단 플로팅) -->
-        <div id="active-event-banner" class="event-banner hidden" role="status">
-          <div class="event-banner-header">
-            <span id="event-banner-title" class="event-title">🎉 이벤트 진행 중</span>
-            <span id="event-banner-timer" class="event-timer">20초</span>
-          </div>
-          <p id="event-banner-desc" class="event-desc"></p>
-        </div>
+      <!-- 메인 아이소메트릭 쿼터뷰 캔버스 영역 -->
+      <main id="iso-stage">
+        <canvas id="iso-canvas"></canvas>
 
-        <!-- 여관 전체 맵 캔버스 컨테이너 (화면 대부분 차지) -->
-        <div class="canvas-stage" id="inn-canvas-stage">
-          <div class="canvas-stage-toolbar">
-            <div class="toolbar-left-pills">
-              <span class="stage-title-pill">
-                🏠 여관 전체 맵 <small>(영웅 탭 → 상태·지시 서랍 / 손님 탭 → 즉시 서빙 / 구역 탭 → 관리 서랍)</small>
-              </span>
-              <span id="live-status-strip" class="live-status-pill"></span>
-            </div>
-            <div class="toolbar-right-btns">
-              <button
-                id="btn-show-dungeon-overlay"
-                type="button"
-                class="stage-mini-btn accent-mini-btn hidden"
-              >
-                ⚔️ 던전 원정 화면 보기
-              </button>
-              <button
-                id="btn-toggle-map-zoom"
-                type="button"
-                class="stage-mini-btn"
-                title="모바일/태블릿에서 맵 확대 팬/스크롤 전환"
-              >
-                🔍 전체 맞춤 보기
-              </button>
-            </div>
-          </div>
-
-          <div class="canvas-scroll-viewport" id="inn-canvas-viewport">
-            <canvas
-              id="inn-canvas"
-              width="480"
-              height="288"
-              aria-label="던전 여관 전체 픽셀 맵. 걸어다니는 영웅을 탭하면 상태/지시 서랍이 열립니다."
-            ></canvas>
-          </div>
-
-          <!-- 맵 하단 한 줄 최근 소식 티커 -->
-          <div class="map-bottom-ticker">
-            <span id="stat-served-summary" class="ticker-badge">서빙 0회</span>
-            <ul id="inn-log-list" class="inn-log-ticker" aria-live="polite"></ul>
-          </div>
-        </div>
-
-        <!-- 영웅 탭했을 때만 열리는 반투명 우측/하단 서랍 (기본 hidden, 닫기 버튼 포함) -->
-        <aside
-          id="hero-inspector-panel"
-          class="hero-inspector-drawer hidden"
-          aria-live="polite"
-          aria-label="선택한 영웅 상태 및 행동 지시 서랍"
-        ></aside>
-
-        <!-- 던전 탐험 오버레이/하단 패널 (원정 중에만 표시하거나 여관으로 돌아가기 가능) -->
-        <section
-          id="dungeon-expedition-panel"
-          class="dungeon-expedition-overlay hidden"
-          aria-label="실시간 갈래 방 던전 탐험 화면"
-        >
-          <div class="dungeon-view-header">
-            <div class="dungeon-view-title-wrap">
-              <span class="stage-title-pill">⚔️ 실시간 갈래 방 던전 탐험 &amp; 직업 기술 전투</span>
-              <div id="dungeon-party-tabs" class="dungeon-party-tabs"></div>
-            </div>
-            <div class="dungeon-header-actions">
-              <button
-                id="btn-return-to-inn"
-                type="button"
-                class="return-inn-btn"
-              >
-                🏠 여관 맵으로 돌아가기
-              </button>
-            </div>
-          </div>
-
-          <!-- 던전 이벤트 선택지 배너 (이벤트 방 진입 시 2~3지 한국어 선택지 표시) -->
-          <div id="dungeon-event-choice-box" class="dungeon-event-choice-box hidden"></div>
-
-          <div id="dungeon-view-body" class="dungeon-view-body">
-            <canvas
-              id="dungeon-canvas"
-              width="480"
-              height="176"
-              aria-label="갈래 방 던전 탐험 및 직업 기술 자동 전투 화면"
-            ></canvas>
-            <ul id="dungeon-floor-log-list" class="dungeon-floor-log-list"></ul>
-          </div>
-        </section>
-
-        <!-- 3. 하단 관리 서랍 (탭 클릭 시에만 맵 위에 반투명 시트로 열리며 맵을 밀어내지 않음) -->
-        <section
-          id="management-drawer"
-          class="management-drawer hidden"
-          aria-label="여관 관리 및 상점 서랍"
-        >
-          <div class="drawer-header-bar">
-            <div class="category-summary-bar" id="category-summary-bar">
-              여관 등급 목표와 일일 장부를 확인하세요.
-            </div>
-            <button
-              id="btn-close-drawer"
-              type="button"
-              class="drawer-close-btn"
-              aria-label="관리 서랍 닫기"
-            >
-              ✕ 서랍 닫기 (맵 전체 보기)
-            </button>
-          </div>
-          <div
-            id="upgrade-list"
-            class="upgrade-list"
-            role="tabpanel"
-            aria-label="탭 상세 콘텐츠 영역"
-          ></div>
-        </section>
+        <!-- 던전 원정 진행 중일 때 뜨는 실시간 전투 슬롯 & 보상 슬롯 오버레이 -->
+        <section id="dungeon-live-panel" class="hidden"></section>
       </main>
 
-      <!-- 4. 하단 컴팩트 탭 도크 바 (터치 44px 이상) -->
-      <nav class="bottom-dock-nav" role="tablist" aria-label="여관 경영 카테고리 탭">
-        <button
-          type="button"
-          role="tab"
-          aria-selected="false"
-          data-tab="goals"
-          class="tab-btn"
-        >
-          🏆 등급·목표
+      <!-- 하단 카이로소프트풍 조작 도크 바 -->
+      <footer id="kairo-bottom-dock">
+        <button class="kairo-corner-btn" data-open-tab="save_manage">
+          💾 Save / 백업
         </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected="false"
-          data-tab="stats"
-          class="tab-btn"
-        >
-          📊 통계·장부
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected="false"
-          data-tab="heroes"
-          class="tab-btn"
-        >
-          🦸 영웅(30)
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected="false"
-          data-tab="trade"
-          class="tab-btn"
-        >
-          💎 상점·거래
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected="false"
-          data-tab="dungeon"
-          class="tab-btn"
-        >
-          🗺️ 던전파견
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected="false"
-          data-tab="potion"
-          class="tab-btn"
-        >
-          ⚗️ 포션가게
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected="false"
-          data-tab="blacksmith"
-          class="tab-btn"
-        >
-          ⚒️ 대장간
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected="false"
-          data-tab="menu"
-          class="tab-btn"
-        >
-          🍲 메뉴
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected="false"
-          data-tab="room"
-          class="tab-btn"
-        >
-          🛏️ 객실
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected="false"
-          data-tab="staff"
-          class="tab-btn"
-        >
-          🧑‍🍳 직원
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected="false"
-          data-tab="facility"
-          class="tab-btn"
-        >
-          🏛️ 시설
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected="false"
-          data-tab="codex"
-          class="tab-btn"
-        >
-          🛡️ 손님도감
-        </button>
-      </nav>
-    </div>
 
-    <!-- 모달 0: 하루 종료 일일 결산 모달 (Daily Settlement Modal) -->
-    <div
-      id="daily-report-modal"
-      class="modal-backdrop hidden"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="daily-report-modal-title"
-    >
-      <div class="modal-card wide-modal-card">
-        <div class="modal-badge">🌙 하루 영업 마감 &amp; 일일 결산</div>
-        <h2 id="daily-report-modal-title" class="modal-title">1일차 여관 일일 결산서</h2>
-        <p id="daily-report-subtitle" class="modal-desc">
-          오늘 하루 영웅과 방문 손님들의 소비로 벌어들인 수입과 직원 급료·유지비 정산 내역입니다.
-        </p>
-        <div id="daily-report-body" class="offline-report-box"></div>
-        <div class="modal-actions">
-          <button id="btn-close-daily-report" type="button" class="modal-primary-btn">
-            🌅 확인하고 다음 날 영업 시작하기
+        <div class="kairo-dock-center">
+          <button class="dock-btn inn-btn" data-open-tab="inn_cook">
+            <span class="dock-icon">🍲</span>
+            <span>여관·요리슬롯</span>
+          </button>
+          <button class="dock-btn hero-btn" data-open-tab="inn_hero">
+            <span class="dock-icon">🦸</span>
+            <span>영웅영입·성장</span>
+          </button>
+          <button class="dock-btn bs-btn" data-open-tab="bs_forge">
+            <span class="dock-icon">⚒️</span>
+            <span>대장간 3종슬롯</span>
+          </button>
+          <button class="dock-btn pot-btn" data-open-tab="potion_brew">
+            <span class="dock-icon">🧪</span>
+            <span>포션가게 슬롯</span>
+          </button>
+          <button class="dock-btn trade-btn" data-open-tab="trade_market">
+            <span class="dock-icon">💎</span>
+            <span>거래처·교환소</span>
+          </button>
+          <button class="dock-btn staff-btn" data-open-tab="staff_hire">
+            <span class="dock-icon">👨‍🍳</span>
+            <span>직원고용 슬롯</span>
+          </button>
+          <button class="dock-btn fac-btn" data-open-tab="facility_up">
+            <span class="dock-icon">🏰</span>
+            <span>시설업그레이드</span>
           </button>
         </div>
-      </div>
-    </div>
 
-    <!-- 모달 1: 오프라인 날짜 단위 요약 정산 ("다녀왔습니다") -->
-    <div
-      id="offline-modal"
-      class="modal-backdrop hidden"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="offline-modal-title"
-    >
-      <div class="modal-card">
-        <div class="modal-badge">🌙 오프라인 날짜별 요약 정산</div>
-        <h2 id="offline-modal-title" class="modal-title">다녀왔습니다, 주인장님!</h2>
-        <p class="modal-desc">
-          자리를 비우신 동안의 하루 루프(손님 서빙·영웅 상점 소비·던전 원정·일일 급료 및 유지비)를 날짜 단위로 정산했습니다.
-        </p>
-        <div class="offline-report-box">
-          <div class="report-row">
-            <span>비운 시간 (정산 일수)</span>
-            <strong id="offline-time-text">0분 (1일분)</strong>
-          </div>
-          <div class="report-row">
-            <span>기간 내 총 영업 수입 / 운영 지출</span>
-            <strong id="offline-gps-text">+0 G / -0 G</strong>
-          </div>
-          <div class="report-row">
-            <span>완료된 던전 탐험</span>
-            <strong id="offline-exp-text">0회</strong>
-          </div>
-          <div class="report-row">
-            <span>제작 완료 (포션 / 장비)</span>
-            <strong id="offline-craft-text">포션 0병 / 장비 0개</strong>
-          </div>
-          <div class="report-row">
-            <span>상점 거래 / 치료·매각 요약</span>
-            <strong id="offline-extra-text">거래 0건 / 회복 0회</strong>
-          </div>
-          <div class="report-row highlight-row">
-            <span>오프라인 순이익 정산 골드</span>
-            <strong id="offline-gold-text" class="gold-highlight">+0 G</strong>
-          </div>
-          <p id="offline-cap-note" class="offline-cap-note">
-            * 오프라인 시뮬레이션은 최대 8시간까지 날짜 단위로 요약 정산됩니다.
-          </p>
-        </div>
-        <div class="modal-actions">
-          <button id="btn-close-offline" type="button" class="modal-primary-btn">
-            💰 정산 내역 확인하고 영업 계속하기
-          </button>
-        </div>
-      </div>
-    </div>
+        <button class="kairo-corner-btn dungeon-go-btn" data-open-tab="dungeon_prep">
+          ⚔️ 던전 출정
+        </button>
+      </footer>
 
-    <!-- 모달 2: +강화 파괴 위험 확인 대화상자 -->
-    <div
-      id="enhance-modal"
-      class="modal-backdrop hidden"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="enhance-modal-title"
-    >
-      <div class="modal-card">
-        <div class="modal-badge danger-badge">🔥 대장간 +강화 위험 확인</div>
-        <h2 id="enhance-modal-title" class="modal-title">장비 +강화를 시도할까요?</h2>
-        <div class="offline-report-box">
-          <div class="report-row">
-            <span>대상 장비</span>
-            <strong id="enhance-target-name">강철 장검</strong>
+      <!-- 슬롯머신 & 시설 운영 모달 다이얼로그 -->
+      <div id="modal-backdrop" class="hidden">
+        <div id="kairo-modal-window">
+          <div class="modal-top-bar">
+            <h2 id="modal-title">시설 슬롯머신</h2>
+            <button id="modal-close-btn" aria-label="닫기">✕ 닫기</button>
           </div>
-          <div class="report-row">
-            <span>강화 단계</span>
-            <strong id="enhance-level-change" class="gold-highlight">+0 → +1</strong>
-          </div>
-          <div class="report-row">
-            <span>성공 확률</span>
-            <strong id="enhance-chance-text" class="enhance-prob-big">95.0%</strong>
-          </div>
-          <div class="report-row">
-            <span>소모 비용 / 재료</span>
-            <strong id="enhance-cost-text">22 G · 고철 파편 x1</strong>
-          </div>
-          <p class="enhance-warning-box">
-            ⚠️ <strong>경고: 실패 시 장비가 완전히 파괴됩니다!</strong><br />
-            강화에 실패하면 현재 <strong>+강화 수치와 원본 장비가 모두 소멸</strong>하며, 착용 중이던 영웅은 파괴되지 않는 <strong>기본 장비</strong>로 즉시 되돌아갑니다.
-          </p>
-        </div>
-        <div class="modal-actions dual-actions">
-          <button id="btn-cancel-enhance" type="button" class="modal-secondary-btn">
-            취소
-          </button>
-          <button id="btn-confirm-enhance" type="button" class="modal-danger-btn">
-            🔥 파괴 감수하고 +강화!
-          </button>
-        </div>
-      </div>
-    </div>
 
-    <!-- 모달 3: 구세이브(v1~v3) → v4 마이그레이션 확인 대화상자 -->
-    <div
-      id="migration-modal"
-      class="modal-backdrop hidden"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="migration-modal-title"
-    >
-      <div class="modal-card">
-        <div class="modal-badge">✨ v4 하루 경제 · 등급 목표 · 갈래 던전 개편</div>
-        <h2 id="migration-modal-title" class="modal-title">새로 시작하거나 기존 진행을 이어받으세요</h2>
-        <p class="modal-desc">
-          이번 v4 개편으로 <b>초당 자동 골드(GPS)가 제거</b>되고, <b>영웅·손님의 행동 수입, 일일 직원 급료·유지비 결산, 8단계 여관 등급 목표</b>로 경제 시스템이 완전히 새로워졌습니다.<br />
-          새 경제 밸런스를 온전히 즐기시려면 <b>[새로 시작 (권장)]</b>을 추천드리며, <b>[기존 진행 이어받기]</b>를 선택하시면 보유 골드·영웅 성장·업그레이드를 이전하고 하루 장부는 빈 값으로 시작합니다.
-        </p>
-        <div class="modal-actions dual-actions">
-          <button id="btn-migrate-fresh" type="button" class="modal-primary-btn">
-            🌟 새로 시작 (권장)
-          </button>
-          <button id="btn-migrate-continue" type="button" class="modal-secondary-btn">
-            ✅ 기존 진행 이어받기
-          </button>
-        </div>
-      </div>
-    </div>
+          <nav class="modal-quick-nav">
+            <button class="modal-nav-pill" data-open-tab="inn_cook">🍲 요리슬롯</button>
+            <button class="modal-nav-pill" data-open-tab="inn_hero">🦸 영웅영입</button>
+            <button class="modal-nav-pill" data-open-tab="bs_forge">🔨 무기제작</button>
+            <button class="modal-nav-pill" data-open-tab="bs_enhance">⚒️ 연속강화</button>
+            <button class="modal-nav-pill" data-open-tab="bs_enchant">✨ 마법인챈트</button>
+            <button class="modal-nav-pill" data-open-tab="potion_brew">🧪 포션연금</button>
+            <button class="modal-nav-pill" data-open-tab="trade_market">💎 거래처</button>
+            <button class="modal-nav-pill" data-open-tab="staff_hire">👨‍🍳 직원고용</button>
+            <button class="modal-nav-pill" data-open-tab="facility_up">🏰 시설증축</button>
+            <button class="modal-nav-pill" data-open-tab="dungeon_prep">⚔️ 던전원정</button>
+          </nav>
 
-    <!-- 모달 4: 조작 안내 / 도움말 -->
-    <div
-      id="help-modal"
-      class="modal-backdrop hidden"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="help-modal-title"
-    >
-      <div class="modal-card wide-modal-card">
-        <div class="modal-badge">📖 여관 등급 목표 &amp; 하루 경제 플레이 가이드</div>
-        <h2 id="help-modal-title" class="modal-title">「던전 여관: 살아있는 모험가의 쉼터」 안내</h2>
-        <div class="help-content">
-          <div class="help-item">
-            <strong>1. 🏆 목표는 여관 등급(Lv.1~Lv.8)과 상단 HUD의 현재 목표!</strong>
-            <p>
-              상단 HUD에 <b>현재 여관 등급</b>과 다음 등급으로 승급하기 위한 <b>공개 목표(던전 클리어, 하루 순이익, 합류 영웅 수, 시설/직원 레벨 등)</b>가 항상 표시됩니다. 여관에서 키운 영웅 파티로 최종 던전 <b>[고대 용왕의 화산 둥지]</b>를 격파하고 <b>[Lv.8 전설의 왕국 최고 여관]</b>에 오르세요!
-            </p>
-          </div>
-          <div class="help-item">
-            <strong>2. 💰 골드는 오직 영웅과 손님의 소비/행동에서만 획득합니다</strong>
-            <p>
-              시간이 흐른다고 골드가 자동으로 쌓이지 않습니다(초당 골드 없음). 영웅들이 여관 안에서 <b>식사·음료, 2층 객실 숙박, 포션 구매, 대장간 장비 구매 및 +강화</b>를 하거나 <b>방문 손님을 서빙</b>할 때만 골드를 법니다. 시설과 도구는 보유 골드로 업그레이드하세요.
-            </p>
-          </div>
-          <div class="help-item">
-            <strong>3. 🌙 하루 주기(4분)와 급료·유지비 일일 결산</strong>
-            <p>
-              게임 내 하루는 실시간 4분이며 아침·낮·저녁·밤에 따라 창문과 여관 조명이 바뀝니다. <b>하루가 끝나면 일일 결산 모달</b>이 열려 항목별 수입과 <b>직원 급료(메이드·바텐더·요리사·음유시인·연금술사·대장장이)·시설 유지비·전리품 매입비</b>를 정산합니다. 골드가 부족해도 기본 영업은 멈추지 않으며 <b>📊 통계·장부</b> 탭에서 일별 손익 차트를 볼 수 있습니다.
-            </p>
-          </div>
-          <div class="help-item">
-            <strong>4. 🏠 맵 중심 레이아웃 &amp; 영웅 탭 서랍</strong>
-            <p>
-              여관 전체 맵이 화면의 주인공입니다. 걸어다니는 영웅은 발밑 역할 색상과 머리 위 직업 아이콘으로 구별되며, <b>영웅을 탭했을 때만 상태/행동 지시 서랍</b>이 열립니다.
-            </p>
-          </div>
-          <div class="help-item">
-            <strong>5. ⚔️ 갈래 방 던전 테마 · 직업 기술 · 이벤트 선택지</strong>
-            <p>
-              던전마다 고유 시각 테마와 <b>2갈래 분기 방(전투·보물·함정·휴식·이벤트·정예·보스)</b>이 펼쳐집니다. 탱커의 방패 도발, 힐러의 치유 빛기둥, 마법사의 범위 마법, 궁수의 관통 화살, 도적의 급소 치명타/함정 해제 등 <b>직업 기술 이펙트</b>와 성격별 전투 행동, <b>한국어 이벤트 선택지</b>를 감상하고 언제든 <b>[🏠 여관 맵으로 돌아가기]</b>로 전환할 수 있습니다.
-            </p>
-          </div>
-        </div>
-        <div class="modal-actions">
-          <button id="btn-close-help" type="button" class="modal-primary-btn">
-            👍 확인했습니다!
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 모달 5: 처음부터 다시 (리셋 확인 대화상자) -->
-    <div
-      id="reset-modal"
-      class="modal-backdrop hidden"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="reset-modal-title"
-    >
-      <div class="modal-card">
-        <div class="modal-badge danger-badge">⚠️ 전체 데이터 초기화 확인</div>
-        <h2 id="reset-modal-title" class="modal-title">처음부터 다시 시작할까요?</h2>
-        <p class="modal-desc">
-          현재까지 모은 골드, 여관 등급, 일일 장부 이력, 업그레이드, 합류한 영웅 성장·장비가 모두 삭제되고
-          <b>1일차 Lv.1 변두리 작은 여관 (시작 영웅 4명)</b>으로 초기화됩니다.
-        </p>
-        <div class="modal-actions dual-actions">
-          <button id="btn-cancel-reset" type="button" class="modal-secondary-btn">
-            취소 (계속 플레이)
-          </button>
-          <button id="btn-confirm-reset" type="button" class="modal-danger-btn">
-            🗑️ 초기화 실행
-          </button>
+          <div id="modal-body"></div>
         </div>
       </div>
     </div>

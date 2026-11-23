@@ -1,3299 +1,2383 @@
-import './style.css';
+import { sfx } from './audio';
 import {
-  GUEST_TYPES,
-  INN_LEVELS,
-  OPTIONAL_QUESTS,
-  UPGRADES,
-  getUpgradeCost,
-} from './data';
-import { formatDuration, formatGold, formatSignedGold } from './format';
-import { DungeonInnGame, OfflineReport } from './game';
-import {
-  BASE_ENHANCE_RATES,
-  BLACKSMITH_TOOLS,
-  DUNGEONS,
-  DUNGEON_MAP,
-  EQUIPMENT_DEFS,
-  EQUIPMENT_DEF_MAP,
-  EQUIP_SLOT_LABELS,
-  HERO_CLASSES,
-  HERO_ROSTER,
-  HERO_ROSTER_MAP,
-  MATERIALS,
+  ALL_WEAPON_TYPES,
+  DUNGEON_ZONES,
+  HERO_CLASS_META,
+  HERO_TIER_GROWTH_MULT,
   MATERIAL_MAP,
-  ORIGINS,
-  PERSONALITIES,
-  POTION_RECIPES,
-  POTION_TOOLS,
-  RARITY_INFO,
-  getHeroRequiredXp,
-  getInnUpgradeMaterialRequirements,
-} from './loopData';
+  MATERIALS,
+  STAFF_ROLE_META,
+  TIER_COLORS,
+  WEAPON_TYPE_META,
+} from './data';
+import { IsoRenderer } from './isoRenderer';
 import {
-  CANVAS_HEIGHT,
-  CANVAS_WIDTH,
-  DungeonExpeditionRenderer,
-  InnRenderer,
-} from './renderer';
-import { getGuestPortraitDataUrl, getHeroPortraitDataUrl } from './sprites';
+  calculateSlotProbabilities,
+  getEffectiveHeroLevelCap,
+  getEnchantPreviewInfo,
+  getEnhanceSuccessRate,
+  getFacilityLuckBonus,
+  getHeroCombatStats,
+  rollAlchemyPotion,
+  rollCookingDish,
+  rollFacilityUpgrade,
+  rollHeroRecruitCandidate,
+  rollStaffHireCandidate,
+  rollWeaponEnchant,
+  rollWeaponEnhance,
+  rollWeaponForge,
+} from './slotEngine';
 import {
-  canClassEquip,
-  evaluatePartyForDungeon,
-  getEquipmentEffectiveStats,
-  getHeroStatBreakdown,
-  getWearableClassesText,
-  selectBestPartyForDungeon,
-} from './synergy';
+  createInitialSaveData,
+  exportSaveToJsonFile,
+  importSaveFromJsonFile,
+  loadGameData,
+  saveGameData,
+} from './storage';
 import {
-  DailyFinancialReport,
-  EquipSlot,
-  HeroClassId,
-  HeroState,
-  UpgradeCategory,
-  UpgradeDef,
+  ActiveDungeonRun,
+  DishItem,
+  FacilityId,
+  FacilityPassive,
+  FloatingPop,
+  GameSaveData,
+  HeroUnit,
+  MapActor,
+  PotionItem,
+  RankTier,
+  StaffMember,
+  StaffRoleId,
+  WeaponEnchant,
+  WeaponItem,
+  WeaponTypeId,
 } from './types';
+import './style.css';
 
-type ActiveTab =
-  | 'goals'
-  | 'stats'
-  | 'heroes'
-  | 'trade'
-  | 'dungeon'
-  | 'potion'
-  | 'blacksmith'
-  | UpgradeCategory
-  | 'codex';
+type ModalTab =
+  | 'inn_cook'
+  | 'inn_hero'
+  | 'bs_forge'
+  | 'bs_enhance'
+  | 'bs_enchant'
+  | 'potion_brew'
+  | 'trade_market'
+  | 'staff_hire'
+  | 'facility_up'
+  | 'dungeon_prep'
+  | 'save_manage';
 
-const TAB_SUMMARIES: Record<ActiveTab, string> = {
-  goals:
-    '🏆 여관 등급(Lv.1~Lv.8) 승급 공개 목표와 선택 퀘스트/업적 현황입니다. 최종 목표인 [고대 용왕의 화산 둥지]를 격파하고 왕국 최고의 여관에 등극하세요!',
-  stats:
-    '📊 오늘 실시간 장부(항목별 수입·급료·유지비·전리품 매입)와 최근 일별 수입·지출·순이익 비교 차트입니다.',
-  heroes:
-    '🦸 고유 이름을 지닌 9직업 30명의 영웅 명부입니다. 맵이나 명단에서 영웅을 탭하면 우측 서랍에서 상태를 확인하고 행동을 직접 지시할 수 있습니다.',
-  trade:
-    '💎 상점 판매가(요리·포션·장비)와 전리품 매입 시세/품목을 설정하세요. 영웅들이 스스로 걸어가 소비할 때만 여관이 골드를 법니다.',
-  dungeon:
-    '🗺️ 7개 갈래 방 던전의 요구 스탯과 출발 전 파티 시너지(역할 삼각 진형, 성격 궁합/충돌, 출신 세트)를 확인하고 원정대를 파견합니다.',
-  potion:
-    '⚗️ 연금 도구와 약초 정원·작업실을 건설하고 8종의 포션을 조제합니다. 판매 등록된 포션은 영웅들이 걸어와 구매합니다.',
-  blacksmith:
-    '⚒️ 드워프 화로와 모루로 직업별 장비를 단조하고 +1~+15 강화를 시도합니다. (⚠️ +강화 실패 시 장비 완전 파괴 → 기본 장비 복귀)',
-  menu: '🍲 따뜻한 수프와 스튜, 에일, 만찬을 보유 골드로 개발하여 서빙 수익과 영웅 식사 버프를 높입니다.',
-  room: '🛏️ 2층 침대와 객실을 확충하여 숙박 수입과 영웅 부상/피로 수면 회복 속도를 높입니다.',
-  staff:
-    '🧑‍🍳 메이드·바텐더·요리사·음유시인을 고용하면 자동 서빙과 품질을 높여 주며, 매일 일일 결산 시 급료(일당)가 지급됩니다.',
-  facility:
-    '🏛️ 게시판·간이 대장간·오르골·비밀금고·온천탕을 설치하여 여관에 특별 보너스를 부여합니다. (일일 유지비 발생)',
-  codex:
-    '🛡️ 여관을 방문하는 손님 도감입니다. 손님 서빙은 초당 자동이 아니라 서빙 행위당 수입으로 정산됩니다.',
-};
+interface PendingDecision {
+  kind:
+    | 'cook'
+    | 'hero'
+    | 'forge'
+    | 'enchant'
+    | 'potion'
+    | 'staff'
+    | 'facility';
+  reels: [string, string, string];
+  isJackpot: boolean;
+  scrapRefund: number;
+  dish?: DishItem;
+  hero?: HeroUnit;
+  weapon?: WeaponItem;
+  targetWeaponId?: string;
+  enchants?: WeaponEnchant[];
+  potion?: PotionItem;
+  staffCandidate?: StaffMember;
+  facilityId?: FacilityId;
+  facilityPassive?: FacilityPassive;
+  greatLevelUp?: boolean;
+}
 
-class InnAppController {
-  private game: DungeonInnGame;
-  private renderer: InnRenderer;
-  private dungeonRenderer: DungeonExpeditionRenderer;
-  private canvas: HTMLCanvasElement;
-  private dungeonCanvas: HTMLCanvasElement;
-  private activeTab: ActiveTab = 'goals';
-  private isDrawerOpen = false;
-  private isDungeonOverlayHiddenByUser = false;
+class KairoSlotInnApp {
+  private save!: GameSaveData;
+  private renderer!: IsoRenderer;
+  private actors: MapActor[] = [];
+  private pops: FloatingPop[] = [];
+  private activeDungeon: ActiveDungeonRun | null = null;
+  private activeModal: ModalTab | null = null;
+
+  // 슬롯 베팅 선택 상태
+  private betTier1: RankTier = 'C';
+  private betTier2: RankTier = 'C';
+  private selectedWeaponType: WeaponTypeId = 'sword';
+  private selectedWeaponId: string | null = null;
+  private selectedStaffRole: StaffRoleId = 'forger';
+  private selectedFacilityId: FacilityId = 'inn';
+  private selectedDungeonId = 'dungeon_1';
+
+  // 슬롯 회전 연출 및 채택/버리기 결정 대기 상태
+  private isSpinning = false;
+  private spinReels: [string, string, string] = ['7️⃣', '7️⃣', '7️⃣'];
+  private pendingDecision: PendingDecision | null = null;
+  private enhanceResultBanner: string | null = null;
+
   private lastFrameTime = performance.now();
-  private uiRefreshAccumulator = 0;
-  private lastLogTopId = -1;
-  private lastFloorLogTopId = -1;
-  private lastRenderedEventPromptId: string | null = null;
-  private mapZoomExpanded = false;
+  private calendarAccum = 0;
+  private guestIncomeAccum = 0;
 
-  // 던전 탭 파티 편성 상태
-  private selectedDungeonId = 'dungeon_slime';
-  private selectedPartyHeroIds: string[] = [];
-  private heroFilterClass: HeroClassId | 'all' = 'all';
-
-  // 영웅 지시 패널 드롭다운 선택 상태
-  private orderPotionId = 'potion_heal_minor';
-  private orderDungeonId = 'dungeon_slime';
-
-  // +강화 확인 모달 대기 타겟
-  private pendingEnhanceTarget: {
-    heroId?: string;
-    slot?: EquipSlot;
-    stockUid?: number;
-  } | null = null;
-
-  // DOM 참조
-  private elLevelBadge = document.getElementById('inn-level-badge')!;
-  private elDayClock = document.getElementById('stat-day-clock')!;
-  private elRepText = document.getElementById('inn-rep-text')!;
-  private elHeroBadge = document.getElementById('inn-hero-badge')!;
-  private elGold = document.getElementById('stat-gold')!;
-  private elTodayProfit = document.getElementById('stat-today-profit')!;
-  private elDailyFixed = document.getElementById('stat-daily-fixed')!;
-  private elGoalFill = document.getElementById('goal-progress-fill')!;
-  private elNextGoal = document.getElementById('next-goal-text')!;
-  private elHudGoalChips = document.getElementById('hud-goal-chips')!;
-
-  private elEventBanner = document.getElementById('active-event-banner')!;
-  private elEventTitle = document.getElementById('event-banner-title')!;
-  private elEventTimer = document.getElementById('event-banner-timer')!;
-  private elEventDesc = document.getElementById('event-banner-desc')!;
-
-  private elHeroInspector = document.getElementById('hero-inspector-panel')!;
-  private elDungeonPanel = document.getElementById('dungeon-expedition-panel')!;
-  private elBtnShowDungeon = document.getElementById(
-    'btn-show-dungeon-overlay'
-  )!;
-  private elDungeonPartyTabs = document.getElementById('dungeon-party-tabs')!;
-  private elDungeonEventBox = document.getElementById(
-    'dungeon-event-choice-box'
-  )!;
-  private elDungeonFloorLogs = document.getElementById(
-    'dungeon-floor-log-list'
-  )!;
-
-  private elServeBtnLabel = document.getElementById('serve-btn-label')!;
-  private elEventBtn = document.getElementById(
-    'btn-random-event'
-  ) as HTMLButtonElement;
-  private elEventBtnLabel = document.getElementById('event-btn-label')!;
-
-  private elLiveStrip = document.getElementById('live-status-strip')!;
-  private elServedSummary = document.getElementById('stat-served-summary')!;
-  private elLogList = document.getElementById('inn-log-list')!;
-
-  private elManagementDrawer = document.getElementById('management-drawer')!;
-  private elCategorySummary = document.getElementById('category-summary-bar')!;
-  private elUpgradeList = document.getElementById('upgrade-list')!;
-
-  private elSoundBtn = document.getElementById(
-    'btn-sound'
-  ) as HTMLButtonElement;
-  private elDailyReportModal = document.getElementById('daily-report-modal')!;
-  private elOfflineModal = document.getElementById('offline-modal')!;
-  private elEnhanceModal = document.getElementById('enhance-modal')!;
-  private elMigrationModal = document.getElementById('migration-modal')!;
-  private elHelpModal = document.getElementById('help-modal')!;
-  private elResetModal = document.getElementById('reset-modal')!;
-
-  constructor() {
-    const canvasEl = document.getElementById(
-      'inn-canvas'
-    ) as HTMLCanvasElement | null;
-    const dCanvasEl = document.getElementById(
-      'dungeon-canvas'
-    ) as HTMLCanvasElement | null;
-    if (!canvasEl || !dCanvasEl) {
-      throw new Error('캔버스 요소를 찾을 수 없습니다.');
+  public async init(): Promise<void> {
+    this.save = await loadGameData();
+    if (!this.selectedWeaponId && this.save.weapons.length > 0) {
+      this.selectedWeaponId = this.save.weapons[0].id;
     }
-    this.canvas = canvasEl;
-    this.dungeonCanvas = dCanvasEl;
-    this.renderer = new InnRenderer(this.canvas);
-    this.dungeonRenderer = new DungeonExpeditionRenderer(this.dungeonCanvas);
 
-    this.game = new DungeonInnGame(
-      () => this.refreshHeaderAndLogs(),
-      () => this.refreshAllUi(true),
-      undefined,
-      (zoneTab) => this.openDrawerOnTab(zoneTab),
-      (settledReport) => this.showDailyReportModal(settledReport, true)
-    );
+    const canvas = document.getElementById('iso-canvas') as HTMLCanvasElement;
+    this.renderer = new IsoRenderer(canvas);
+    window.addEventListener('resize', () => this.renderer.resize());
 
-    const offlineReport = this.game.loadFromStorage();
-    this.autoSelectInitialParty();
-    this.bindEvents();
-    this.updateSoundButtonText();
-    this.refreshAllUi(true);
+    canvas.addEventListener('click', (e) => {
+      const clicked = this.renderer.getClickedRoom(e.clientX, e.clientY);
+      if (!clicked) return;
+      sfx.playClick();
+      if (clicked === 'inn') this.openModal('inn_cook');
+      else if (clicked === 'blacksmith') this.openModal('bs_forge');
+      else if (clicked === 'potion') this.openModal('potion_brew');
+      else if (clicked === 'trade') this.openModal('trade_market');
+      else if (clicked === 'dungeon_gate') this.openModal('dungeon_prep');
+    });
 
-    if (this.game.migratedFromLegacy) {
-      this.elMigrationModal.classList.remove('hidden');
-    } else if (offlineReport) {
-      this.showOfflineModal(offlineReport);
-    } else if (!this.game.tutorialSeen) {
-      this.game.tutorialSeen = true;
-      this.game.saveToStorage();
-    }
+    this.syncMapActors();
+    this.bindUIEvents();
+    this.updateTopHud();
 
     requestAnimationFrame((now) => this.loop(now));
   }
 
-  private autoSelectInitialParty(): void {
-    const dungeon = DUNGEON_MAP[this.selectedDungeonId] ?? DUNGEONS[0];
-    const best = selectBestPartyForDungeon(
-      this.game.getUnlockedHeroes(),
-      dungeon,
-      this.game.getMaxPartySize()
-    );
-    this.selectedPartyHeroIds = best.map((h) => h.id);
-  }
+  /**
+   * 5명 전담 직원 + 영입한 영웅들을 쿼터뷰 타일맵 위에 자연스럽게 배치 및 행동 제어
+   */
+  private syncMapActors(): void {
+    const existingMap = new Map(this.actors.map((a) => [a.id, a]));
+    const nextActors: MapActor[] = [];
 
-  private bindEvents(): void {
-    this.canvas.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      const rect = this.canvas.getBoundingClientRect();
-      if (rect.width <= 0 || rect.height <= 0) return;
-      const scaleX = CANVAS_WIDTH / rect.width;
-      const scaleY = CANVAS_HEIGHT / rect.height;
-      const cx = (e.clientX - rect.left) * scaleX;
-      const cy = (e.clientY - rect.top) * scaleY;
-      const prevHero = this.game.selectedHeroId;
-      this.game.handleCanvasTap(cx, cy);
-      if (this.game.selectedHeroId !== prevHero) {
-        this.renderHeroInspectorPanel(true);
-      }
-    });
+    // 1. 5명 전담 직원 배치 (각자 담당 시설 안에서 분주하게 움직이며 말풍선 출력)
+    const staffCoords: Record<
+      StaffRoleId,
+      { gx: number; gy: number; tool: string; badge: string }
+    > = {
+      chef: { gx: 2.3, gy: 2.3, tool: '🍳', badge: '👨‍🍳요리사' },
+      forger: { gx: 9.4, gy: 2.4, tool: '🔨', badge: '🔨제작' },
+      enhancer: { gx: 11.1, gy: 3.5, tool: '⚒️', badge: '⚒️강화' },
+      enchanter: { gx: 12.1, gy: 2.4, tool: '✨', badge: '✨인챈트' },
+      alchemist: { gx: 3.3, gy: 10.2, tool: '🧪', badge: '🧪연금' },
+    };
 
-    document
-      .getElementById('btn-toggle-map-zoom')
-      ?.addEventListener('click', (e) => {
-        this.mapZoomExpanded = !this.mapZoomExpanded;
-        const viewport = document.getElementById('inn-canvas-viewport');
-        viewport?.classList.toggle('zoom-scroll-mode', this.mapZoomExpanded);
-        const btn = e.currentTarget as HTMLButtonElement;
-        btn.textContent = this.mapZoomExpanded
-          ? '↔️ 확대 팬 모드 (탭해 맞춤)'
-          : '🔍 전체 맞춤 보기';
-      });
-
-    document
-      .getElementById('btn-return-to-inn')
-      ?.addEventListener('click', () => {
-        this.isDungeonOverlayHiddenByUser = true;
-        this.updateDungeonOverlayVisibility();
-      });
-
-    this.elBtnShowDungeon.addEventListener('click', () => {
-      this.isDungeonOverlayHiddenByUser = false;
-      this.updateDungeonOverlayVisibility();
-    });
-
-    document.getElementById('btn-serve-now')?.addEventListener('click', () => {
-      this.game.serveAllOrSolicit();
-    });
-
-    this.elEventBtn.addEventListener('click', () => {
-      this.game.triggerRandomEvent(true);
-    });
-
-    document
-      .getElementById('btn-open-daily-report')
-      ?.addEventListener('click', () => {
-        const rep =
-          this.game.lastSettledDayReport ?? this.game.currentDayLedger;
-        this.showDailyReportModal(
-          rep,
-          Boolean(this.game.lastSettledDayReport)
-        );
-      });
-
-    document
-      .getElementById('btn-close-daily-report')
-      ?.addEventListener('click', () => {
-        this.elDailyReportModal.classList.add('hidden');
-        this.game.sound.playCoin();
-      });
-
-    document
-      .getElementById('btn-close-drawer')
-      ?.addEventListener('click', () => {
-        this.closeDrawer();
-      });
-
-    const tabButtons = document.querySelectorAll<HTMLButtonElement>('.tab-btn');
-    tabButtons.forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const tab = btn.dataset.tab as ActiveTab | undefined;
-        if (!tab) return;
-        if (this.isDrawerOpen && this.activeTab === tab) {
-          this.closeDrawer();
-        } else {
-          this.openDrawerOnTab(tab);
+    (Object.keys(staffCoords) as StaffRoleId[]).forEach((role) => {
+      const st = this.save.staff[role];
+      const meta = staffCoords[role];
+      const prev = existingMap.get(st.id);
+      nextActors.push(
+        prev || {
+          id: st.id,
+          name: st.name,
+          kind: 'staff',
+          gridX: meta.gx,
+          gridY: meta.gy,
+          targetX: meta.gx,
+          targetY: meta.gy,
+          state: 'work',
+          stateTimer: 3,
+          facing: 'se',
+          speechText: null,
+          speechTimer: 0,
+          speechTone: 'normal',
+          hairColor: st.hatColor,
+          bodyColor: st.avatarColor,
+          accentColor: '#fef08a',
+          weaponIcon: meta.tool,
+          roleBadge: `[${st.tier}]`,
+          bouncePhase: Math.random() * 6,
         }
-      });
-    });
-
-    this.elSoundBtn.addEventListener('click', () => {
-      this.game.sound.toggleMute();
-      this.updateSoundButtonText();
-      this.game.saveToStorage();
-    });
-
-    document.getElementById('btn-help')?.addEventListener('click', () => {
-      this.elHelpModal.classList.remove('hidden');
-    });
-    document.getElementById('btn-close-help')?.addEventListener('click', () => {
-      this.elHelpModal.classList.add('hidden');
-    });
-
-    document
-      .getElementById('btn-close-offline')
-      ?.addEventListener('click', () => {
-        this.elOfflineModal.classList.add('hidden');
-        this.game.sound.playCoin();
-      });
-
-    document
-      .getElementById('btn-cancel-enhance')
-      ?.addEventListener('click', () => {
-        this.pendingEnhanceTarget = null;
-        this.elEnhanceModal.classList.add('hidden');
-      });
-    document
-      .getElementById('btn-confirm-enhance')
-      ?.addEventListener('click', () => {
-        if (this.pendingEnhanceTarget) {
-          this.game.enhanceEquipment(this.pendingEnhanceTarget, false);
-          this.pendingEnhanceTarget = null;
-          this.elEnhanceModal.classList.add('hidden');
-          this.renderHeroInspectorPanel(true);
-          if (this.isDrawerOpen) {
-            this.buildTabCards();
-          }
-        }
-      });
-
-    document
-      .getElementById('btn-migrate-continue')
-      ?.addEventListener('click', () => {
-        this.game.migratedFromLegacy = false;
-        this.elMigrationModal.classList.add('hidden');
-        this.refreshAllUi(true);
-      });
-    document
-      .getElementById('btn-migrate-fresh')
-      ?.addEventListener('click', () => {
-        this.elMigrationModal.classList.add('hidden');
-        this.game.resetGame();
-        this.autoSelectInitialParty();
-        this.refreshAllUi(true);
-      });
-
-    document.getElementById('btn-reset')?.addEventListener('click', () => {
-      this.elResetModal.classList.remove('hidden');
-    });
-    document
-      .getElementById('btn-cancel-reset')
-      ?.addEventListener('click', () => {
-        this.elResetModal.classList.add('hidden');
-      });
-    document
-      .getElementById('btn-confirm-reset')
-      ?.addEventListener('click', () => {
-        this.elResetModal.classList.add('hidden');
-        this.game.resetGame();
-        this.autoSelectInitialParty();
-        this.refreshAllUi(true);
-      });
-
-    [
-      this.elDailyReportModal,
-      this.elOfflineModal,
-      this.elEnhanceModal,
-      this.elMigrationModal,
-      this.elHelpModal,
-      this.elResetModal,
-    ].forEach((modal) => {
-      modal.addEventListener('click', (e) => {
-        if (e.target === modal) {
-          modal.classList.add('hidden');
-        }
-      });
-    });
-
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') {
-        this.game.saveToStorage(true);
-      }
-    });
-    window.addEventListener('pagehide', () => {
-      this.game.saveToStorage(true);
-    });
-    window.addEventListener('beforeunload', () => {
-      this.game.saveToStorage(true);
-    });
-  }
-
-  public openDrawerOnTab(tab: ActiveTab): void {
-    this.activeTab = tab;
-    this.isDrawerOpen = true;
-    this.elManagementDrawer.classList.remove('hidden');
-
-    const tabButtons = document.querySelectorAll<HTMLButtonElement>('.tab-btn');
-    tabButtons.forEach((b) => {
-      const isActive = b.dataset.tab === tab;
-      b.classList.toggle('active', isActive);
-      b.setAttribute('aria-selected', isActive ? 'true' : 'false');
-    });
-    this.elCategorySummary.textContent = TAB_SUMMARIES[tab];
-    this.buildTabCards();
-  }
-
-  public closeDrawer(): void {
-    this.isDrawerOpen = false;
-    this.elManagementDrawer.classList.add('hidden');
-    const tabButtons = document.querySelectorAll<HTMLButtonElement>('.tab-btn');
-    tabButtons.forEach((b) => {
-      b.classList.remove('active');
-      b.setAttribute('aria-selected', 'false');
-    });
-  }
-
-  private updateDungeonOverlayVisibility(): void {
-    const hasExpeditions = this.game.expeditions.length > 0;
-    if (!hasExpeditions) {
-      this.elDungeonPanel.classList.add('hidden');
-      this.elBtnShowDungeon.classList.add('hidden');
-      this.isDungeonOverlayHiddenByUser = false;
-      return;
-    }
-
-    if (this.isDungeonOverlayHiddenByUser) {
-      this.elDungeonPanel.classList.add('hidden');
-      this.elBtnShowDungeon.classList.remove('hidden');
-      const exp = this.game.expeditions[0];
-      const d = DUNGEON_MAP[exp.dungeonId];
-      this.elBtnShowDungeon.textContent = `⚔️ 원정 화면 열기 (${
-        d?.name ?? '던전'
-      } ${exp.currentFloor ?? 1}/${exp.totalFloors ?? 3}F)`;
-    } else {
-      this.elDungeonPanel.classList.remove('hidden');
-      this.elBtnShowDungeon.classList.add('hidden');
-    }
-  }
-
-  private updateSoundButtonText(): void {
-    const muted = this.game.sound.isMuted();
-    this.elSoundBtn.textContent = muted ? '🔇' : '🔊';
-  }
-
-  private showDailyReportModal(
-    report: DailyFinancialReport,
-    isEndOfDay: boolean
-  ): void {
-    const elTitle = document.getElementById('daily-report-modal-title');
-    const elSub = document.getElementById('daily-report-subtitle');
-    const elBody = document.getElementById('daily-report-body');
-
-    if (elTitle) {
-      elTitle.textContent = isEndOfDay
-        ? `🌙 ${report.day}일차 여관 일일 결산서 (${report.innRankTitle})`
-        : `📊 ${report.day}일차 오늘 실시간 장부 (${report.innRankTitle})`;
-    }
-    if (elSub) {
-      elSub.textContent = isEndOfDay
-        ? `${report.day}일차 영업이 마감되어 직원 일당과 시설 유지비를 정산했습니다. 확인 후 ${this.game.dayNumber}일차를 맞이하세요!`
-        : `현재 진행 중인 ${report.day}일차의 실시간 수입·지출 집계입니다. (하루가 끝나면 급료·유지비가 차감됩니다)`;
-    }
-    if (elBody) {
-      const inc = report.income;
-      const exp = report.expense;
-      const expectedWages = this.game.getDailyWagesBreakdown().totalWages;
-      const expectedUpkeep = this.game.getDailyUpkeepCost();
-
-      elBody.innerHTML = `
-        <div class="report-row">
-          <span>🍲 식사·음료 판매 수입</span>
-          <strong style="color:#7eb38a">+${formatGold(inc.foodAndDrink)} G</strong>
-        </div>
-        <div class="report-row">
-          <span>🍻 방문 손님 서빙·팁 수입 (${report.servedCount}회)</span>
-          <strong style="color:#7eb38a">+${formatGold(inc.guestServing)} G</strong>
-        </div>
-        <div class="report-row">
-          <span>🛏️ 2층 객실 숙박·휴식 수입</span>
-          <strong style="color:#7eb38a">+${formatGold(inc.roomAndRest)} G</strong>
-        </div>
-        <div class="report-row">
-          <span>⚗️ 포션 가게 판매 수입</span>
-          <strong style="color:#7eb38a">+${formatGold(inc.potionSales)} G</strong>
-        </div>
-        <div class="report-row">
-          <span>⚒️ 대장간 장비 판매·강화·수리 수입</span>
-          <strong style="color:#7eb38a">+${formatGold(inc.blacksmithSales)} G</strong>
-        </div>
-        <div class="report-row">
-          <span>💎 전리품 감정 수수료·퀘스트 보상</span>
-          <strong style="color:#7eb38a">+${formatGold(inc.lootMargin)} G</strong>
-        </div>
-        <div class="report-row highlight-row">
-          <span>📈 일일 총 영업 수입</span>
-          <strong style="color:#7eb38a">+${formatGold(inc.totalIncome)} G</strong>
-        </div>
-
-        <div class="report-row" style="margin-top:4px">
-          <span>🧑‍🍳 직원 일당 / 급료 지출</span>
-          <strong style="color:#e3958d">-${formatGold(
-            isEndOfDay ? exp.wages : expectedWages
-          )} G${!isEndOfDay ? ' (결산 예정)' : ''}</strong>
-        </div>
-        <div class="report-row">
-          <span>🕯️ 연료·식자재·시설 유지비</span>
-          <strong style="color:#e3958d">-${formatGold(
-            isEndOfDay ? exp.upkeep : expectedUpkeep
-          )} G${!isEndOfDay ? ' (결산 예정)' : ''}</strong>
-        </div>
-        <div class="report-row">
-          <span>🧪 포션 조제·장비 단조·강화 원가</span>
-          <strong style="color:#e3958d">-${formatGold(exp.craftCost)} G</strong>
-        </div>
-        <div class="report-row">
-          <span>🎒 영웅 던전 전리품 매입 지출</span>
-          <strong style="color:#e3958d">-${formatGold(exp.lootPurchase)} G</strong>
-        </div>
-        <div class="report-row">
-          <span>🏛️ 시설·메뉴·도구 확장 투자 (자본 지출)</span>
-          <strong style="color:#d4bfa8">-${formatGold(exp.facilityInvest)} G</strong>
-        </div>
-
-        <div class="report-row highlight-row">
-          <span>💰 ${report.day}일차 영업 순이익 (수입 - 운영지출)</span>
-          <strong class="gold-highlight" style="color:${
-            report.netProfit >= 0 ? '#ebd186' : '#e3958d'
-          }">${formatSignedGold(report.netProfit)} G</strong>
-        </div>
-
-        <div class="report-row">
-          <span>🗺️ 던전 원정 결과 / 상점 거래</span>
-          <strong>성공 ${report.dungeonWins}회 · 후퇴 ${
-        report.dungeonFails
-      }회 / 상점 거래 ${report.heroTransactions}건</strong>
-        </div>
-        ${
-          report.newHeroesJoined.length > 0
-            ? `<div class="report-row"><span>🦸 오늘 합류한 동료</span><strong style="color:#7eb38a">${report.newHeroesJoined.join(
-                ', '
-              )}</strong></div>`
-            : ''
-        }
-        ${
-          report.injuredHeroes.length > 0
-            ? `<div class="report-row"><span>🩸 치료받은 부상 영웅</span><strong style="color:#e3958d">${report.injuredHeroes.join(
-                ', '
-              )}</strong></div>`
-            : ''
-        }
-        ${
-          report.wageArrears > 0
-            ? `<p class="enhance-warning-box">⚠️ 체불 급료 ${formatGold(
-                report.wageArrears
-              )}G가 남아 있어 직원 효율이 70%로 낮아졌습니다. 골드를 벌면 자동 상환됩니다.</p>`
-            : ''
-        }
-      `;
-    }
-
-    const closeBtn = document.getElementById('btn-close-daily-report');
-    if (closeBtn) {
-      closeBtn.textContent = isEndOfDay
-        ? '🌅 확인하고 다음 날 영업 시작하기'
-        : '✅ 장부 확인하고 영업 계속하기';
-    }
-
-    this.elDailyReportModal.classList.remove('hidden');
-  }
-
-  private showOfflineModal(report: OfflineReport): void {
-    const elTime = document.getElementById('offline-time-text');
-    const elGps = document.getElementById('offline-gps-text');
-    const elExp = document.getElementById('offline-exp-text');
-    const elCraft = document.getElementById('offline-craft-text');
-    const elExtra = document.getElementById('offline-extra-text');
-    const elGold = document.getElementById('offline-gold-text');
-
-    if (elTime) {
-      const durStr = report.wasCapped
-        ? `${formatDuration(report.cappedSeconds)} (최대 8시간)`
-        : formatDuration(report.elapsedSeconds);
-      elTime.textContent = `${durStr} (${report.simulatedDays}일분 요약 정산)`;
-    }
-    if (elGps) {
-      elGps.textContent = `수입 +${formatGold(
-        report.totalIncome
-      )}G / 지출 -${formatGold(report.totalExpense)}G`;
-    }
-    if (elExp) {
-      elExp.textContent = `${report.expeditionsCompleted}회 완료`;
-    }
-    if (elCraft) {
-      elCraft.textContent = `포션 ${report.potionsCrafted}병 / 장비 ${report.equipsCrafted}개`;
-    }
-    if (elExtra) {
-      elExtra.textContent = `상점 거래 ${report.heroShopTransactions}건 / 치료 ${report.heroesHealedCount}회 / 안전매각 ${report.peddlerSales}개`;
-    }
-    if (elGold) {
-      elGold.textContent = `${formatSignedGold(report.earnedGold)} G`;
-    }
-
-    this.elOfflineModal.classList.remove('hidden');
-  }
-
-  private openEnhanceConfirmModal(target: {
-    heroId?: string;
-    slot?: EquipSlot;
-    stockUid?: number;
-  }): void {
-    const preview = this.game.getEnhancePreview(target);
-    if (!preview) return;
-
-    this.pendingEnhanceTarget = target;
-    const elName = document.getElementById('enhance-target-name');
-    const elLv = document.getElementById('enhance-level-change');
-    const elChance = document.getElementById('enhance-chance-text');
-    const elCost = document.getElementById('enhance-cost-text');
-    const btnConfirm = document.getElementById(
-      'btn-confirm-enhance'
-    ) as HTMLButtonElement | null;
-
-    if (elName) {
-      elName.textContent = preview.heroName
-        ? `[${preview.heroName} 착용] ${preview.itemName}`
-        : `[대장간 재고] ${preview.itemName}`;
-    }
-    if (elLv) {
-      elLv.textContent = `+${preview.currentLevel} → +${preview.nextLevel}`;
-    }
-    if (elChance) {
-      const pct = (preview.successRate * 100).toFixed(
-        preview.successRate < 0.05 ? 2 : 1
       );
-      elChance.textContent = `성공 ${pct}% (파괴 위험 ${(
-        100 -
-        preview.successRate * 100
-      ).toFixed(1)}%)`;
-    }
-    if (elCost) {
-      const matText = Object.entries(preview.materialCosts)
-        .map(([mId, cnt]) => `${MATERIAL_MAP[mId]?.name ?? mId} x${cnt}`)
-        .join(', ');
-      elCost.textContent = `${formatGold(preview.goldCost)} G${
-        matText ? ` · ${matText}` : ''
-      }`;
-    }
-    if (btnConfirm) {
-      btnConfirm.disabled = !preview.canAttempt;
+    });
+
+    // 2. 영입한 영웅들 배치 (여관, 대장간, 포션가게, 거래처 사이를 자연스럽게 순회)
+    for (const hero of this.save.heroes) {
+      const prev = existingMap.get(hero.id);
+      const wp = this.save.weapons.find((w) => w.id === hero.weaponId);
+      const classMeta = HERO_CLASS_META[hero.classId];
+      if (prev) {
+        prev.weaponIcon = wp ? wp.icon : classMeta.icon;
+        prev.roleBadge = `Lv.${hero.level}`;
+        nextActors.push(prev);
+      } else {
+        const startX = 3 + Math.random() * 7;
+        const startY = 3 + Math.random() * 7;
+        nextActors.push({
+          id: hero.id,
+          name: hero.name,
+          kind: 'hero',
+          gridX: startX,
+          gridY: startY,
+          targetX: startX,
+          targetY: startY,
+          state: 'idle',
+          stateTimer: 1 + Math.random() * 2,
+          facing: 'se',
+          speechText: '여관이 아늑하군!',
+          speechTimer: 3.5,
+          speechTone: 'happy',
+          hairColor: hero.hairColor,
+          bodyColor: hero.armorColor,
+          accentColor: TIER_COLORS[hero.tier],
+          weaponIcon: wp ? wp.icon : classMeta.icon,
+          roleBadge: `Lv.${hero.level}`,
+          bouncePhase: Math.random() * 6,
+        });
+      }
     }
 
-    this.elEnhanceModal.classList.remove('hidden');
+    this.actors = nextActors;
   }
 
   private loop(now: number): void {
-    const dt = (now - this.lastFrameTime) / 1000;
+    const dt = Math.min(0.1, (now - this.lastFrameTime) / 1000);
     this.lastFrameTime = now;
 
-    const prevExpCount = this.game.expeditions.length;
-    const prevPotQueueCount = this.game.craftQueues.potion.length;
-    const prevSmithQueueCount = this.game.craftQueues.blacksmith.length;
+    this.updateCalendarAndIncome(dt);
+    this.updateActorsBehavior(dt);
+    this.updateDungeonCombat(dt);
 
-    this.game.update(dt);
+    // 떠오르는 텍스트 업데이트
+    this.pops = this.pops.filter((p) => {
+      p.age += dt;
+      return p.age < p.maxAge;
+    });
 
-    if (this.game.expeditions.length > prevExpCount) {
-      this.isDungeonOverlayHiddenByUser = false;
-    }
-    this.updateDungeonOverlayVisibility();
+    this.renderer.render(
+      this.save,
+      this.actors,
+      this.pops,
+      this.activeDungeon,
+      now / 1000
+    );
 
-    const renderState = this.game.getRenderState();
-    this.renderer.render(renderState);
-    if (!this.elDungeonPanel.classList.contains('hidden')) {
-      this.dungeonRenderer.render(renderState);
-    }
-
-    const queueChanged =
-      this.game.expeditions.length !== prevExpCount ||
-      this.game.craftQueues.potion.length !== prevPotQueueCount ||
-      this.game.craftQueues.blacksmith.length !== prevSmithQueueCount;
-
-    this.uiRefreshAccumulator += dt;
-    if (queueChanged) {
-      this.uiRefreshAccumulator = 0;
-      this.refreshAllUi(true);
-    } else if (this.uiRefreshAccumulator >= 0.35) {
-      this.uiRefreshAccumulator = 0;
-      this.refreshHeaderAndLogs();
-      this.updateLiveProgressBars();
-      this.updateHeroInspectorVitalsLive();
-      this.renderDungeonExpeditionPartyTabsAndLogs();
-    }
-
-    requestAnimationFrame((nextNow) => this.loop(nextNow));
+    requestAnimationFrame((n) => this.loop(n));
   }
 
-  private refreshAllUi(forceRebuildCards: boolean): void {
-    this.refreshHeaderAndLogs();
-    this.renderHeroInspectorPanel(forceRebuildCards);
-    this.updateDungeonOverlayVisibility();
-    this.renderDungeonExpeditionPartyTabsAndLogs();
-    if (this.isDrawerOpen && forceRebuildCards) {
-      this.buildTabCards();
-    } else if (this.isDrawerOpen) {
-      this.updateLiveProgressBars();
-    }
-  }
-
-  // ==========================================================================
-  // 영웅을 탭했을 때만 열리는 상태 확인 & 특정 행동 직접 지시 서랍 (닫기 버튼 포함)
-  // ==========================================================================
-
-  private renderHeroInspectorPanel(forceRebuild = false): void {
-    const heroId = this.game.selectedHeroId;
-    if (!heroId || !this.game.heroes[heroId]?.unlocked) {
-      this.elHeroInspector.classList.add('hidden');
-      this.elHeroInspector.dataset.renderedHeroId = '';
-      return;
-    }
-    this.elHeroInspector.classList.remove('hidden');
-    if (
-      !forceRebuild &&
-      this.elHeroInspector.dataset.renderedHeroId === heroId
-    ) {
-      this.updateHeroInspectorVitalsLive();
-      return;
-    }
-    this.elHeroInspector.dataset.renderedHeroId = heroId;
-
-    const hero = this.game.heroes[heroId];
-    const roster = HERO_ROSTER_MAP[hero.id];
-    const cls = HERO_CLASSES[roster.classId];
-    const origin = ORIGINS[roster.originId];
-    const bd = getHeroStatBreakdown(hero);
-    const reqXp = getHeroRequiredXp(hero.level);
-    const hunger = Math.round(hero.hunger ?? 20);
-    const fatigue = Math.round(hero.fatigue ?? 10);
-
-    let partyText = '단독 자율 행동 중';
-    if (hero.expeditionId) {
-      const exp = this.game.expeditions.find((e) => e.id === hero.expeditionId);
-      if (exp) {
-        const dName = DUNGEON_MAP[exp.dungeonId]?.name ?? '던전';
-        const mates = exp.heroIds
-          .map((id) => HERO_ROSTER_MAP[id]?.name ?? id)
-          .join(' · ');
-        partyText = `[${dName} 원정대] ${mates}`;
+  private updateCalendarAndIncome(dt: number): void {
+    // 카이로소프트 스타일 달력(5Y 4M 3W) 진행
+    this.calendarAccum += dt;
+    if (this.calendarAccum >= 7) {
+      this.calendarAccum = 0;
+      this.save.week++;
+      if (this.save.week > 4) {
+        this.save.week = 1;
+        this.save.month++;
+        if (this.save.month > 12) {
+          this.save.month = 1;
+          this.save.year++;
+        }
       }
-    } else if (hero.partyId) {
-      const mates = this.game
-        .getUnlockedHeroes()
-        .filter((h) => h.partyId === hero.partyId)
-        .map((h) => HERO_ROSTER_MAP[h.id].name)
-        .join(' · ');
-      partyText = mates ? `파티 결성: ${mates}` : '단독 자율 행동 중';
+      this.updateTopHud();
+      saveGameData(this.save);
     }
 
-    const equipSlotsHtml = (
-      ['weapon', 'armor', 'offhand', 'accessory'] as EquipSlot[]
-    )
-      .map((slot) => {
-        const inst = hero.equipment[slot];
-        const def = EQUIPMENT_DEF_MAP[inst.defId];
-        const rInfo = RARITY_INFO[def.rarity];
-        const canEnh = !def.isBase && inst.enhanceLevel < 15;
-        return `
-          <div class="insp-equip-chip" style="border-color:${rInfo.color}">
-            <span class="insp-eq-slot">${EQUIP_SLOT_LABELS[slot]}</span>
-            <strong style="color:${rInfo.color}">${def.icon} ${def.name}${
-          inst.enhanceLevel > 0 ? ` +${inst.enhanceLevel}` : ''
-        }</strong>
-            ${
-              canEnh
-                ? `<button type="button" class="insp-mini-enh-btn" data-enh-slot="${slot}">🔥+강화</button>`
-                : ''
-            }
-          </div>
-        `;
-      })
-      .join('');
+    // 영웅들과 손님들이 여관·상점을 이용하며 창출하는 실시간 골드 수입
+    this.guestIncomeAccum += dt;
+    if (this.guestIncomeAccum >= 5.5) {
+      this.guestIncomeAccum = 0;
+      const innLv = this.save.facilities.inn.level;
+      const tradeLv = this.save.facilities.trade.level;
+      const passiveGoldPct = Object.values(this.save.facilities)
+        .flatMap((f) => f.passives)
+        .filter((p) => p.bonusType === 'gold_income')
+        .reduce((acc, p) => acc + p.value, 0);
 
-    const potionOptionsHtml = POTION_RECIPES.map((p) => {
-      const stock = this.game.potionStock[p.id] ?? 0;
-      const price = this.game.getEffectivePotionSellPrice(p.id);
-      const sel = p.id === this.orderPotionId ? 'selected' : '';
-      return `<option value="${p.id}" ${sel}>${p.icon} ${p.name} (재고 ${stock} / ${price}G)</option>`;
-    }).join('');
-
-    const dungeonOptionsHtml = DUNGEONS.filter((d) =>
-      this.game.isDungeonUnlocked(d.id)
-    )
-      .map((d) => {
-        const sel = d.id === this.orderDungeonId ? 'selected' : '';
-        return `<option value="${d.id}" ${sel}>${d.icon} T${d.tier}. ${d.name}</option>`;
-      })
-      .join('');
-
-    this.elHeroInspector.innerHTML = `
-      <div class="inspector-top-row">
-        <div class="inspector-hero-id">
-          <img src="${getHeroPortraitDataUrl(hero.id)}" alt="${
-      roster.name
-    }" class="pixel-portrait" />
-          <div>
-            <div class="upgrade-title-row">
-              <strong class="upgrade-name">🎯 ${roster.name} <small class="hero-title-sub">(${
-      roster.title
-    })</small></strong>
-              <span class="role-badge role-${cls.role}">${cls.icon} ${
-      cls.name
-    } · ${cls.roleName}</span>
-            </div>
-            <div class="trait-row">
-              <span class="upgrade-level-badge" id="insp-lv-xp">Lv.${
-                hero.level
-              } (XP ${hero.xp}/${reqXp})</span>
-              ${roster.personalities
-                .map(
-                  (p) =>
-                    `<span class="trait-chip">${PERSONALITIES[p].icon} ${PERSONALITIES[p].name}</span>`
-                )
-                .join('')}
-              <span class="trait-chip origin-chip">${origin.icon} ${
-      origin.name
-    }</span>
-            </div>
-          </div>
-        </div>
-        <button type="button" id="btn-close-hero-inspector" class="inspector-close-btn" aria-label="영웅 패널 닫기">
-          ✕ 닫기
-        </button>
-      </div>
-
-      <div class="inspector-other-heroes">
-        ${this.game
-          .getUnlockedHeroes()
-          .slice(0, 10)
-          .map((h) => {
-            const r = HERO_ROSTER_MAP[h.id];
-            return `<button type="button" class="hero-quick-switch-btn${
-              h.id === hero.id ? ' active' : ''
-            }" data-switch-hero="${h.id}">${r.name}</button>`;
-          })
-          .join('')}
-      </div>
-
-      <div class="inspector-vitals-grid">
-        <div class="vital-pill">❤️ 체력 <strong id="insp-hp">${
-          hero.currentHp
-        }/${bd.totalStats.hp}</strong></div>
-        <div class="vital-pill">🍖 허기 <strong id="insp-hunger">${hunger}%</strong></div>
-        <div class="vital-pill">💦 피로 <strong id="insp-fatigue">${fatigue}%</strong></div>
-        <div class="vital-pill">💰 보유 골드 <strong id="insp-gold">${formatGold(
-          hero.gold
-        )} G</strong></div>
-        <div class="vital-pill intent-pill">🧭 현재 의도: <strong id="insp-intent">${
-          hero.intentText ?? '여관 대기 중'
-        }</strong> (${partyText})</div>
-      </div>
-
-      <div class="stat-pill-row">
-        <span>⚔️전투력 <b id="insp-cp">${bd.combatPower}</b></span>
-        <span>ATK <b>${bd.totalStats.atk}</b></span>
-        <span>DEF <b>${bd.totalStats.def}</b></span>
-        <span>AGI <b>${bd.totalStats.agi}</b></span>
-        <span>INT <b>${bd.totalStats.int}</b></span>
-        <span>LUK <b>${bd.totalStats.luk}</b></span>
-      </div>
-
-      <div class="inspector-equip-row">
-        ${equipSlotsHtml}
-      </div>
-
-      <div class="inspector-orders-box">
-        <div class="orders-box-header">
-          <span>📣 <b>플레이어 행동 지시</b></span>
-          <button type="button" id="btn-cancel-hero-order" class="cancel-order-btn" ${
-            hero.playerOrder ? '' : 'disabled'
-          }>
-            ✖ 지시 취소 ${hero.playerOrder ? `(${hero.playerOrder.label})` : ''}
-          </button>
-        </div>
-        <div class="orders-btn-grid">
-          <button type="button" class="order-action-btn" data-order-kind="eat_meal">🍲 식당 식사</button>
-          <button type="button" class="order-action-btn" data-order-kind="drink_ale">🍺 바 에일</button>
-          <button type="button" class="order-action-btn" data-order-kind="rest_room">🛏️ 2층 객실 휴식</button>
-          <button type="button" class="order-action-btn" data-order-kind="sell_loot">💎 전리품 매각</button>
-          <button type="button" class="order-action-btn" data-order-kind="buy_equip">⚒️ 대장간 장비</button>
-          <button type="button" class="order-action-btn" data-order-kind="rally_board">📋 게시판 집결</button>
-        </div>
-        <div class="orders-custom-row">
-          <div class="custom-order-group">
-            <select id="select-order-potion" class="order-select">${potionOptionsHtml}</select>
-            <button type="button" id="btn-order-buy-potion" class="order-action-btn">⚗️ 포션 구매</button>
-          </div>
-          <div class="custom-order-group">
-            <select id="select-order-dungeon" class="order-select">${dungeonOptionsHtml}</select>
-            <button type="button" id="btn-order-depart-dungeon" class="order-action-btn primary-order-btn">🚀 던전 출발</button>
-          </div>
-        </div>
-      </div>
-    `;
-
-    document
-      .getElementById('btn-close-hero-inspector')
-      ?.addEventListener('click', () => {
-        this.game.selectedHeroId = null;
-        this.renderHeroInspectorPanel(true);
-      });
-
-    this.elHeroInspector
-      .querySelectorAll<HTMLButtonElement>('[data-switch-hero]')
-      .forEach((btn) => {
-        btn.addEventListener('click', () => {
-          this.game.selectedHeroId = btn.dataset.switchHero ?? null;
-          this.renderHeroInspectorPanel(true);
-        });
-      });
-
-    this.elHeroInspector
-      .querySelectorAll<HTMLButtonElement>('[data-enh-slot]')
-      .forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const slot = btn.dataset.enhSlot as EquipSlot;
-          this.openEnhanceConfirmModal({ heroId: hero.id, slot });
-        });
-      });
-
-    this.elHeroInspector
-      .querySelectorAll<HTMLButtonElement>('[data-order-kind]')
-      .forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const kind = btn.dataset.orderKind as
-            | 'eat_meal'
-            | 'drink_ale'
-            | 'rest_room'
-            | 'sell_loot'
-            | 'buy_equip'
-            | 'rally_board';
-          const labels: Record<typeof kind, string> = {
-            eat_meal: '식당 식사',
-            drink_ale: '바 음료',
-            rest_room: '객실 휴식',
-            sell_loot: '전리품 매각',
-            buy_equip: '대장간 장비 정비',
-            rally_board: '게시판 파티 모집',
-          };
-          this.game.issueHeroOrder(hero.id, {
-            kind,
-            label: labels[kind],
-          });
-          this.renderHeroInspectorPanel(true);
-        });
-      });
-
-    const selPot = document.getElementById(
-      'select-order-potion'
-    ) as HTMLSelectElement | null;
-    selPot?.addEventListener('change', () => {
-      this.orderPotionId = selPot.value;
-    });
-
-    document
-      .getElementById('btn-order-buy-potion')
-      ?.addEventListener('click', () => {
-        const chosenId = selPot ? selPot.value : this.orderPotionId;
-        const pName =
-          POTION_RECIPES.find((p) => p.id === chosenId)?.name ?? '포션';
-        this.game.issueHeroOrder(hero.id, {
-          kind: 'buy_potion',
-          targetId: chosenId,
-          label: `${pName} 구매`,
-        });
-        this.renderHeroInspectorPanel(true);
-      });
-
-    const selDun = document.getElementById(
-      'select-order-dungeon'
-    ) as HTMLSelectElement | null;
-    selDun?.addEventListener('change', () => {
-      this.orderDungeonId = selDun.value;
-    });
-
-    document
-      .getElementById('btn-order-depart-dungeon')
-      ?.addEventListener('click', () => {
-        const chosenDun = selDun ? selDun.value : this.orderDungeonId;
-        const dName = DUNGEON_MAP[chosenDun]?.name ?? '던전';
-        this.game.issueHeroOrder(hero.id, {
-          kind: 'depart_dungeon',
-          targetId: chosenDun,
-          label: `${dName} 출정`,
-        });
-        this.renderHeroInspectorPanel(true);
-      });
-
-    document
-      .getElementById('btn-cancel-hero-order')
-      ?.addEventListener('click', () => {
-        this.game.cancelHeroOrder(hero.id);
-        this.renderHeroInspectorPanel(true);
-      });
-  }
-
-  private updateHeroInspectorVitalsLive(): void {
-    const heroId = this.game.selectedHeroId;
-    if (!heroId || !this.game.heroes[heroId]?.unlocked) return;
-    const hero = this.game.heroes[heroId];
-    const bd = getHeroStatBreakdown(hero);
-
-    const elHp = document.getElementById('insp-hp');
-    const elHunger = document.getElementById('insp-hunger');
-    const elFatigue = document.getElementById('insp-fatigue');
-    const elGold = document.getElementById('insp-gold');
-    const elIntent = document.getElementById('insp-intent');
-    const btnCancel = document.getElementById(
-      'btn-cancel-hero-order'
-    ) as HTMLButtonElement | null;
-
-    if (elHp) elHp.textContent = `${hero.currentHp}/${bd.totalStats.hp}`;
-    if (elHunger) elHunger.textContent = `${Math.round(hero.hunger ?? 20)}%`;
-    if (elFatigue) elFatigue.textContent = `${Math.round(hero.fatigue ?? 10)}%`;
-    if (elGold) elGold.textContent = `${formatGold(hero.gold)} G`;
-    if (elIntent) elIntent.textContent = hero.intentText ?? '여관 대기 중';
-    if (btnCancel) {
-      btnCancel.disabled = !hero.playerOrder;
-      btnCancel.textContent = hero.playerOrder
-        ? `✖ 지시 취소 (${hero.playerOrder.label})`
-        : '✖ 지시 취소';
-    }
-  }
-
-  // ==========================================================================
-  // 던전 실시간 갈래 방 탐험 뷰 파티 탭 · 이벤트 선택지 · 전투 로그 렌더링
-  // ==========================================================================
-
-  private renderDungeonExpeditionPartyTabsAndLogs(): void {
-    const exps = this.game.expeditions;
-    this.elDungeonPartyTabs.innerHTML = '';
-
-    for (const exp of exps) {
-      const d = DUNGEON_MAP[exp.dungeonId];
-      const isFocused =
-        (this.game.focusedExpeditionId ?? exps[0]?.id) === exp.id;
-      const pct = Math.min(
-        100,
-        Math.max(
-          0,
-          ((exp.totalDurationSec - exp.remainingSec) /
-            Math.max(1, exp.totalDurationSec)) *
-            100
-        )
+      const baseEarn = Math.round(
+        (12 + innLv * 8 + tradeLv * 6 + this.save.heroes.length * 5) *
+          (1 + passiveGoldPct / 100)
       );
-
-      const tabBtn = document.createElement('button');
-      tabBtn.type = 'button';
-      tabBtn.className = `dungeon-party-tab-btn${isFocused ? ' active' : ''}`;
-      tabBtn.innerHTML = `
-        <span>${d?.icon ?? '🗺️'} ${d?.name ?? exp.dungeonId} [${
-        exp.currentFloor ?? 1
-      }/${exp.totalFloors ?? 3}F]</span>
-        <span class="mini-party-bar"><span style="width:${pct.toFixed(
-          0
-        )}%"></span></span>
-      `;
-      tabBtn.addEventListener('click', () => {
-        this.game.focusedExpeditionId = exp.id;
-        this.renderDungeonExpeditionPartyTabsAndLogs();
-      });
-      this.elDungeonPartyTabs.appendChild(tabBtn);
-    }
-
-    const activeExp =
-      exps.find((e) => e.id === this.game.focusedExpeditionId) ??
-      exps[0] ??
-      null;
-
-    // 던전 이벤트 선택지 배너 렌더링
-    const prompt = activeExp?.activeEventPrompt;
-    if (activeExp && prompt && !prompt.resolvedOptionId) {
-      const promptKey = `${activeExp.id}_${prompt.eventId}`;
-      this.elDungeonEventBox.classList.remove('hidden');
-      if (this.lastRenderedEventPromptId !== promptKey) {
-        this.lastRenderedEventPromptId = promptKey;
-        this.elDungeonEventBox.innerHTML = `
-          <div class="event-choice-title">${prompt.title} <small>(${Math.ceil(
-          prompt.autoResolveTimer
-        )}초 후 자동 선택)</small></div>
-          <p class="event-choice-desc">${prompt.description}</p>
-          <div class="event-choice-btns">
-            ${prompt.options
-              .map(
-                (opt) =>
-                  `<button type="button" class="event-choice-btn" data-ev-opt="${opt.id}">${opt.label} <small>(${opt.effectText})</small></button>`
-              )
-              .join('')}
-          </div>
-        `;
-        this.elDungeonEventBox
-          .querySelectorAll<HTMLButtonElement>('[data-ev-opt]')
-          .forEach((btn) => {
-            btn.addEventListener('click', () => {
-              this.game.chooseDungeonEventOption(
-                activeExp.id,
-                btn.dataset.evOpt
-              );
-              this.lastRenderedEventPromptId = null;
-              this.elDungeonEventBox.classList.add('hidden');
-            });
-          });
-      }
-    } else {
-      this.lastRenderedEventPromptId = null;
-      this.elDungeonEventBox.classList.add('hidden');
-    }
-
-    const logs =
-      activeExp?.floorLogs ??
-      this.game.recentExpeditionResults[0]?.floorLogs ??
-      [];
-    const topId = logs[0]?.id ?? -1;
-    if (topId === this.lastFloorLogTopId) return;
-    this.lastFloorLogTopId = topId;
-
-    this.elDungeonFloorLogs.innerHTML = '';
-    for (const item of logs.slice(0, 3)) {
-      const li = document.createElement('li');
-      li.className = `floor-log-item floor-log-${item.type}`;
-      li.textContent = `[${item.floor}층] ${item.text}`;
-      this.elDungeonFloorLogs.appendChild(li);
+      this.save.gold += baseEarn;
+      this.spawnPop(3.8, 3.6, `+${baseEarn}G 숙박·상점`, '#fde047');
+      this.updateTopHud();
     }
   }
 
-  private refreshHeaderAndLogs(): void {
-    const rankDef = this.game.getCurrentInnRankDef();
-    const { icon, label, clockText } = this.game.getDayPhaseLabel();
-
-    this.elLevelBadge.textContent = rankDef.title;
-    this.elDayClock.textContent = `${this.game.dayNumber}일차 · ${icon} ${label} ${clockText}`;
-    this.elRepText.textContent = `평판 ${formatGold(this.game.reputation)}`;
-    this.elHeroBadge.textContent = `영웅 ${this.game.getUnlockedHeroCount()}/${
-      HERO_ROSTER.length
-    }명`;
-    this.elGold.textContent = `${formatGold(this.game.gold)} G`;
-
-    const todayNet = this.game.currentDayLedger?.netProfit ?? 0;
-    this.elTodayProfit.textContent = `${formatSignedGold(todayNet)} G`;
-    this.elTodayProfit.style.color =
-      todayNet >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
-
-    const fixedWages = this.game.getDailyWagesBreakdown().totalWages;
-    const fixedUpkeep = this.game.getDailyUpkeepCost();
-    const arrearsNote =
-      this.game.unpaidWages > 0 ? ` (체불 ${this.game.unpaidWages}G)` : '';
-    this.elDailyFixed.textContent = `-${formatGold(
-      fixedWages + fixedUpkeep
-    )} G/일${arrearsNote}`;
-
-    // 항상 보이는 현재 여관 등급 목표 체크리스트 & 진행 바
-    const { nextRank, items, overallPct } =
-      this.game.getNextRankGoalsProgress();
-    this.elGoalFill.style.width = `${Math.max(4, overallPct).toFixed(1)}%`;
-
-    if (nextRank && items.length > 0) {
-      this.elNextGoal.textContent = `🎯 다음 등급 [${nextRank.title}] 승급 목표 (${Math.round(
-        overallPct
-      )}%)`;
-      this.elHudGoalChips.innerHTML = items
-        .map(
-          (it) =>
-            `<span class="hud-goal-chip${it.completed ? ' done' : ''}">${
-              it.completed ? '✅' : '▫️'
-            } ${it.condition.label}: <b>${formatGold(it.current)}/${formatGold(
-              it.target
-            )}</b></span>`
-        )
-        .join('');
-    } else {
-      this.elNextGoal.textContent =
-        '🏆 최고 등급 [Lv.8 전설의 왕국 최고 여관] 달성 완료!';
-      this.elHudGoalChips.innerHTML = `<span class="hud-goal-chip done">🐉 고대 용왕의 화산 둥지 정복 완료</span>`;
-    }
-
-    if (this.game.activeEvent) {
-      this.elEventBanner.classList.remove('hidden');
-      this.elEventTitle.textContent = this.game.activeEvent.def.title;
-      this.elEventTimer.textContent = `${Math.ceil(
-        this.game.activeEvent.remainingSec
-      )}초`;
-      this.elEventDesc.textContent = this.game.activeEvent.def.description;
-    } else {
-      this.elEventBanner.classList.add('hidden');
-    }
-
-    const waitingCount = this.game.guests.filter(
-      (g) => g.state === 'waiting'
-    ).length;
-    if (waitingCount > 0) {
-      this.elServeBtnLabel.textContent = `🍻 손님 서빙 (${waitingCount})`;
-    } else {
-      this.elServeBtnLabel.textContent = `🔔 손님 맞이`;
-    }
-
-    if (this.game.activeEvent) {
-      this.elEventBtn.disabled = true;
-      this.elEventBtnLabel.textContent = `🎉 이벤트 중`;
-    } else if (this.game.eventCooldownSec > 0) {
-      this.elEventBtn.disabled = true;
-      this.elEventBtnLabel.textContent = `🎲 쿨타임 ${Math.ceil(
-        this.game.eventCooldownSec
-      )}s`;
-    } else {
-      this.elEventBtn.disabled = false;
-      this.elEventBtnLabel.textContent = `🎲 소문내기`;
-    }
-
-    this.renderLiveStatusStrip();
-
-    this.elServedSummary.textContent = `${this.game.dayNumber}일차 · 서빙 ${formatGold(
-      this.game.totalServed
-    )}회 · 거래 ${this.game.totalHeroShopTransactions}건`;
-    this.renderLogsIfChanged();
-  }
-
-  private renderLiveStatusStrip(): void {
-    const parts: string[] = [];
-    for (const exp of this.game.expeditions) {
-      const d = DUNGEON_MAP[exp.dungeonId];
-      parts.push(
-        `🗺️ ${d?.name ?? exp.dungeonId} [${exp.currentFloor ?? 1}/${
-          exp.totalFloors ?? 3
-        }F]`
-      );
-    }
-    const pending = this.game.getPendingLootSummary();
-    if (pending.totalCount > 0) {
-      parts.push(`💎 대기 전리품 ${pending.totalCount}개`);
-    }
-    if (this.game.craftQueues.potion.length > 0) {
-      parts.push(`⚗️ 포션 조제 중`);
-    }
-    if (this.game.craftQueues.blacksmith.length > 0) {
-      parts.push(`⚒️ 장비 단조 중`);
-    }
-    this.elLiveStrip.textContent =
-      parts.length > 0 ? parts.join(' · ') : '🏠 여관 영업 중';
-  }
-
-  private updateLiveProgressBars(): void {
-    document.querySelectorAll<HTMLElement>('[data-exp-id]').forEach((el) => {
-      const expId = el.dataset.expId;
-      const exp = this.game.expeditions.find((e) => e.id === expId);
-      if (exp) {
-        const pct = Math.min(
-          100,
-          Math.max(
-            0,
-            ((exp.totalDurationSec - exp.remainingSec) /
-              Math.max(1, exp.totalDurationSec)) *
-              100
-          )
-        );
-        const fill = el.querySelector<HTMLElement>('.mini-progress-fill');
-        const txt = el.querySelector<HTMLElement>('.mini-progress-text');
-        if (fill) fill.style.width = `${pct.toFixed(1)}%`;
-        if (txt)
-          txt.textContent = `${exp.currentFloor ?? 1}/${
-            exp.totalFloors ?? 3
-          }층 · ${Math.ceil(exp.remainingSec)}초 남음`;
-      }
-    });
-
-    if (
-      this.activeTab === 'menu' ||
-      this.activeTab === 'room' ||
-      this.activeTab === 'staff' ||
-      this.activeTab === 'facility'
-    ) {
-      this.updateLiveUpgradeCardStates();
-    }
-  }
-
-  private renderLogsIfChanged(): void {
-    const topId = this.game.logs[0]?.id ?? -1;
-    if (topId === this.lastLogTopId) return;
-    this.lastLogTopId = topId;
-
-    this.elLogList.innerHTML = '';
-    for (const entry of this.game.logs.slice(0, 3)) {
-      const li = document.createElement('li');
-      li.className = `log-item log-${entry.type}`;
-
-      const timeSpan = document.createElement('span');
-      timeSpan.className = 'log-time';
-      timeSpan.textContent = `[${entry.timeText}]`;
-
-      const textSpan = document.createElement('span');
-      textSpan.textContent = entry.text;
-
-      li.appendChild(timeSpan);
-      li.appendChild(textSpan);
-      this.elLogList.appendChild(li);
-    }
-  }
-
-  // ==========================================================================
-  // 서랍 탭별 콘텐츠 빌더
-  // ==========================================================================
-
-  private buildTabCards(): void {
-    this.elUpgradeList.innerHTML = '';
-
-    switch (this.activeTab) {
-      case 'goals':
-        this.buildGoalsAndQuestsTab();
-        break;
-      case 'stats':
-        this.buildStatsAndLedgerTab();
-        break;
-      case 'heroes':
-        this.buildHeroesTab();
-        break;
-      case 'trade':
-        this.buildTradeTab();
-        break;
-      case 'dungeon':
-        this.buildDungeonTab();
-        break;
-      case 'potion':
-        this.buildPotionTab();
-        break;
-      case 'blacksmith':
-        this.buildBlacksmithTab();
-        break;
-      case 'codex':
-        this.buildCodexCards();
-        break;
-      default:
-        this.buildInnUpgradesTab(this.activeTab);
-        break;
-    }
-  }
-
-  // --------------------------------------------------------------------------
-  // 0-A. 🏆 여관 등급 목표 & 선택 퀘스트 탭
-  // --------------------------------------------------------------------------
-  private buildGoalsAndQuestsTab(): void {
-    const rankPanel = document.createElement('div');
-    rankPanel.className = 'section-panel';
-    rankPanel.innerHTML = `
-      <div class="panel-subtitle">🏆 여관 등급 성장 축 (Lv.1 ~ Lv.8) &amp; 등급별 공개 달성 목표</div>
-      <p class="upgrade-desc">각 등급의 목표 조건을 모두 달성하면 즉시 다음 등급으로 승급하고 축하 보상을 받습니다. 최종 목표는 여관에서 키운 파티로 <b>[고대 용왕의 화산 둥지]</b>를 격파하고 <b>[Lv.8 전설의 왕국 최고 여관]</b>에 오르는 것입니다!</p>
-    `;
-
-    for (const lvl of INN_LEVELS) {
-      const isReached = this.game.innRank >= lvl.level;
-      const isNext = this.game.innRank + 1 === lvl.level;
-      const milestone = this.game.rankMilestones[lvl.level];
-
-      const card = document.createElement('div');
-      card.className = `upgrade-card${
-        !isReached && !isNext ? ' locked' : ''
-      }`;
-      if (isNext) {
-        card.style.borderColor = 'var(--accent-gold)';
-      }
-
-      const goalsHtml =
-        lvl.goals.length === 0
-          ? `<span class="hud-goal-chip done">✅ 시작 등급</span>`
-          : lvl.goals
-              .map((g) => {
-                const st = this.game.evaluateGoalCondition(g);
-                return `<span class="hud-goal-chip${
-                  st.completed ? ' done' : ''
-                }">${st.completed ? '✅' : '▫️'} ${g.label} (${formatGold(
-                  st.current
-                )}/${formatGold(st.target)})</span>`;
-              })
-              .join(' ');
-
-      card.innerHTML = `
-        <div class="upgrade-info">
-          <div class="upgrade-icon">${
-            isReached ? '🏆' : isNext ? '🎯' : '🔒'
-          }</div>
-          <div class="upgrade-text-wrap">
-            <div class="upgrade-title-row">
-              <span class="upgrade-name">${lvl.title}</span>
-              <span class="upgrade-level-badge">${
-                isReached
-                  ? milestone
-                    ? `달성 완료 (${milestone.day}일차)`
-                    : '달성 완료'
-                  : isNext
-                  ? '현재 도전 목표'
-                  : '상위 등급'
-              }</span>
-            </div>
-            <p class="upgrade-effects">승급 혜택: ${lvl.rewardText}</p>
-            <div class="trait-row" style="margin-top:5px">${goalsHtml}</div>
-          </div>
-        </div>
-      `;
-      rankPanel.appendChild(card);
-    }
-    this.elUpgradeList.appendChild(rankPanel);
-
-    // 선택 퀘스트 / 업적 목록
-    const questPanel = document.createElement('div');
-    questPanel.className = 'section-panel';
-    const doneCnt = Object.values(this.game.completedQuests).filter(
-      Boolean
-    ).length;
-    questPanel.innerHTML = `
-      <div class="panel-subtitle">🏅 선택 퀘스트 &amp; 여관 업적 (${doneCnt}/${OPTIONAL_QUESTS.length} 달성)</div>
-    `;
-
-    for (const q of OPTIONAL_QUESTS) {
-      const done = Boolean(this.game.completedQuests[q.id]);
-      const card = document.createElement('div');
-      card.className = `upgrade-card compact-card${done ? '' : ' locked'}`;
-      card.innerHTML = `
-        <div class="upgrade-info">
-          <div class="upgrade-icon">${q.icon}</div>
-          <div class="upgrade-text-wrap">
-            <div class="upgrade-title-row">
-              <span class="upgrade-name">${q.title}</span>
-              <span class="upgrade-level-badge">${
-                done ? '✅ 달성 완료' : `보상 +${q.rewardGold}G · 평판 +${q.rewardRep}`
-              }</span>
-            </div>
-            <p class="upgrade-desc">${q.description}</p>
-          </div>
-        </div>
-      `;
-      questPanel.appendChild(card);
-    }
-    this.elUpgradeList.appendChild(questPanel);
-  }
-
-  // --------------------------------------------------------------------------
-  // 0-B. 📊 통계·장부 탭 (일별 수입·지출·순이익 바 차트 + 급료/유지비 명세)
-  // --------------------------------------------------------------------------
-  private buildStatsAndLedgerTab(): void {
-    const wagesInfo = this.game.getDailyWagesBreakdown();
-    const upkeepCost = this.game.getDailyUpkeepCost();
-    const cur = this.game.currentDayLedger;
-
-    // 1. 최근 일별 수입·지출·순이익 차트
-    const chartPanel = document.createElement('div');
-    chartPanel.className = 'section-panel';
-
-    const chartDays: DailyFinancialReport[] = [
-      ...this.game.dayHistory.slice(-9),
-      cur,
+  /**
+   * 캐릭터들이 상황에 맞게 자연스럽고 부드럽게 이동하고 행동하며 카이로소프트풍 말풍선을 띄웁니다.
+   */
+  private updateActorsBehavior(dt: number): void {
+    const waypoints = [
+      { gx: 3.5, gy: 3.5, room: 'inn', lines: ['맛있는 냄새!', '푹 쉬었다~', '요리 슬롯 돌리자!'] },
+      { gx: 10.5, gy: 3.8, room: 'blacksmith', lines: ['새 무기가 필요해!', '강화 대박 나길!', '모루 소리 좋네!'] },
+      { gx: 3.5, gy: 10.5, room: 'potion', lines: ['포션 챙겨가자!', '보글보글 신기해', '회복약 필수!'] },
+      { gx: 10.5, gy: 10.5, room: 'trade', lines: ['재료 사러 왔어!', '마일리지 교환!', '오늘 시세 좋군!'] },
+      { gx: 7.0, gy: 7.0, room: 'corridor', lines: ['던전 가고 싶다!', '컨디션 최고!', 'Ugh... 배고파'] },
     ];
-    let maxBarVal = 100;
-    for (const d of chartDays) {
-      maxBarVal = Math.max(
-        maxBarVal,
-        d.income.totalIncome,
-        d.expense.totalOperatingExpense
-      );
-    }
 
-    const barsHtml = chartDays
-      .map((d) => {
-        const isToday = d.day === this.game.dayNumber && d === cur;
-        const incH = Math.max(
-          4,
-          Math.round((d.income.totalIncome / maxBarVal) * 82)
-        );
-        const expH = Math.max(
-          4,
-          Math.round((d.expense.totalOperatingExpense / maxBarVal) * 82)
-        );
-        return `
-          <div class="chart-day-col">
-            <span class="chart-net-label ${d.netProfit < 0 ? 'neg' : ''}">${formatSignedGold(
-          d.netProfit
-        )}G</span>
-            <div class="chart-pair-bars" title="${d.day}일차: 수입 +${d.income.totalIncome}G / 운영지출 -${d.expense.totalOperatingExpense}G">
-              <div class="chart-bar-inc" style="height:${incH}px"></div>
-              <div class="chart-bar-exp" style="height:${expH}px"></div>
-            </div>
-            <span class="chart-day-label">${d.day}일${
-          isToday ? '(오늘)' : ''
-        }</span>
-          </div>
-        `;
-      })
-      .join('');
+    for (const actor of this.actors) {
+      if (actor.speechTimer > 0) {
+        actor.speechTimer -= dt;
+        if (actor.speechTimer <= 0) {
+          actor.speechText = null;
+        }
+      }
 
-    chartPanel.innerHTML = `
-      <div class="panel-subtitle">📊 일별 수입 · 운영지출 · 순이익 추이 차트 (하루 = 실시간 4분)</div>
-      <div class="stats-chart-container">
-        <div class="chart-legend">
-          <span><i class="legend-dot" style="background:#7eb38a"></i>일일 총수입 (식음료·서빙·객실·포션·대장간)</span>
-          <span><i class="legend-dot" style="background:#c7635b"></i>운영 지출 (급료·유지비·조제단조·전리품매입)</span>
-          <span><i class="legend-dot" style="background:#ebd186"></i>상단 숫자: 일일 영업 순이익</span>
-        </div>
-        <div class="chart-bars-grid">
-          ${barsHtml}
-        </div>
-      </div>
-    `;
-    this.elUpgradeList.appendChild(chartPanel);
-
-    // 2. 고용 직원 급료 및 일일 유지비 명세
-    const wagePanel = document.createElement('div');
-    wagePanel.className = 'section-panel';
-    const staffRows =
-      wagesInfo.items.length > 0
-        ? wagesInfo.items
-            .map(
-              (st) =>
-                `<div class="report-row"><span>${st.icon} ${st.name} (Lv.${st.level})</span><strong style="color:#e3958d">-${st.wage} G/일</strong></div>`
-            )
-            .join('')
-        : `<p class="empty-hint">현재 고용된 유급 직원이 없습니다 (여관 주인이 직접 기본 서빙 중 · 일일 급료 0G).</p>`;
-
-    wagePanel.innerHTML = `
-      <div class="panel-subtitle">🧑‍🍳 일일 고정비 명세 (급료 합계 -${wagesInfo.totalWages}G/일 · 시설 유지비 -${upkeepCost}G/일)</div>
-      <div class="offline-report-box">
-        ${staffRows}
-        <div class="report-row highlight-row">
-          <span>🕯️ 여관 기본 연료·식자재·시설 유지비</span>
-          <strong style="color:#e3958d">-${upkeepCost} G/일</strong>
-        </div>
-      </div>
-    `;
-    this.elUpgradeList.appendChild(wagePanel);
-
-    // 3. 일별 상세 장부 기록 리스트
-    const historyPanel = document.createElement('div');
-    historyPanel.className = 'section-panel';
-    historyPanel.innerHTML = `<div class="panel-subtitle">📜 일별 결산 장부 기록 (최근 ${chartDays.length}일)</div>`;
-
-    for (const d of [...chartDays].reverse()) {
-      const isToday = d.day === this.game.dayNumber && d === cur;
-      const row = document.createElement('div');
-      row.className = `history-row ${d.netProfit >= 0 ? 'win' : 'lose'}`;
-      row.innerHTML = `
-        <div>
-          <strong>[${d.day}일차${isToday ? ' · 진행 중' : ''}] ${
-        d.innRankTitle
-      } — 순이익 ${formatSignedGold(d.netProfit)} G</strong>
-          <span>(보유 골드 ${formatGold(d.endGold)}G)</span>
-        </div>
-        <div class="history-sub">
-          수입 +${formatGold(d.income.totalIncome)}G (서빙 ${
-        d.income.guestServing
-      } · 식음료 ${d.income.foodAndDrink} · 객실 ${
-        d.income.roomAndRest
-      } · 포션 ${d.income.potionSales} · 대장간 ${
-        d.income.blacksmithSales
-      } · 수수료 ${d.income.lootMargin}) |
-          운영지출 -${formatGold(
-            d.expense.totalOperatingExpense
-          )}G (급료 ${d.expense.wages} · 유지비 ${
-        d.expense.upkeep
-      } · 제작 ${d.expense.craftCost} · 매입 ${
-        d.expense.lootPurchase
-      }) | 시설투자 -${formatGold(d.expense.facilityInvest)}G
-        </div>
-      `;
-      historyPanel.appendChild(row);
-    }
-    this.elUpgradeList.appendChild(historyPanel);
-  }
-
-  // --------------------------------------------------------------------------
-  // 1. 🦸 영웅 명단 탭
-  // --------------------------------------------------------------------------
-  private buildHeroesTab(): void {
-    const unlockedCount = this.game.getUnlockedHeroCount();
-
-    const filterBar = document.createElement('div');
-    filterBar.className = 'sub-filter-bar';
-
-    const allBtn = document.createElement('button');
-    allBtn.type = 'button';
-    allBtn.className = `chip-btn${
-      this.heroFilterClass === 'all' ? ' active' : ''
-    }`;
-    allBtn.textContent = `전체 (${unlockedCount}/${HERO_ROSTER.length})`;
-    allBtn.addEventListener('click', () => {
-      this.heroFilterClass = 'all';
-      this.buildTabCards();
-    });
-    filterBar.appendChild(allBtn);
-
-    for (const cls of Object.values(HERO_CLASSES)) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = `chip-btn${
-        this.heroFilterClass === cls.id ? ' active' : ''
-      }`;
-      btn.textContent = `${cls.icon} ${cls.name}`;
-      btn.addEventListener('click', () => {
-        this.heroFilterClass = cls.id;
-        this.buildTabCards();
-      });
-      filterBar.appendChild(btn);
-    }
-    this.elUpgradeList.appendChild(filterBar);
-
-    const sortedRoster = [...HERO_ROSTER]
-      .filter(
-        (r) =>
-          this.heroFilterClass === 'all' || r.classId === this.heroFilterClass
-      )
-      .sort((a, b) => {
-        const ua = this.game.heroes[a.id]?.unlocked ? 1 : 0;
-        const ub = this.game.heroes[b.id]?.unlocked ? 1 : 0;
-        if (ua !== ub) return ub - ua;
-        return (
-          (this.game.heroes[b.id]?.level ?? 1) -
-          (this.game.heroes[a.id]?.level ?? 1)
-        );
-      });
-
-    for (const roster of sortedRoster) {
-      const state = this.game.heroes[roster.id];
-      const cls = HERO_CLASSES[roster.classId];
-      const origin = ORIGINS[roster.originId];
-
-      const card = document.createElement('div');
-      card.className = `hero-card${state.unlocked ? '' : ' locked'}${
-        this.game.selectedHeroId === state.id ? ' selected-hero-card' : ''
-      }`;
-
-      if (!state.unlocked) {
-        card.innerHTML = `
-          <div class="hero-card-header">
-            <div class="upgrade-icon">❔</div>
-            <div class="upgrade-text-wrap">
-              <div class="upgrade-title-row">
-                <span class="upgrade-name">${roster.name} — ${roster.title}</span>
-                <span class="upgrade-level-badge">${cls.icon} ${cls.name} (${cls.roleName})</span>
-              </div>
-              <p class="upgrade-desc">소문만 들림: "${roster.backstory}"</p>
-              <p class="upgrade-effects">성격: ${roster.personalities
-                .map((p) => `${PERSONALITIES[p].icon}${PERSONALITIES[p].name}`)
-                .join(' · ')} | 출신: ${origin.icon}${origin.name} (${origin.description})</p>
-              <p class="upgrade-unlock-req">🔒 합류 조건: ${roster.unlock.description}</p>
-            </div>
-          </div>
-        `;
-        this.elUpgradeList.appendChild(card);
+      if (actor.kind === 'staff') {
+        // 직원은 자기 작업대 주변에서 부드럽게 작업 모션 + 가끔 장인 대사
+        actor.stateTimer -= dt;
+        if (actor.stateTimer <= 0) {
+          actor.stateTimer = 4 + Math.random() * 5;
+          if (Math.random() < 0.35 && !actor.speechText) {
+            const staffLines = [
+              '슬롯 손맛 최고!',
+              '대박 예감!',
+              '열심히 벼리는 중!',
+              '좋은 재료를 써봐!',
+            ];
+            actor.speechText =
+              staffLines[Math.floor(Math.random() * staffLines.length)];
+            actor.speechTone = 'normal';
+            actor.speechTimer = 2.8;
+          }
+        }
         continue;
       }
 
-      const bd = getHeroStatBreakdown(state);
-      const reqXp = getHeroRequiredXp(state.level);
-      const statusLabels: Record<
-        HeroState['status'],
-        { text: string; cls: string }
-      > = {
-        idle: { text: '🏠 여관 활동 중', cls: 'status-idle' },
-        exploring: { text: '🗺️ 던전 원정 중', cls: 'status-exploring' },
-        resting: { text: '🛏️ 휴식 중', cls: 'status-resting' },
-        injured: {
-          text: `🩸 부상 (${Math.ceil(state.restTimerSec)}초)`,
-          cls: 'status-injured',
-        },
-        fatigued: {
-          text: `💦 피로 (${Math.ceil(state.restTimerSec)}초)`,
-          cls: 'status-fatigued',
-        },
-      };
-      const stInfo = statusLabels[state.status];
+      // 영웅들의 부드러운 이동 및 시설 방문
+      if (actor.state === 'walk') {
+        const dx = actor.targetX - actor.gridX;
+        const dy = actor.targetY - actor.gridY;
+        const dist = Math.hypot(dx, dy);
+        const speed = 1.85; // 자연스럽고 부드러운 이동 속도
 
-      const header = document.createElement('div');
-      header.className = 'hero-card-header';
+        if (dist <= speed * dt) {
+          actor.gridX = actor.targetX;
+          actor.gridY = actor.targetY;
+          actor.state = 'idle';
+          actor.stateTimer = 2.2 + Math.random() * 3.0;
+        } else {
+          actor.gridX += (dx / dist) * speed * dt;
+          actor.gridY += (dy / dist) * speed * dt;
+          actor.facing = dx >= 0 ? (dy >= 0 ? 'se' : 'ne') : dy >= 0 ? 'sw' : 'nw';
+        }
+      } else {
+        actor.stateTimer -= dt;
+        if (actor.stateTimer <= 0) {
+          const wp = waypoints[Math.floor(Math.random() * waypoints.length)];
+          actor.targetX = wp.gx + (Math.random() - 0.5) * 2.2;
+          actor.targetY = wp.gy + (Math.random() - 0.5) * 2.2;
+          actor.state = 'walk';
 
-      const iconBox = document.createElement('div');
-      iconBox.className = 'upgrade-icon';
-      const img = document.createElement('img');
-      img.src = getHeroPortraitDataUrl(roster.id);
-      img.alt = roster.name;
-      img.className = 'pixel-portrait';
-      iconBox.appendChild(img);
-
-      const textWrap = document.createElement('div');
-      textWrap.className = 'upgrade-text-wrap';
-      textWrap.innerHTML = `
-        <div class="upgrade-title-row">
-          <span class="upgrade-name">${roster.name} <small class="hero-title-sub">(${
-        roster.title
-      })</small></span>
-          <span class="upgrade-level-badge">Lv.${state.level} (XP ${
-        state.xp
-      }/${reqXp})</span>
-          <span class="role-badge role-${cls.role}">${cls.icon} ${cls.name} · ${
-        cls.roleName
-      }</span>
-          <span class="status-pill ${stInfo.cls}">${stInfo.text}</span>
-        </div>
-        <p class="upgrade-desc">🧭 현재 의도: <b>${
-          state.intentText ?? '여관 홀 대기 중'
-        }</b></p>
-        <div class="trait-row">
-          ${roster.personalities
-            .map(
-              (p) =>
-                `<span class="trait-chip" title="${PERSONALITIES[p].description}">${PERSONALITIES[p].icon} ${PERSONALITIES[p].name}</span>`
-            )
-            .join('')}
-          <span class="trait-chip origin-chip" title="${origin.description}">${
-        origin.icon
-      } ${origin.name}</span>
-          <span class="trait-chip gold-chip">💰 ${formatGold(state.gold)} G</span>
-          <span class="trait-chip">🍖 허기 ${Math.round(state.hunger ?? 20)}%</span>
-          <span class="trait-chip">💦 피로 ${Math.round(
-            state.fatigue ?? 10
-          )}%</span>
-        </div>
-        <div class="stat-pill-row">
-          <span>⚔️전투력 <b>${bd.combatPower}</b></span>
-          <span>ATK <b>${bd.totalStats.atk}</b> <small>(+${
-        bd.equipStats.atk
-      })</small></span>
-          <span>DEF <b>${bd.totalStats.def}</b> <small>(+${
-        bd.equipStats.def
-      })</small></span>
-          <span>AGI <b>${bd.totalStats.agi}</b> <small>(+${
-        bd.equipStats.agi
-      })</small></span>
-          <span>INT <b>${bd.totalStats.int}</b> <small>(+${
-        bd.equipStats.int
-      })</small></span>
-          <span>HP <b>${state.currentHp}/${bd.totalStats.hp}</b></span>
-          <span>LUK <b>${bd.totalStats.luk}</b></span>
-        </div>
-      `;
-
-      if (state.buffs.length > 0) {
-        const buffRow = document.createElement('div');
-        buffRow.className = 'buff-row';
-        buffRow.innerHTML =
-          `활성 버프: ` +
-          state.buffs
-            .map(
-              (b) =>
-                `<span class="buff-tag">${b.icon} ${b.name} (${b.remainingRuns}회)</span>`
-            )
-            .join(' ');
-        textWrap.appendChild(buffRow);
-      }
-
-      header.appendChild(iconBox);
-      header.appendChild(textWrap);
-      card.appendChild(header);
-
-      const equipGrid = document.createElement('div');
-      equipGrid.className = 'hero-equip-grid';
-
-      for (const slot of ['weapon', 'armor', 'offhand', 'accessory'] as EquipSlot[]) {
-        const inst = state.equipment[slot];
-        const def = EQUIPMENT_DEF_MAP[inst.defId];
-        const rarity = RARITY_INFO[def.rarity];
-        const eqStats = getEquipmentEffectiveStats(inst);
-        const statStr = Object.entries(eqStats)
-          .filter(([, v]) => v > 0)
-          .map(([k, v]) => `${k.toUpperCase()}+${v}`)
-          .join(' ');
-
-        const slotBox = document.createElement('div');
-        slotBox.className = 'equip-slot-box';
-        slotBox.style.borderColor = rarity.color;
-
-        const topLine = document.createElement('div');
-        topLine.className = 'equip-slot-top';
-        topLine.innerHTML = `
-          <span class="slot-type-label">${EQUIP_SLOT_LABELS[slot]}</span>
-          <span class="rarity-tag" style="background:${rarity.badgeBg};color:${rarity.color}">${rarity.label}</span>
-        `;
-
-        const nameLine = document.createElement('div');
-        nameLine.className = 'equip-item-name';
-        nameLine.style.color = rarity.color;
-        nameLine.textContent = `${def.icon} ${def.name}${
-          inst.enhanceLevel > 0 ? ` +${inst.enhanceLevel}` : ''
-        }`;
-
-        const statLine = document.createElement('div');
-        statLine.className = 'equip-item-stats';
-        statLine.textContent = statStr || '기본 장비';
-
-        slotBox.appendChild(topLine);
-        slotBox.appendChild(nameLine);
-        slotBox.appendChild(statLine);
-
-        const btnRow = document.createElement('div');
-        btnRow.className = 'equip-slot-actions';
-
-        if (!def.isBase && inst.enhanceLevel < 15) {
-          const enhPreview = this.game.getEnhancePreview({
-            heroId: state.id,
-            slot,
-          });
-          if (enhPreview) {
-            const enhBtn = document.createElement('button');
-            enhBtn.type = 'button';
-            enhBtn.className = 'mini-action-btn enhance-btn';
-            const pct = (enhPreview.successRate * 100).toFixed(0);
-            enhBtn.textContent = `🔥 +${enhPreview.nextLevel} 강화 (${pct}%)`;
-            enhBtn.addEventListener('click', () => {
-              this.openEnhanceConfirmModal({ heroId: state.id, slot });
-            });
-            btnRow.appendChild(enhBtn);
+          if (Math.random() < 0.45 && !actor.speechText) {
+            const line = wp.lines[Math.floor(Math.random() * wp.lines.length)];
+            actor.speechText = line;
+            actor.speechTone = line.includes('Ugh') ? 'ugh' : 'normal';
+            actor.speechTimer = 3.0;
           }
         }
-
-        const compatibleStock = this.game.equipmentStock.filter((s) => {
-          const sDef = EQUIPMENT_DEF_MAP[s.defId];
-          return sDef && sDef.slot === slot && canClassEquip(cls.id, sDef);
-        });
-        if (compatibleStock.length > 0) {
-          const bestStock = compatibleStock[0];
-          const sDef = EQUIPMENT_DEF_MAP[bestStock.defId];
-          const eqBtn = document.createElement('button');
-          eqBtn.type = 'button';
-          eqBtn.className = 'mini-action-btn equip-swap-btn';
-          eqBtn.textContent = `🔄 ${sDef.name}${
-            bestStock.enhanceLevel > 0 ? `+${bestStock.enhanceLevel}` : ''
-          } 장착`;
-          eqBtn.addEventListener('click', () => {
-            this.game.equipItemToHero(state.id, bestStock.uid);
-            this.renderHeroInspectorPanel(true);
-            this.buildTabCards();
-          });
-          btnRow.appendChild(eqBtn);
-        }
-
-        slotBox.appendChild(btnRow);
-        equipGrid.appendChild(slotBox);
       }
-
-      card.appendChild(equipGrid);
-
-      const actionBar = document.createElement('div');
-      actionBar.className = 'hero-care-bar';
-
-      const inspectBtn = document.createElement('button');
-      inspectBtn.type = 'button';
-      inspectBtn.className = `care-btn${
-        this.game.selectedHeroId === state.id ? ' active-toggle' : ''
-      }`;
-      inspectBtn.textContent = '🎯 상태·행동 지시 서랍 열기';
-      inspectBtn.addEventListener('click', () => {
-        this.game.selectedHeroId = state.id;
-        this.renderHeroInspectorPanel(true);
-        this.buildTabCards();
-      });
-      actionBar.appendChild(inspectBtn);
-
-      const mealBtn = document.createElement('button');
-      mealBtn.type = 'button';
-      mealBtn.className = 'care-btn';
-      const unlockedMeals = this.game.getUnlockedMeals();
-      const topMeal = unlockedMeals[unlockedMeals.length - 1];
-      const mealInfo = this.game.getMealEffectiveBuff(topMeal.upgradeId);
-      const treatCost = Math.max(4, Math.floor(mealInfo.price * 0.6));
-      mealBtn.disabled = this.game.gold < treatCost;
-      mealBtn.textContent = `${topMeal.icon} 요리 대접 (${treatCost}G)`;
-      mealBtn.addEventListener('click', () => {
-        if (this.game.treatHeroMeal(state.id, topMeal.upgradeId)) {
-          this.renderHeroInspectorPanel(true);
-          this.buildTabCards();
-        }
-      });
-      actionBar.appendChild(mealBtn);
-
-      if (state.status === 'injured' || state.status === 'fatigued') {
-        const restBtn = document.createElement('button');
-        restBtn.type = 'button';
-        restBtn.className = 'care-btn heal-btn';
-        restBtn.disabled = this.game.gold < 8;
-        restBtn.textContent = `🛏️ 특실 즉시 회복 (8G)`;
-        restBtn.addEventListener('click', () => {
-          if (this.game.restHeroInRoom(state.id)) {
-            this.renderHeroInspectorPanel(true);
-            this.buildTabCards();
-          }
-        });
-        actionBar.appendChild(restBtn);
-      }
-
-      const availPotion = POTION_RECIPES.slice()
-        .reverse()
-        .find((p) => (this.game.potionStock[p.id] ?? 0) > 0);
-      if (availPotion) {
-        const potBtn = document.createElement('button');
-        potBtn.type = 'button';
-        potBtn.className = 'care-btn potion-btn';
-        potBtn.textContent = `${availPotion.icon} ${
-          availPotion.name
-        } 지급 (${this.game.potionStock[availPotion.id]})`;
-        potBtn.addEventListener('click', () => {
-          if (this.game.givePotionToHero(state.id, availPotion.id, false)) {
-            this.renderHeroInspectorPanel(true);
-            this.buildTabCards();
-          }
-        });
-        actionBar.appendChild(potBtn);
-      }
-
-      card.appendChild(actionBar);
-      this.elUpgradeList.appendChild(card);
     }
   }
 
-  // --------------------------------------------------------------------------
-  // 2. 💎 상점 판매 설정 & 전리품 거래소 탭
-  // --------------------------------------------------------------------------
-  private buildTradeTab(): void {
-    const cfg = this.game.shopConfig;
-
-    const stageConfigPanel = document.createElement('div');
-    stageConfigPanel.className = 'section-panel';
-    stageConfigPanel.innerHTML = `
-      <div class="panel-subtitle">🎪 여관 상점 판매 &amp; 전리품 매입 시세 설정 (영웅 자율 반응)</div>
-      <p class="upgrade-desc">초당 자동 골드가 없으므로 영웅들이 여관 식당·포션 가게·대장간에서 지갑을 열게 하는 것이 핵심 수입원입니다.</p>
-
-      <div class="market-config-grid">
-        <div class="market-config-box">
-          <div class="mc-header">
-            <strong>🍲 식당·바 요리 판매</strong>
-            <button type="button" id="btn-toggle-meal-sale" class="mc-toggle-btn ${
-              cfg.mealSaleEnabled ? 'on' : 'off'
-            }">${cfg.mealSaleEnabled ? '판매 중 (ON)' : '판매 중단 (OFF)'}</button>
-          </div>
-          <div class="mc-rate-row">
-            ${[
-              { m: 0.8, label: '80% 할인' },
-              { m: 1.0, label: '100% 정가' },
-              { m: 1.25, label: '125% 할증' },
-              { m: 1.5, label: '150% 고급' },
-            ]
-              .map(
-                (opt) =>
-                  `<button type="button" class="mc-chip ${
-                    cfg.mealPriceMultiplier === opt.m ? 'active' : ''
-                  }" data-meal-mult="${opt.m}">${opt.label}</button>`
-              )
-              .join('')}
-          </div>
-        </div>
-
-        <div class="market-config-box">
-          <div class="mc-header">
-            <strong>⚗️ 포션 가게 판매 시세</strong>
-            <span class="mc-sub-note">재고 ${Object.values(
-              this.game.potionStock
-            ).reduce((a, b) => a + b, 0)}병</span>
-          </div>
-          <div class="mc-rate-row">
-            ${[
-              { m: 0.8, label: '80% 할인' },
-              { m: 1.0, label: '100% 정가' },
-              { m: 1.25, label: '125% 할증' },
-              { m: 1.5, label: '150% 고급' },
-            ]
-              .map(
-                (opt) =>
-                  `<button type="button" class="mc-chip ${
-                    cfg.potionPriceMultiplier === opt.m ? 'active' : ''
-                  }" data-pot-mult="${opt.m}">${opt.label}</button>`
-              )
-              .join('')}
-          </div>
-        </div>
-
-        <div class="market-config-box">
-          <div class="mc-header">
-            <strong>⚒️ 대장간 장비 판매 &amp; 강화 의뢰</strong>
-            <button type="button" id="btn-toggle-smith-sale" class="mc-toggle-btn ${
-              cfg.blacksmithSaleEnabled ? 'on' : 'off'
-            }">${
-      cfg.blacksmithSaleEnabled ? '판매 허용 (ON)' : '판매 중단 (OFF)'
-    }</button>
-          </div>
-          <div class="mc-rate-row">
-            ${[
-              { m: 0.8, label: '80% 할인' },
-              { m: 1.0, label: '100% 정가' },
-              { m: 1.25, label: '125% 할증' },
-            ]
-              .map(
-                (opt) =>
-                  `<button type="button" class="mc-chip ${
-                    cfg.blacksmithPriceMultiplier === opt.m ? 'active' : ''
-                  }" data-smith-mult="${opt.m}">${opt.label}</button>`
-              )
-              .join('')}
-            <button type="button" id="btn-toggle-auto-enh" class="mc-chip ${
-              cfg.blacksmithAutoEnhanceEnabled ? 'active' : ''
-            }">🔥 영웅 자율 +강화 의뢰: ${
-      cfg.blacksmithAutoEnhanceEnabled ? 'ON' : 'OFF'
-    }</button>
-          </div>
-        </div>
-
-        <div class="market-config-box">
-          <div class="mc-header">
-            <strong>💎 전리품 일괄 매입 시세</strong>
-            <button type="button" id="btn-toggle-autobuy" class="mc-toggle-btn ${
-              this.game.autoBuyLoot ? 'on' : 'off'
-            }">가판대 자동매입: ${this.game.autoBuyLoot ? 'ON' : 'OFF'}</button>
-          </div>
-          <div class="mc-rate-row">
-            ${[
-              { r: 75, label: '75% 저가' },
-              { r: 90, label: '90% 알뜰' },
-              { r: 100, label: '100% 정가' },
-              { r: 115, label: '115% 우대' },
-            ]
-              .map(
-                (opt) =>
-                  `<button type="button" class="mc-chip ${
-                    cfg.lootBuyRatePct === opt.r ? 'active' : ''
-                  }" data-loot-rate="${opt.r}">${opt.label}</button>`
-              )
-              .join('')}
-          </div>
-        </div>
-      </div>
-    `;
-
-    this.elUpgradeList.appendChild(stageConfigPanel);
-
-    document
-      .getElementById('btn-toggle-meal-sale')
-      ?.addEventListener('click', () => {
-        cfg.mealSaleEnabled = !cfg.mealSaleEnabled;
-        this.buildTabCards();
-      });
-    document
-      .getElementById('btn-toggle-smith-sale')
-      ?.addEventListener('click', () => {
-        cfg.blacksmithSaleEnabled = !cfg.blacksmithSaleEnabled;
-        this.buildTabCards();
-      });
-    document
-      .getElementById('btn-toggle-auto-enh')
-      ?.addEventListener('click', () => {
-        cfg.blacksmithAutoEnhanceEnabled = !cfg.blacksmithAutoEnhanceEnabled;
-        this.buildTabCards();
-      });
-    document
-      .getElementById('btn-toggle-autobuy')
-      ?.addEventListener('click', () => {
-        this.game.autoBuyLoot = !this.game.autoBuyLoot;
-        this.buildTabCards();
-      });
-
-    stageConfigPanel
-      .querySelectorAll<HTMLButtonElement>('[data-meal-mult]')
-      .forEach((btn) => {
-        btn.addEventListener('click', () => {
-          cfg.mealPriceMultiplier = Number(btn.dataset.mealMult);
-          this.buildTabCards();
-        });
-      });
-    stageConfigPanel
-      .querySelectorAll<HTMLButtonElement>('[data-pot-mult]')
-      .forEach((btn) => {
-        btn.addEventListener('click', () => {
-          cfg.potionPriceMultiplier = Number(btn.dataset.potMult);
-          this.buildTabCards();
-        });
-      });
-    stageConfigPanel
-      .querySelectorAll<HTMLButtonElement>('[data-smith-mult]')
-      .forEach((btn) => {
-        btn.addEventListener('click', () => {
-          cfg.blacksmithPriceMultiplier = Number(btn.dataset.smithMult);
-          this.buildTabCards();
-        });
-      });
-    stageConfigPanel
-      .querySelectorAll<HTMLButtonElement>('[data-loot-rate]')
-      .forEach((btn) => {
-        btn.addEventListener('click', () => {
-          cfg.lootBuyRatePct = Number(btn.dataset.lootRate);
-          this.buildTabCards();
-        });
-      });
-
-    const summary = this.game.getPendingLootSummary();
-    const tradeTopPanel = document.createElement('div');
-    tradeTopPanel.className = 'section-panel';
-
-    const headerRow = document.createElement('div');
-    headerRow.className = 'trade-header-row';
-    headerRow.innerHTML = `
-      <div>
-        <div class="panel-subtitle">💰 거래 가판대 — 영웅 전리품 대기 목록 (${
-          summary.totalCount
-        }개 / 매입 총액 ${formatGold(summary.totalCost)} G)</div>
-        <p class="upgrade-desc">전리품을 매입하면 지출로 기록되고 영웅의 보유 골드가 늘어나 여관 내 식사·포션·장비 소비로 되돌아옵니다.</p>
-      </div>
-    `;
-
-    const actionWrap = document.createElement('div');
-    actionWrap.className = 'party-header-btns';
-
-    const buyAllBtn = document.createElement('button');
-    buyAllBtn.type = 'button';
-    buyAllBtn.className = 'buy-btn';
-    buyAllBtn.disabled = summary.totalCount === 0 || this.game.gold < 4;
-    buyAllBtn.innerHTML = `
-      <span class="buy-btn-label">켜진 품목 일괄 매입</span>
-      <span class="buy-btn-cost">${formatGold(summary.totalCost)} G</span>
-    `;
-    buyAllBtn.addEventListener('click', () => {
-      this.game.buyAllHeroLoot(0);
-      this.buildTabCards();
-    });
-    actionWrap.appendChild(buyAllBtn);
-    headerRow.appendChild(actionWrap);
-    tradeTopPanel.appendChild(headerRow);
-
-    if (summary.items.length === 0) {
-      const empty = document.createElement('p');
-      empty.className = 'empty-hint';
-      empty.textContent =
-        '현재 영웅 가방에 매입 대기 중인 전리품이 없습니다. 던전 원정대가 귀환하면 거래 가판대로 걸어옵니다.';
-      tradeTopPanel.appendChild(empty);
-    } else {
-      for (const item of summary.items) {
-        const rarity =
-          RARITY_INFO[item.rarity as keyof typeof RARITY_INFO] ??
-          RARITY_INFO.common;
-        const row = document.createElement('div');
-        row.className = 'upgrade-card compact-card';
-        row.innerHTML = `
-          <div class="upgrade-info">
-            <div class="upgrade-icon">${item.icon}</div>
-            <div class="upgrade-text-wrap">
-              <div class="upgrade-title-row">
-                <span class="upgrade-name" style="color:${rarity.color}">${
-          item.materialName
-        } x${item.count}</span>
-                <span class="upgrade-level-badge">보유: ${item.heroName}</span>
-                <span class="upgrade-level-badge">매입 단가 ${
-                  item.unitPrice
-                }G</span>
-              </div>
-            </div>
-          </div>
-        `;
-        const bBtn = document.createElement('button');
-        bBtn.type = 'button';
-        bBtn.className = 'buy-btn';
-        bBtn.disabled = this.game.gold < item.unitPrice;
-        bBtn.innerHTML = `
-          <span class="buy-btn-label">즉시 매입</span>
-          <span class="buy-btn-cost">${formatGold(item.totalPrice)} G</span>
-        `;
-        bBtn.addEventListener('click', () => {
-          this.game.buyHeroLoot(item.heroId, item.materialId);
-          this.buildTabCards();
-        });
-        row.appendChild(bBtn);
-        tradeTopPanel.appendChild(row);
-      }
+  public triggerActorSpeech(
+    roleOrHeroId: string,
+    text: string,
+    tone: MapActor['speechTone'] = 'happy'
+  ): void {
+    const actor =
+      this.actors.find((a) => a.id === roleOrHeroId) ||
+      this.actors[Math.floor(Math.random() * this.actors.length)];
+    if (actor) {
+      actor.speechText = text;
+      actor.speechTone = tone;
+      actor.speechTimer = 3.5;
     }
-    this.elUpgradeList.appendChild(tradeTopPanel);
-
-    const warehousePanel = document.createElement('div');
-    warehousePanel.className = 'section-panel';
-    warehousePanel.innerHTML = `
-      <div class="panel-subtitle">📦 종류별 전리품 매입 허용 설정 &amp; 여관 재료 창고</div>
-    `;
-
-    const matGrid = document.createElement('div');
-    matGrid.className = 'warehouse-grid';
-    for (const m of MATERIALS) {
-      const cnt = this.game.materials[m.id] ?? 0;
-      const rInfo = RARITY_INFO[m.rarity];
-      const dName = DUNGEON_MAP[m.sourceDungeonId]?.name ?? m.sourceDungeonId;
-      const isBuyOn = cfg.lootBuyEnabled[m.id] !== false;
-      const effBuyPrice = this.game.getEffectiveMaterialBuyPrice(m.id);
-
-      const box = document.createElement('div');
-      box.className = 'warehouse-item';
-      box.style.borderColor = cnt > 0 ? rInfo.color : '#4e382b';
-      box.innerHTML = `
-        <div class="wh-top">
-          <span>${m.icon} <b style="color:${rInfo.color}">${m.name}</b></span>
-          <strong class="wh-count">${formatGold(cnt)}개</strong>
-        </div>
-        <div class="wh-sub">[${rInfo.label}] 매입가 ${effBuyPrice}G (정가 ${
-        m.buyPrice
-      }G) · ${dName}</div>
-        <div class="wh-action-row">
-          <button type="button" class="mc-toggle-btn ${
-            isBuyOn ? 'on' : 'off'
-          }" data-toggle-mat-buy="${m.id}">
-            ${isBuyOn ? '✅ 매입 ON' : '⛔ 매입 OFF'}
-          </button>
-        </div>
-      `;
-      matGrid.appendChild(box);
-    }
-    warehousePanel.appendChild(matGrid);
-    this.elUpgradeList.appendChild(warehousePanel);
-
-    warehousePanel
-      .querySelectorAll<HTMLButtonElement>('[data-toggle-mat-buy]')
-      .forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const mId = btn.dataset.toggleMatBuy!;
-          cfg.lootBuyEnabled[mId] = !(cfg.lootBuyEnabled[mId] !== false);
-          this.buildTabCards();
-        });
-      });
   }
 
-  // --------------------------------------------------------------------------
-  // 3. 🗺️ 던전 & 파티 시너지 미리보기 탭
-  // --------------------------------------------------------------------------
-  private buildDungeonTab(): void {
-    const maxPartySize = this.game.getMaxPartySize();
-    const dungeon = DUNGEON_MAP[this.selectedDungeonId] ?? DUNGEONS[0];
-
-    this.selectedPartyHeroIds = this.selectedPartyHeroIds.filter((id) => {
-      const h = this.game.heroes[id];
-      return h && h.unlocked && h.status === 'idle' && !h.expeditionId;
+  public spawnPop(gx: number, gy: number, text: string, color: string): void {
+    this.pops.push({
+      id: `pop_${Date.now()}_${Math.random()}`,
+      gridX: gx,
+      gridY: gy,
+      text,
+      color,
+      age: 0,
+      maxAge: 1.6,
     });
+  }
 
-    if (this.game.expeditions.length > 0) {
-      const activeBox = document.createElement('div');
-      activeBox.className = 'section-panel';
-      activeBox.innerHTML = `<div class="panel-subtitle">🧭 현재 탐험 중인 원정대 (${this.game.expeditions.length}/${this.game.getMaxConcurrentExpeditions()}팀)</div>`;
+  /**
+   * 던전 안에서의 미니 전투 슬롯 & 자동 전투 업데이트
+   */
+  private updateDungeonCombat(dt: number): void {
+    const run = this.activeDungeon;
+    if (!run || run.status !== 'fighting') return;
 
-      for (const exp of this.game.expeditions) {
-        const d = DUNGEON_MAP[exp.dungeonId];
-        const names = exp.heroIds
-          .map((id) => HERO_ROSTER_MAP[id]?.name ?? id)
-          .join(' · ');
-        const pct = Math.min(
-          100,
-          Math.max(
-            0,
-            ((exp.totalDurationSec - exp.remainingSec) /
-              Math.max(1, exp.totalDurationSec)) *
-              100
-          )
+    run.waveTimer += dt;
+    run.slotSpinTimer += dt;
+
+    // 2.2초마다 던전 상단 미니 전투 슬롯이 자동으로 돌아가며 특수 효과 발동!
+    if (run.slotSpinTimer >= 2.2) {
+      run.slotSpinTimer = 0;
+      this.triggerDungeonCombatSlot(run);
+      this.renderDungeonBanner();
+    }
+
+    // 1.1초마다 파티 기본 공방 교전
+    if (run.waveTimer >= 1.1) {
+      run.waveTimer = 0;
+      const zone =
+        DUNGEON_ZONES.find((z) => z.id === run.zoneId) || DUNGEON_ZONES[0];
+
+      let partyAtk = 0;
+      let partyAlive = 0;
+      for (const hid of run.partyIds) {
+        const hero = this.save.heroes.find((h) => h.id === hid);
+        if (!hero || hero.currentHp <= 0) continue;
+        partyAlive++;
+        const st = getHeroCombatStats(this.save, hero);
+        partyAtk += st.atk;
+
+        // 포션 자동 사용 체크 (체력 45% 이하일 때 장착한 포션 발동!)
+        if (hero.currentHp < st.maxHp * 0.45 && hero.equippedPotionId) {
+          const potIdx = this.save.potions.findIndex(
+            (p) => p.id === hero.equippedPotionId
+          );
+          if (potIdx >= 0) {
+            const pot = this.save.potions[potIdx];
+            const healAmt = Math.round(st.maxHp * (pot.healPct / 100));
+            hero.currentHp = Math.min(st.maxHp, hero.currentHp + healAmt);
+            partyAtk = Math.round(partyAtk * (1 + pot.atkBuffPct / 100));
+            run.combatLogs.unshift(
+              `🧪 ${hero.name}님이 [${pot.name}] 사용! (체력 +${healAmt}, 공격력 +${pot.atkBuffPct}%)`
+            );
+            this.save.potions.splice(potIdx, 1);
+            hero.equippedPotionId = null;
+          }
+        }
+      }
+
+      if (partyAlive === 0) {
+        run.status = 'defeat';
+        sfx.playFailStop();
+        this.consumeOneTimeMeals(run.partyIds);
+        this.renderDungeonBanner();
+        return;
+      }
+
+      // 몬스터 타격
+      const dmgToMonster = Math.max(8, Math.round(partyAtk * (0.9 + Math.random() * 0.25)));
+      run.monsterHp = Math.max(0, run.monsterHp - dmgToMonster);
+
+      // 몬스터 반격
+      if (run.monsterHp > 0) {
+        const monsterAtk = (zone.recLevel * 9 + 14) * (run.isBoss ? 1.35 : 1.0);
+        for (const hid of run.partyIds) {
+          const hero = this.save.heroes.find((h) => h.id === hid);
+          if (!hero || hero.currentHp <= 0) continue;
+          const st = getHeroCombatStats(this.save, hero);
+          const hit = Math.max(
+            3,
+            Math.round((monsterAtk - st.def * 0.6) / Math.max(1, partyAlive))
+          );
+          hero.currentHp = Math.max(0, hero.currentHp - hit);
+        }
+      } else {
+        // 현재 웨이브 몬스터 처치!
+        const goldDrop = Math.round(
+          (zone.baseGoldReward / run.maxWaves) * (run.isBoss ? 1.8 : 1.0)
         );
-        const row = document.createElement('div');
-        row.className = 'expedition-progress-card';
-        row.dataset.expId = exp.id;
-        row.innerHTML = `
-          <div class="exp-row-top">
-            <strong>${d?.icon ?? '🗺️'} ${d?.name ?? exp.dungeonId}</strong>
-            <span>파티: ${names} (성공률 ${Math.round(
-          exp.expectedSuccessRate * 100
-        )}%)</span>
-            <strong class="mini-progress-text">${exp.currentFloor ?? 1}/${
-          exp.totalFloors ?? 3
-        }층 · ${Math.ceil(exp.remainingSec)}초 남음</strong>
-          </div>
-          <div class="mini-progress-track">
-            <div class="mini-progress-fill" style="width:${pct.toFixed(
-              1
-            )}%"></div>
-          </div>
-        `;
-        activeBox.appendChild(row);
+        run.accumulatedGold += goldDrop;
+
+        // 던전 등급에 맞는 식재료/광석/약초 드랍!
+        const dropMats = MATERIALS.filter(
+          (m) => m.tier === zone.dropTier || (m.tier === 'C' && Math.random() < 0.4)
+        );
+        const pickedMat =
+          dropMats[Math.floor(Math.random() * dropMats.length)] || MATERIALS[0];
+        const existingDrop = run.accumulatedDrops.find(
+          (d) => d.materialId === pickedMat.id
+        );
+        if (existingDrop) existingDrop.count += 1;
+        else run.accumulatedDrops.push({ materialId: pickedMat.id, count: 1 });
+
+        run.combatLogs.unshift(
+          `⚔️ ${run.monsterName} 격파! (+${goldDrop}G, ${pickedMat.icon}${pickedMat.name} 획득)`
+        );
+
+        // 영웅 경험치 및 레벨업 처리 (여관 등급 상한선 적용!)
+        this.grantPartyExp(run.partyIds, zone.recLevel * 25);
+
+        if (run.wave >= run.maxWaves) {
+          // 보스까지 클리어 완료 -> 클리어 보상 룰렛 슬롯 단계로 진입!
+          run.status = 'reward_slot';
+          sfx.playSuccess();
+          this.consumeOneTimeMeals(run.partyIds);
+        } else {
+          run.wave++;
+          run.isBoss = run.wave === run.maxWaves;
+          run.monsterName = run.isBoss
+            ? `👑 ${zone.bossName}`
+            : zone.monsterNames[run.wave % zone.monsterNames.length];
+          const baseHp = (zone.recLevel * 75 + 90) * (run.isBoss ? 1.9 : 1.0);
+          run.monsterMaxHp = Math.round(baseHp);
+          run.monsterHp = run.monsterMaxHp;
+        }
       }
-      this.elUpgradeList.appendChild(activeBox);
+
+      this.renderDungeonBanner();
     }
+  }
 
-    const builderPanel = document.createElement('div');
-    builderPanel.className = 'section-panel synergy-builder-panel';
+  private triggerDungeonCombatSlot(run: ActiveDungeonRun): void {
+    const outcomes: {
+      syms: [string, string, string];
+      label: string;
+      type: 'crit' | 'heal' | 'gold' | 'jackpot';
+    }[] = [
+      { syms: ['⚔️', '⚔️', '🔥'], label: '⚔️ 연쇄 강타 발동! (즉시 추가 피해)', type: 'crit' },
+      { syms: ['🧪', '💚', '🧪'], label: '💚 치유의 바람! (파티 체력 20% 회복)', type: 'heal' },
+      { syms: ['💰', '💰', '💎'], label: '💰 숨겨진 보물상자 발견! (보상 골드 추가)', type: 'gold' },
+      { syms: ['7️⃣', '7️⃣', '7️⃣'], label: '⚡ 777 궁극기 잭팟! (적 체력 45% 즉시 삭감!)', type: 'jackpot' },
+    ];
+    const r = Math.random();
+    const pick =
+      r < 0.16
+        ? outcomes[3]
+        : r < 0.45
+        ? outcomes[0]
+        : r < 0.72
+        ? outcomes[1]
+        : outcomes[2];
 
-    const dungeonSelector = document.createElement('div');
-    dungeonSelector.className = 'sub-filter-bar';
-    for (const d of DUNGEONS) {
-      const unlocked = this.game.isDungeonUnlocked(d.id);
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = `chip-btn${
-        this.selectedDungeonId === d.id ? ' active' : ''
-      }${unlocked ? '' : ' chip-locked'}`;
-      const clears = this.game.dungeonClears[d.id] ?? 0;
-      btn.textContent = `${unlocked ? d.icon : '🔒'} T${d.tier}. ${
-        d.name
-      } (${clears}회)`;
+    run.currentSlotSymbols = pick.syms;
+    run.lastSlotEffect = pick.label;
+
+    if (pick.type === 'crit') {
+      const bonusDmg = Math.round(run.monsterMaxHp * 0.22);
+      run.monsterHp = Math.max(1, run.monsterHp - bonusDmg);
+    } else if (pick.type === 'heal') {
+      for (const hid of run.partyIds) {
+        const h = this.save.heroes.find((hero) => hero.id === hid);
+        if (!h) continue;
+        const st = getHeroCombatStats(this.save, h);
+        h.currentHp = Math.min(st.maxHp, h.currentHp + Math.round(st.maxHp * 0.2));
+      }
+    } else if (pick.type === 'gold') {
+      run.accumulatedGold += 65;
+    } else if (pick.type === 'jackpot') {
+      const nuke = Math.round(run.monsterMaxHp * 0.45);
+      run.monsterHp = Math.max(1, run.monsterHp - nuke);
+      sfx.playSuccess();
+    }
+  }
+
+  private grantPartyExp(partyIds: string[], expGain: number): void {
+    for (const hid of partyIds) {
+      const hero = this.save.heroes.find((h) => h.id === hid);
+      if (!hero) continue;
+      const cap = getEffectiveHeroLevelCap(this.save, hero);
+      if (hero.level >= cap) continue;
+
+      hero.exp += expGain;
+      const needed = hero.level * 50;
+      if (hero.exp >= needed && hero.level < cap) {
+        hero.exp -= needed;
+        hero.level++;
+        const gMult = HERO_TIER_GROWTH_MULT[hero.tier];
+        hero.baseHp += Math.round(16 * gMult);
+        hero.baseAtk += Math.round(3.5 * gMult);
+        hero.baseDef += Math.round(1.5 * gMult);
+        const st = getHeroCombatStats(this.save, hero);
+        hero.currentHp = st.maxHp;
+        this.triggerActorSpeech(hero.id, `Lv.${hero.level} 레벨업!`, 'happy');
+      }
+    }
+    this.syncMapActors();
+  }
+
+  /**
+   * 1회성 요리는 던전 원정 1회가 끝나면 깔끔하게 소모됩니다!
+   */
+  private consumeOneTimeMeals(partyIds: string[]): void {
+    for (const hid of partyIds) {
+      const hero = this.save.heroes.find((h) => h.id === hid);
+      if (hero) {
+        hero.activeMeal = null;
+        const st = getHeroCombatStats(this.save, hero);
+        hero.currentHp = st.maxHp;
+      }
+    }
+  }
+
+  private bindUIEvents(): void {
+    document.querySelectorAll('[data-open-tab]').forEach((btn) => {
       btn.addEventListener('click', () => {
-        this.selectedDungeonId = d.id;
-        this.buildTabCards();
+        const tab = btn.getAttribute('data-open-tab') as ModalTab;
+        sfx.playClick();
+        this.openModal(tab);
       });
-      dungeonSelector.appendChild(btn);
-    }
-    builderPanel.appendChild(dungeonSelector);
-
-    const dUnlocked = this.game.isDungeonUnlocked(dungeon.id);
-    const dInfo = document.createElement('div');
-    dInfo.className = 'dungeon-detail-box';
-    const dropText = dungeon.drops
-      .map(
-        (dr) =>
-          `${MATERIAL_MAP[dr.materialId]?.icon ?? ''}${
-            MATERIAL_MAP[dr.materialId]?.name ?? dr.materialId
-          } (${Math.round(dr.chance * 100)}%)`
-      )
-      .join(', ');
-
-    let unlockReqText = '';
-    if (!dUnlocked) {
-      const prevD = dungeon.unlockPrevDungeonId
-        ? DUNGEON_MAP[dungeon.unlockPrevDungeonId]?.name
-        : '';
-      unlockReqText = `<p class="upgrade-unlock-req">🔒 해금 조건: 여관 평판 ${dungeon.unlockRep} 이상 & ${prevD} ${dungeon.unlockPrevClears}회 클리어</p>`;
-    }
-
-    dInfo.innerHTML = `
-      <div class="upgrade-title-row">
-        <span class="upgrade-name">${dungeon.icon} [Tier ${dungeon.tier}] ${dungeon.name}</span>
-        <span class="upgrade-level-badge">⏱️ 기본 ${dungeon.durationSec}초</span>
-        <span class="upgrade-level-badge">권장 전투력 ${dungeon.recommendedPower}</span>
-      </div>
-      <p class="upgrade-desc">${dungeon.description}</p>
-      <p class="upgrade-effects">🎯 요구 프로필: ${dungeon.focusText}</p>
-      <p class="dungeon-req-stats">권장 스탯 합계: ATK ${dungeon.requiredStats.atk} · DEF ${dungeon.requiredStats.def} · AGI ${dungeon.requiredStats.agi} · INT ${dungeon.requiredStats.int} · HP ${dungeon.requiredStats.hp} · LUK ${dungeon.requiredStats.luk}</p>
-      <p class="dungeon-drops-line">🎁 보상: XP +${dungeon.rewardXp} · 영웅 골드 +${dungeon.rewardHeroGold}G · 평판 +${dungeon.rewardRep} | 전리품: ${dropText}</p>
-      ${unlockReqText}
-    `;
-    builderPanel.appendChild(dInfo);
-
-    const partyHeader = document.createElement('div');
-    partyHeader.className = 'party-picker-header';
-    partyHeader.innerHTML = `
-      <strong>👥 출정 파티 편성 (${this.selectedPartyHeroIds.length} / 최대 ${maxPartySize}명)</strong>
-    `;
-
-    const autoButtonsWrap = document.createElement('div');
-    autoButtonsWrap.className = 'party-header-btns';
-
-    const autoPickBtn = document.createElement('button');
-    autoPickBtn.type = 'button';
-    autoPickBtn.className = 'care-btn';
-    autoPickBtn.textContent = '⚡ 최적 시너지 파티 자동 편성';
-    autoPickBtn.addEventListener('click', () => {
-      const best = selectBestPartyForDungeon(
-        this.game.getUnlockedHeroes(),
-        dungeon,
-        maxPartySize
-      );
-      this.selectedPartyHeroIds = best.map((h) => h.id);
-      this.buildTabCards();
     });
-    autoButtonsWrap.appendChild(autoPickBtn);
 
-    const autoDispatchBtn = document.createElement('button');
-    autoDispatchBtn.type = 'button';
-    autoDispatchBtn.className = `care-btn${
-      this.game.autoDispatch ? ' active-toggle' : ''
-    }`;
-    autoDispatchBtn.textContent = `🤖 영웅 자율 파티·출발: ${
-      this.game.autoDispatch ? 'ON' : 'OFF'
-    }`;
-    autoDispatchBtn.addEventListener('click', () => {
-      this.game.autoDispatch = !this.game.autoDispatch;
-      this.buildTabCards();
+    const closeBtn = document.getElementById('modal-close-btn');
+    closeBtn?.addEventListener('click', () => {
+      sfx.playClick();
+      this.closeModal();
     });
-    autoButtonsWrap.appendChild(autoDispatchBtn);
 
-    partyHeader.appendChild(autoButtonsWrap);
-    builderPanel.appendChild(partyHeader);
-
-    const heroPickerGrid = document.createElement('div');
-    heroPickerGrid.className = 'hero-picker-grid';
-    for (const h of this.game.getUnlockedHeroes()) {
-      const r = HERO_ROSTER_MAP[h.id];
-      const cls = HERO_CLASSES[r.classId];
-      const orig = ORIGINS[r.originId];
-      const bd = getHeroStatBreakdown(h);
-      const isSelected = this.selectedPartyHeroIds.includes(h.id);
-      const isAvail = h.status === 'idle' && !h.expeditionId;
-
-      const pBtn = document.createElement('button');
-      pBtn.type = 'button';
-      pBtn.className = `hero-pick-chip${isSelected ? ' selected' : ''}${
-        isAvail ? '' : ' unavailable'
-      }`;
-      pBtn.disabled = !isAvail;
-      pBtn.innerHTML = `
-        <span class="pick-name">${cls.icon} ${r.name} <small>Lv.${h.level}</small></span>
-        <span class="pick-sub">${cls.roleName} · 전투력 ${bd.combatPower}</span>
-        <span class="pick-traits">${r.personalities
-          .map((p) => PERSONALITIES[p].name)
-          .join('/')} · ${orig.icon}${orig.name}</span>
-      `;
-      pBtn.addEventListener('click', () => {
-        if (isSelected) {
-          this.selectedPartyHeroIds = this.selectedPartyHeroIds.filter(
-            (id) => id !== h.id
-          );
-        } else if (this.selectedPartyHeroIds.length < maxPartySize) {
-          this.selectedPartyHeroIds.push(h.id);
-        }
-        this.buildTabCards();
-      });
-      heroPickerGrid.appendChild(pBtn);
-    }
-    builderPanel.appendChild(heroPickerGrid);
-
-    const selectedHeroes = this.selectedPartyHeroIds
-      .map((id) => this.game.heroes[id])
-      .filter((h): h is HeroState => Boolean(h));
-    const preview = evaluatePartyForDungeon(selectedHeroes, dungeon);
-
-    const synBox = document.createElement('div');
-    synBox.className = 'synergy-preview-box';
-
-    const personalityLines =
-      preview.personalityMatches.length > 0
-        ? preview.personalityMatches
-            .map(
-              (pm) =>
-                `<div class="syn-line ${
-                  pm.isPositive ? 'syn-good' : 'syn-bad'
-                }">
-                  ${pm.isPositive ? '💚' : '💔'} <b>${pm.title}</b> (${
-                  pm.bonus >= 0 ? '+' : ''
-                }${Math.round(pm.bonus * 100)}%) — ${pm.description}
-                </div>`
-            )
-            .join('')
-        : `<div class="syn-line syn-neutral">• 발동된 성격 궁합/충돌 없음 (0%)</div>`;
-
-    const originLines = preview.originPassives
-      .map(
-        (op) =>
-          `<div class="syn-line ${
-            op.successBonus > 0 ? 'syn-good' : 'syn-neutral'
-          }">
-            ${op.icon} <b>[${op.heroName} · ${op.originName}]</b> ${op.bonusText}
-          </div>`
-      )
-      .join('');
-
-    const setLines: string[] = [];
-    for (const os of preview.originSets) {
-      setLines.push(
-        `<div class="syn-line syn-good">🌟 <b>${os.title}</b>: 동향 ${
-          os.count
-        }인 시너지 (+${Math.round(os.bonus * 100)}%)</div>`
-      );
-    }
-    if (preview.classSetTitle) {
-      setLines.push(
-        `<div class="syn-line ${
-          preview.classSetBonus >= 0 ? 'syn-good' : 'syn-bad'
-        }">${preview.classSetTitle} (${
-          preview.classSetBonus >= 0 ? '+' : ''
-        }${Math.round(preview.classSetBonus * 100)}%)</div>`
-      );
-    }
-
-    const warningHtml = preview.roleWarnings
-      .map((w) => `<div class="syn-line syn-bad">${w}</div>`)
-      .join('');
-
-    synBox.innerHTML = `
-      <div class="synergy-preview-header">
-        <span>🔍 출발 전 파티 시너지 &amp; 성공률 미리보기</span>
-        <strong class="final-rate-badge">최종 예상 성공률: ${Math.round(
-          preview.finalSuccessRate * 100
-        )}% (탐험 ${preview.durationSec}초)</strong>
-      </div>
-      <div class="synergy-breakdown-grid">
-        <div class="syn-group">
-          <div class="syn-group-title">1. 역할 상호보완</div>
-          <div class="syn-line ${
-            preview.roleSynergyBonus >= 0 ? 'syn-good' : 'syn-bad'
-          }">
-            <b>${preview.roleSynergyTitle}</b> (${
-      preview.roleSynergyBonus >= 0 ? '+' : ''
-    }${Math.round(preview.roleSynergyBonus * 100)}%)
-          </div>
-          ${warningHtml}
-        </div>
-        <div class="syn-group">
-          <div class="syn-group-title">2. 성격 궁합 &amp; 충돌</div>
-          ${personalityLines}
-        </div>
-        <div class="syn-group">
-          <div class="syn-group-title">3. 출신 배경 패시브 &amp; 세트 시너지</div>
-          ${
-            originLines ||
-            '<div class="syn-line syn-neutral">• 파티원을 선택하세요</div>'
-          }
-          ${setLines.join('')}
-        </div>
-      </div>
-      <div class="synergy-formula-footer">
-        📊 파티 합산 스탯 (ATK ${preview.partyStats.atk} · DEF ${
-      preview.partyStats.def
-    } · AGI ${preview.partyStats.agi} · INT ${preview.partyStats.int} · HP ${
-      preview.partyStats.hp
-    } · LUK ${preview.partyStats.luk}) →
-        <b>기본 성공률 ${Math.round(
-          preview.baseStatSuccessRate * 100
-        )}%</b> +
-        <b>시너지 ${
-          preview.totalSynergyDelta >= 0 ? '+' : ''
-        }${Math.round(preview.totalSynergyDelta * 100)}%</b> +
-        <b>버프 +${Math.round(preview.buffSuccessBonus * 100)}%</b> =
-        <strong class="gold-highlight">${Math.round(
-          preview.finalSuccessRate * 100
-        )}%</strong>
-      </div>
-    `;
-    builderPanel.appendChild(synBox);
-
-    const dispatchBtn = document.createElement('button');
-    dispatchBtn.type = 'button';
-    dispatchBtn.className = 'primary-action-btn dispatch-submit-btn';
-    const canSend =
-      dUnlocked &&
-      selectedHeroes.length > 0 &&
-      this.game.expeditions.length < this.game.getMaxConcurrentExpeditions();
-    dispatchBtn.disabled = !canSend;
-    dispatchBtn.innerHTML = `
-      <span class="btn-main-label">🚀 [${dungeon.name}] 원정대 즉시 파견하기 (${
-      preview.heroNames.join(' · ') || '파티원 미선택'
-    })</span>
-      <span class="btn-sub-label">예상 성공률 ${Math.round(
-        preview.finalSuccessRate * 100
-      )}% · 소요 시간 ${preview.durationSec}초</span>
-    `;
-    dispatchBtn.addEventListener('click', () => {
-      if (this.game.dispatchParty(dungeon.id, this.selectedPartyHeroIds)) {
-        this.autoSelectInitialParty();
-        this.closeDrawer();
-        this.refreshAllUi(true);
+    const backdrop = document.getElementById('modal-backdrop');
+    backdrop?.addEventListener('click', (e) => {
+      if (e.target === backdrop) {
+        this.closeModal();
       }
     });
-    builderPanel.appendChild(dispatchBtn);
-
-    this.elUpgradeList.appendChild(builderPanel);
   }
 
-  // --------------------------------------------------------------------------
-  // 4. ⚗️ 포션 가게 탭
-  // --------------------------------------------------------------------------
-  private buildPotionTab(): void {
-    const statusPanel = document.createElement('div');
-    statusPanel.className = 'section-panel';
-    const maxSlots = this.game.getMaxCraftSlots('potion');
-    statusPanel.innerHTML = `
-      <div class="panel-subtitle">⚗️ 연금 제작대 큐 (${this.game.craftQueues.potion.length}/${maxSlots}슬롯) &amp; 포션 가게 판매 진열대</div>
-      <p class="upgrade-desc">포션별 <b>[판매 등록 ON/OFF]</b>를 켜 두면 영웅들이 포션 가게 코너로 걸어와 구매합니다.</p>
-    `;
+  public updateTopHud(): void {
+    const calEl = document.getElementById('hud-calendar');
+    if (calEl) {
+      calEl.textContent = `${this.save.year}Y  ${this.save.month}M  ${this.save.week}W`;
+    }
+    const goldEl = document.getElementById('hud-gold');
+    if (goldEl) {
+      goldEl.textContent = `${this.save.gold.toLocaleString()}G`;
+    }
+    const scrapEl = document.getElementById('hud-scrap');
+    if (scrapEl) {
+      scrapEl.textContent = `${this.save.scrap.toLocaleString()}`;
+    }
+    const heroCountEl = document.getElementById('hud-heroes');
+    if (heroCountEl) {
+      heroCountEl.textContent = `${this.save.heroes.length}명`;
+    }
+  }
 
-    if (this.game.craftQueues.potion.length > 0) {
-      for (const q of this.game.craftQueues.potion) {
-        const rec = POTION_RECIPES.find((r) => r.id === q.recipeId);
-        const row = document.createElement('div');
-        row.className = 'expedition-progress-card';
-        const pct = Math.min(
-          100,
-          Math.max(0, ((q.totalSec - q.remainingSec) / q.totalSec) * 100)
-        );
-        row.innerHTML = `
-          <div class="exp-row-top">
-            <strong>${rec?.icon ?? '🧪'} ${
-          rec?.name ?? q.recipeId
-        } 조제 중...</strong>
-            <span>성공 확률 ${Math.round(q.successRate * 100)}%</span>
-            <strong>${Math.ceil(q.remainingSec)}초 남음</strong>
-          </div>
-          <div class="mini-progress-track">
-            <div class="mini-progress-fill" style="width:${pct.toFixed(
-              1
-            )}%"></div>
-          </div>
-        `;
-        statusPanel.appendChild(row);
+  public openModal(tab: ModalTab): void {
+    this.activeModal = tab;
+    this.pendingDecision = null;
+    this.enhanceResultBanner = null;
+    const backdrop = document.getElementById('modal-backdrop');
+    if (backdrop) backdrop.classList.remove('hidden');
+    this.renderModalContent();
+  }
+
+  public closeModal(): void {
+    this.activeModal = null;
+    this.pendingDecision = null;
+    const backdrop = document.getElementById('modal-backdrop');
+    if (backdrop) backdrop.classList.add('hidden');
+  }
+
+  /**
+   * 3번 규칙: 먼저 투입할 재료/비용 등급을 베팅하여 릴 확률을 높인 뒤 스핀!
+   * 결과가 나오면 [채택(진행)]할지 [버리기(마일리지 가루 획득)]할지 결정!
+   */
+  private executeSlotSpin(onComplete: () => void): void {
+    if (this.isSpinning) return;
+    this.isSpinning = true;
+    this.save.totalSlotSpins++;
+    sfx.playSlotTick();
+
+    const pool = ['🍒', '🔔', '💎', '7️⃣', '⭐', '🔥'];
+    let ticks = 0;
+    const timer = setInterval(() => {
+      ticks++;
+      this.spinReels = [
+        pool[Math.floor(Math.random() * pool.length)],
+        pool[Math.floor(Math.random() * pool.length)],
+        pool[Math.floor(Math.random() * pool.length)],
+      ];
+      sfx.playSlotTick();
+      const reelBoxes = document.querySelectorAll('.slot-reel-cell');
+      reelBoxes.forEach((el, idx) => {
+        el.textContent = this.spinReels[idx];
+        el.classList.add('spinning');
+      });
+
+      if (ticks >= 9) {
+        clearInterval(timer);
+        this.isSpinning = false;
+        onComplete();
+        this.updateTopHud();
+        saveGameData(this.save);
+        this.renderModalContent();
       }
+    }, 65);
+  }
+
+  private renderModalContent(): void {
+    const tab = this.activeModal;
+    if (!tab) return;
+
+    const titleEl = document.getElementById('modal-title');
+    const bodyEl = document.getElementById('modal-body');
+    if (!titleEl || !bodyEl) return;
+
+    // 상단 서브탭 네비게이션 업데이트
+    document.querySelectorAll('.modal-nav-pill').forEach((el) => {
+      const t = el.getAttribute('data-modal-tab');
+      el.classList.toggle('active', t === tab);
+    });
+
+    if (tab === 'inn_cook') {
+      titleEl.textContent = '🍲 여관 주방: 1회성 출정 버프 요리 슬롯';
+      bodyEl.innerHTML = this.buildInnCookHTML();
+    } else if (tab === 'inn_hero') {
+      titleEl.textContent = '🦸 여관 객실: 영웅 영입 슬롯 & 영웅 관리';
+      bodyEl.innerHTML = this.buildInnHeroHTML();
+    } else if (tab === 'bs_forge') {
+      titleEl.textContent = '🔨 대장간 [1/3]: 무기 제작 슬롯 (제작 장인 담당)';
+      bodyEl.innerHTML = this.buildBlacksmithForgeHTML();
+    } else if (tab === 'bs_enhance') {
+      titleEl.textContent = '⚒️ 대장간 [2/3]: 연속 강화 슬롯 (실패 시 그 수치로 확정 완료!)';
+      bodyEl.innerHTML = this.buildBlacksmithEnhanceHTML();
+    } else if (tab === 'bs_enchant') {
+      titleEl.textContent = '✨ 대장간 [3/3]: 마법 인챈트 슬롯 (+강화 비례 옵션 수 & 범위 증가)';
+      bodyEl.innerHTML = this.buildBlacksmithEnchantHTML();
+    } else if (tab === 'potion_brew') {
+      titleEl.textContent = '🧪 포션가게: 약초 조합 연금 슬롯 (연금술사 담당)';
+      bodyEl.innerHTML = this.buildPotionBrewHTML();
+    } else if (tab === 'trade_market') {
+      titleEl.textContent = '💎 왕국 거래처: 정가 재료 상점 & 마일리지 교환소';
+      bodyEl.innerHTML = this.buildTradeMarketHTML();
+    } else if (tab === 'staff_hire') {
+      titleEl.textContent = '👨‍🍳 직원 고용 슬롯: 5대 전담 장인 스카우트';
+      bodyEl.innerHTML = this.buildStaffHireHTML();
+    } else if (tab === 'facility_up') {
+      titleEl.textContent = '🏰 시설 업그레이드 슬롯: 확정 레벨업 + 특수 패시브 추첨';
+      bodyEl.innerHTML = this.buildFacilityUpHTML();
+    } else if (tab === 'dungeon_prep') {
+      titleEl.textContent = '⚔️ 던전 원정 출발 & 전투/보상 슬롯';
+      bodyEl.innerHTML = this.buildDungeonPrepHTML();
+    } else if (tab === 'save_manage') {
+      titleEl.textContent = '💾 데이터 저장 관리 (IndexedDB + LocalStorage 이중 금고)';
+      bodyEl.innerHTML = this.buildSaveManageHTML();
     }
 
-    const stockGrid = document.createElement('div');
-    stockGrid.className = 'warehouse-grid';
-    for (const pr of POTION_RECIPES) {
-      const cnt = this.game.potionStock[pr.id] ?? 0;
-      const rInfo = RARITY_INFO[pr.rarity];
-      const effPrice = this.game.getEffectivePotionSellPrice(pr.id);
-      const isSaleOn = this.game.shopConfig.potionSaleEnabled[pr.id] !== false;
+    this.attachModalInnerHandlers();
+  }
 
-      const box = document.createElement('div');
-      box.className = 'warehouse-item';
-      box.innerHTML = `
-        <div class="wh-top">
-          <span>${pr.icon} <b style="color:${rInfo.color}">${pr.name}</b></span>
-          <strong class="wh-count">${cnt}병</strong>
+  private renderSlotMachineWidget(
+    probs: { C: number; B: number; A: number; S: number },
+    staff: StaffMember,
+    costDesc: string,
+    canSpin: boolean,
+    spinBtnLabel: string
+  ): string {
+    const reels = this.pendingDecision
+      ? this.pendingDecision.reels
+      : this.spinReels;
+
+    return `
+      <div class="kairo-slot-machine ${this.pendingDecision?.isJackpot ? 'jackpot-glow' : ''}">
+        <div class="slot-header-row">
+          <div class="staff-badge-card">
+            <span class="tier-pill tier-${staff.tier}">${staff.tier}급 담당</span>
+            <strong>${staff.name}</strong>
+            <span class="staff-bonus-tag">행운 +${staff.bonusProb}% · ${staff.specialtyLabel}</span>
+          </div>
+          <div class="prob-bar-group">
+            <span class="prob-chip tier-C">C급 ${probs.C}%</span>
+            <span class="prob-chip tier-B">B급 ${probs.B}%</span>
+            <span class="prob-chip tier-A">A급 ${probs.A}%</span>
+            <span class="prob-chip tier-S">S급 ${probs.S}%</span>
+          </div>
         </div>
-        <div class="wh-sub">판매가 ${effPrice}G (정가 ${pr.sellPriceToHero}G) · ${
-        pr.effectText
-      }</div>
-        <div class="wh-action-row">
-          <button type="button" class="mc-toggle-btn ${
-            isSaleOn ? 'on' : 'off'
-          }" data-toggle-pot-sale="${pr.id}">
-            ${isSaleOn ? '✅ 판매 등록 ON' : '⛔ 판매 보류 OFF'}
+
+        <div class="slot-reels-frame">
+          <div class="slot-reel-cell">${reels[0]}</div>
+          <div class="slot-reel-cell">${reels[1]}</div>
+          <div class="slot-reel-cell">${reels[2]}</div>
+        </div>
+
+        ${
+          this.pendingDecision
+            ? this.buildPendingDecisionHTML(this.pendingDecision)
+            : `
+          <div class="slot-action-bar">
+            <div class="slot-cost-label">베팅 소모: <strong>${costDesc}</strong></div>
+            <button id="btn-trigger-spin" class="kairo-btn-primary ${!canSpin ? 'disabled' : ''}" ${!canSpin ? 'disabled' : ''}>
+              🎰 ${spinBtnLabel}
+            </button>
+          </div>
+        `
+        }
+      </div>
+    `;
+  }
+
+  private buildPendingDecisionHTML(pd: PendingDecision): string {
+    let summaryHTML = '';
+    if (pd.kind === 'cook' && pd.dish) {
+      summaryHTML = `
+        <div class="result-card tier-border-${pd.dish.tier}">
+          <div class="result-title">
+            <span class="tier-pill tier-${pd.dish.tier}">${pd.dish.tier}급</span>
+            <strong>${pd.dish.icon} ${pd.dish.name}</strong>
+          </div>
+          <p class="result-desc">${pd.dish.desc} (판매가 ${pd.dish.sellGold}G)</p>
+        </div>
+      `;
+    } else if (pd.kind === 'potion' && pd.potion) {
+      summaryHTML = `
+        <div class="result-card tier-border-${pd.potion.tier}">
+          <div class="result-title">
+            <span class="tier-pill tier-${pd.potion.tier}">${pd.potion.tier}급</span>
+            <strong>${pd.potion.icon} ${pd.potion.name}</strong>
+          </div>
+          <p class="result-desc">${pd.potion.desc} (판매가 ${pd.potion.sellGold}G)</p>
+        </div>
+      `;
+    } else if (pd.kind === 'forge' && pd.weapon) {
+      summaryHTML = `
+        <div class="result-card tier-border-${pd.weapon.tier}">
+          <div class="result-title">
+            <span class="tier-pill tier-${pd.weapon.tier}">${pd.weapon.tier}급</span>
+            <strong>${pd.weapon.icon} ${pd.weapon.name}</strong>
+          </div>
+          <p class="result-desc">기본 공격력 <strong>+${pd.weapon.baseAtk}</strong> (채택 후 연속 강화 & 인챈트 가능!)</p>
+        </div>
+      `;
+    } else if (pd.kind === 'enchant' && pd.enchants) {
+      const list = pd.enchants
+        .map(
+          (e) =>
+            `<span class="enchant-tag" style="border-color:${e.color}">✨ ${e.name}: <strong>${e.statLabel}${e.value}</strong> <small>(범위 ${e.minVal}~${e.maxVal})</small></span>`
+        )
+        .join('');
+      summaryHTML = `
+        <div class="result-card tier-border-A">
+          <div class="result-title"><strong>✨ 새로운 마법 인챈트 결과 (${pd.enchants.length}줄)</strong></div>
+          <div class="enchant-tag-list">${list}</div>
+        </div>
+      `;
+    } else if (pd.kind === 'hero' && pd.hero) {
+      const cap = getEffectiveHeroLevelCap(this.save, pd.hero);
+      summaryHTML = `
+        <div class="result-card tier-border-${pd.hero.tier}">
+          <div class="result-title">
+            <span class="tier-pill tier-${pd.hero.tier}">${pd.hero.tier}급</span>
+            <strong>${HERO_CLASS_META[pd.hero.classId].icon} ${pd.hero.name} (${pd.hero.className} · Lv.1)</strong>
+          </div>
+          <p class="result-desc">체력 ${pd.hero.baseHp} · 공격력 ${pd.hero.baseAtk} · 방어 ${pd.hero.baseDef} | 잠재 상한 Lv.${pd.hero.maxLevelCap} (현재 여관 해금 Lv.${cap})</p>
+        </div>
+      `;
+    } else if (pd.kind === 'staff' && pd.staffCandidate) {
+      const st = pd.staffCandidate;
+      const cur = this.save.staff[st.role];
+      summaryHTML = `
+        <div class="result-card tier-border-${st.tier}">
+          <div class="result-title">
+            <span class="tier-pill tier-${st.tier}">${st.tier}급</span>
+            <strong>${st.name} (${STAFF_ROLE_META[st.role].title})</strong>
+          </div>
+          <p class="result-desc">슬롯 행운 보너스 <strong>+${st.bonusProb}%</strong> · ${st.specialtyLabel}<br/>
+          <small>(현재 담당: [${cur.tier}급] ${cur.name} +${cur.bonusProb}% · ${cur.specialtyLabel})</small></p>
+        </div>
+      `;
+    } else if (pd.kind === 'facility' && pd.facilityPassive && pd.facilityId) {
+      const p = pd.facilityPassive;
+      summaryHTML = `
+        <div class="result-card tier-border-${p.tier}">
+          <div class="result-title">
+            <span class="tier-pill tier-${p.tier}">${p.tier}급 특성</span>
+            <strong>${pd.greatLevelUp ? '🎉 대성공 (+2레벨 상승!) & ' : '⬆️ +1레벨 상승 & '}${p.name}</strong>
+          </div>
+          <p class="result-desc">${p.desc}</p>
+        </div>
+      `;
+    }
+
+    return `
+      <div class="decision-box">
+        ${pd.isJackpot ? `<div class="jackpot-banner">🎊 JACKPOT 777 대박 당첨! 🎊</div>` : ''}
+        ${summaryHTML}
+        <div class="decision-buttons">
+          <button id="btn-decision-keep" class="kairo-btn-keep">
+            ✅ 채택 (진행하기)
+          </button>
+          <button id="btn-decision-discard" class="kairo-btn-discard">
+            🗑️ 버리기 (마일리지 가루 +${pd.scrapRefund} 획득)
           </button>
         </div>
-      `;
-      stockGrid.appendChild(box);
-    }
-    statusPanel.appendChild(stockGrid);
-    this.elUpgradeList.appendChild(statusPanel);
-
-    statusPanel
-      .querySelectorAll<HTMLButtonElement>('[data-toggle-pot-sale]')
-      .forEach((btn) => {
-        btn.addEventListener('click', () => {
-          const pId = btn.dataset.togglePotSale!;
-          this.game.shopConfig.potionSaleEnabled[pId] = !(
-            this.game.shopConfig.potionSaleEnabled[pId] !== false
-          );
-          this.buildTabCards();
-        });
-      });
-
-    const recipeHeader = document.createElement('div');
-    recipeHeader.className = 'panel-subtitle';
-    recipeHeader.textContent = '📜 포션 조제 레시피';
-    this.elUpgradeList.appendChild(recipeHeader);
-
-    for (const rec of POTION_RECIPES) {
-      const unlocked = this.game.isPotionRecipeUnlocked(rec.id);
-      const preview = this.game.getPotionCraftPreview(rec.id);
-      const canCraft = this.game.canCraftPotion(rec.id);
-      const rInfo = RARITY_INFO[rec.rarity];
-
-      const matStr = Object.entries(rec.materials)
-        .map(([mId, cnt]) => {
-          const have = this.game.materials[mId] ?? 0;
-          return `${MATERIAL_MAP[mId]?.name ?? mId} ${have}/${cnt}`;
-        })
-        .join(' · ');
-
-      const toolName =
-        POTION_TOOLS.find((t) => t.id === rec.reqToolId)?.name ?? rec.reqToolId;
-      const facName = rec.reqFacilityId
-        ? POTION_TOOLS.find((t) => t.id === rec.reqFacilityId)?.name
-        : null;
-      const fallbackName = rec.fallbackPotionId
-        ? POTION_RECIPES.find((p) => p.id === rec.fallbackPotionId)?.name
-        : '재료 증발';
-
-      const card = document.createElement('div');
-      card.className = `upgrade-card${unlocked ? '' : ' locked'}`;
-      card.innerHTML = `
-        <div class="upgrade-info">
-          <div class="upgrade-icon">${rec.icon}</div>
-          <div class="upgrade-text-wrap">
-            <div class="upgrade-title-row">
-              <span class="upgrade-name" style="color:${rInfo.color}">${
-        rec.name
-      }</span>
-              <span class="upgrade-level-badge">성공률 ${Math.round(
-                preview.successRate * 100
-              )}% · ${preview.durationSec}초</span>
-              <span class="upgrade-level-badge">판매가 ${this.game.getEffectivePotionSellPrice(
-                rec.id
-              )}G</span>
-            </div>
-            <p class="upgrade-desc">${rec.description}</p>
-            <p class="upgrade-effects">효과: ${rec.effectText}</p>
-            <p class="upgrade-desc">필요 재료: <b>${matStr}</b> | 실패 시: ${fallbackName}</p>
-            ${
-              !unlocked
-                ? `<p class="upgrade-unlock-req">🔒 요구 시설: ${toolName} Lv.${
-                    rec.reqToolLevel
-                  }${
-                    facName ? ` & ${facName} Lv.${rec.reqFacilityLevel}` : ''
-                  }</p>`
-                : ''
-            }
-          </div>
-        </div>
-      `;
-
-      const cBtn = document.createElement('button');
-      cBtn.type = 'button';
-      cBtn.className = 'buy-btn';
-      cBtn.disabled = !canCraft;
-      cBtn.innerHTML = `
-        <span class="buy-btn-label">${unlocked ? '조제 시작' : '미해금'}</span>
-        <span class="buy-btn-cost">${rec.goldCost} G</span>
-      `;
-      cBtn.addEventListener('click', () => {
-        if (this.game.startCraftPotion(rec.id)) {
-          this.buildTabCards();
-        }
-      });
-      card.appendChild(cBtn);
-      this.elUpgradeList.appendChild(card);
-    }
-
-    const toolHeader = document.createElement('div');
-    toolHeader.className = 'panel-subtitle';
-    toolHeader.textContent = '🔧 연금 도구 · 약초 정원 · 작업실 건설 및 강화';
-    this.elUpgradeList.appendChild(toolHeader);
-
-    for (const tool of POTION_TOOLS) {
-      this.elUpgradeList.appendChild(this.createShopToolCard(tool));
-    }
+      </div>
+    `;
   }
 
-  // --------------------------------------------------------------------------
-  // 5. ⚒️ 대장간 탭
-  // --------------------------------------------------------------------------
-  private buildBlacksmithTab(): void {
-    const maxSlots = this.game.getMaxCraftSlots('blacksmith');
-    const topPanel = document.createElement('div');
-    topPanel.className = 'section-panel';
-    topPanel.innerHTML = `
-      <div class="panel-subtitle">⚒️ 대장간 단조 큐 (${this.game.craftQueues.blacksmith.length}/${maxSlots}슬롯) &amp; 완성 장비 진열대 (${this.game.equipmentStock.length}개)</div>
-      <p class="upgrade-desc">완성된 장비는 영웅들이 대장간 모루로 걸어와 구매·장착하거나 직접 장착 및 <b>+강화</b>를 시도할 수 있습니다.</p>
-    `;
-
-    if (this.game.craftQueues.blacksmith.length > 0) {
-      for (const q of this.game.craftQueues.blacksmith) {
-        const def = EQUIPMENT_DEF_MAP[q.recipeId];
-        const row = document.createElement('div');
-        row.className = 'expedition-progress-card';
-        const pct = Math.min(
-          100,
-          Math.max(0, ((q.totalSec - q.remainingSec) / q.totalSec) * 100)
-        );
-        row.innerHTML = `
-          <div class="exp-row-top">
-            <strong>${def?.icon ?? '⚒️'} ${
-          def?.name ?? q.recipeId
-        } 단조 중...</strong>
-            <span>성공 확률 ${Math.round(q.successRate * 100)}%</span>
-            <strong>${Math.ceil(q.remainingSec)}초 남음</strong>
-          </div>
-          <div class="mini-progress-track">
-            <div class="mini-progress-fill" style="width:${pct.toFixed(
-              1
-            )}%"></div>
-          </div>
-        `;
-        topPanel.appendChild(row);
-      }
-    }
-
-    if (this.game.equipmentStock.length === 0) {
-      const empty = document.createElement('p');
-      empty.className = 'empty-hint';
-      empty.textContent =
-        '진열대에 보관 중인 여분 장비가 없습니다. 아래 레시피에서 장비를 단조하거나 [🦸 영웅] 탭에서 착용 장비를 +강화하세요!';
-      topPanel.appendChild(empty);
-    } else {
-      for (const inst of this.game.equipmentStock) {
-        const def = EQUIPMENT_DEF_MAP[inst.defId];
-        if (!def) continue;
-        const rInfo = RARITY_INFO[def.rarity];
-        const st = getEquipmentEffectiveStats(inst);
-        const stText = Object.entries(st)
-          .filter(([, v]) => v > 0)
-          .map(([k, v]) => `${k.toUpperCase()}+${v}`)
-          .join(' ');
-
-        const row = document.createElement('div');
-        row.className = 'upgrade-card compact-card';
-        row.innerHTML = `
-          <div class="upgrade-info">
-            <div class="upgrade-icon">${def.icon}</div>
-            <div class="upgrade-text-wrap">
-              <div class="upgrade-title-row">
-                <span class="upgrade-name" style="color:${rInfo.color}">[${
-          rInfo.label
-        }] ${def.name}${
-          inst.enhanceLevel > 0 ? ` +${inst.enhanceLevel}` : ''
-        }</span>
-                <span class="upgrade-level-badge">${
-                  EQUIP_SLOT_LABELS[def.slot]
-                }</span>
-                <span class="upgrade-level-badge">${stText}</span>
+  private buildMaterialBetSelectorHTML(
+    category: 'food' | 'ore' | 'herb',
+    dualSlot = true
+  ): string {
+    const tiers: RankTier[] = ['C', 'B', 'A', 'S'];
+    const buildRow = (slotNum: 1 | 2, currentTier: RankTier) => {
+      return tiers
+        .map((t) => {
+          const matId = `${category}_${t.toLowerCase()}`;
+          const mat = MATERIAL_MAP[matId];
+          const count = this.save.materials[matId] || 0;
+          const active = currentTier === t ? 'selected' : '';
+          return `
+            <button class="mat-bet-btn ${active} tier-border-${t}" data-bet-slot="${slotNum}" data-bet-tier="${t}">
+              <span class="mat-icon">${mat.icon}</span>
+              <div class="mat-meta">
+                <strong>[${t}급] ${mat.name}</strong>
+                <small>보유: ${count}개</small>
               </div>
-              <p class="upgrade-desc">착용 가능: ${getWearableClassesText(
-                def
-              )} | 판매가 ${this.game.getEffectiveEquipSellPrice(def.id)}G</p>
+            </button>
+          `;
+        })
+        .join('');
+    };
+
+    return `
+      <div class="bet-selector-panel">
+        <div class="bet-row-label">🎲 1번 투입 재료 선택 (등급이 높을수록 A·S급 확률 대폭 상승!)</div>
+        <div class="bet-grid">${buildRow(1, this.betTier1)}</div>
+        ${
+          dualSlot
+            ? `
+          <div class="bet-row-label" style="margin-top:8px;">🎲 2번 조합 재료 선택 (서로 다른 등급 조합 시 추가 시너지!)</div>
+          <div class="bet-grid">${buildRow(2, this.betTier2)}</div>
+        `
+            : ''
+        }
+      </div>
+    `;
+  }
+
+  /**
+   * 1. 여관 주방: 1회성 출정 버프 요리 슬롯
+   */
+  private buildInnCookHTML(): string {
+    const chef = this.save.staff.chef;
+    const probs = calculateSlotProbabilities(
+      [this.betTier1, this.betTier2],
+      chef.bonusProb,
+      getFacilityLuckBonus(this.save, 'inn'),
+      this.betTier1 !== this.betTier2 ? 6 : 3
+    );
+
+    const mat1Id = `food_${this.betTier1.toLowerCase()}`;
+    const mat2Id = `food_${this.betTier2.toLowerCase()}`;
+    const needSame = mat1Id === mat2Id ? 2 : 1;
+    const canSpin =
+      this.save.gold >= 30 &&
+      (this.save.materials[mat1Id] || 0) >= needSame &&
+      (this.save.materials[mat2Id] || 0) >= 1;
+
+    const costDesc = `30G + ${MATERIAL_MAP[mat1Id].icon}${MATERIAL_MAP[mat1Id].name} 1개 + ${MATERIAL_MAP[mat2Id].icon}${MATERIAL_MAP[mat2Id].name} 1개`;
+
+    const dishListHTML =
+      this.save.dishes.length === 0
+        ? `<div class="empty-hint">보유한 요리가 없습니다. 위 슬롯을 돌려 1회성 출정 버프 요리를 만드세요!</div>`
+        : this.save.dishes
+            .map(
+              (d) => `
+          <div class="inv-item-card tier-border-${d.tier}">
+            <div>
+              <span class="tier-pill tier-${d.tier}">${d.tier}급</span>
+              <strong>${d.icon} ${d.name}</strong>
+              <div class="sub-text">${d.desc}</div>
+            </div>
+            <div class="inv-actions">
+              <button class="kairo-btn-mini" data-feed-dish="${d.id}">🍽️ 영웅에게 먹이기(1회 출정버프)</button>
+              <button class="kairo-btn-mini gold" data-sell-dish="${d.id}">💰 판매 (+${d.sellGold}G)</button>
+            </div>
+          </div>
+        `
+            )
+            .join('');
+
+    return `
+      ${this.buildMaterialBetSelectorHTML('food', true)}
+      ${this.renderSlotMachineWidget(probs, chef, costDesc, canSpin, '요리 슬롯 돌리기')}
+      <div class="section-divider">🍽️ 완성된 1회성 요리 보관함 (${this.save.dishes.length}개)</div>
+      <div class="inv-list">${dishListHTML}</div>
+    `;
+  }
+
+  /**
+   * 2. 여관 객실: 영웅 영입 슬롯 & 영웅 성장/장비 관리
+   */
+  private buildInnHeroHTML(): string {
+    const chef = this.save.staff.chef;
+    const probs = calculateSlotProbabilities(
+      [this.betTier1],
+      chef.bonusProb,
+      getFacilityLuckBonus(this.save, 'inn')
+    );
+    const goldCostMap: Record<RankTier, number> = {
+      C: 120,
+      B: 260,
+      A: 520,
+      S: 980,
+    };
+    const matId = `food_${this.betTier1.toLowerCase()}`;
+    const goldCost = goldCostMap[this.betTier1];
+    const canSpin =
+      this.save.gold >= goldCost && (this.save.materials[matId] || 0) >= 1;
+    const costDesc = `${goldCost}G + 환영 만찬용 ${MATERIAL_MAP[matId].icon}${MATERIAL_MAP[matId].name} 1개`;
+
+    const heroesHTML = this.save.heroes
+      .map((h) => {
+        const st = getHeroCombatStats(this.save, h);
+        const cap = getEffectiveHeroLevelCap(this.save, h);
+        const wpText = st.weapon
+          ? `${st.weapon.icon} ${st.weapon.name} (+${st.weapon.enhanceCount}강)`
+          : '무기 미장착';
+        const mealText = h.activeMeal
+          ? `🍽️ ${h.activeMeal.name} (+체력${h.activeMeal.hpBonus}/+공격${h.activeMeal.atkBonus})`
+          : '출정 요리 없음';
+        const pot = this.save.potions.find((p) => p.id === h.equippedPotionId);
+        const potText = pot ? `${pot.icon} ${pot.name}` : '포션 없음';
+
+        return `
+          <div class="hero-roster-card tier-border-${h.tier}">
+            <div class="hero-main-info">
+              <div>
+                <span class="tier-pill tier-${h.tier}">${h.tier}급</span>
+                <strong>${HERO_CLASS_META[h.classId].icon} ${h.name}</strong>
+                <span class="hero-lv-badge">Lv.${h.level} / 해금상한 Lv.${cap} <small>(최대 잠재 Lv.${h.maxLevelCap})</small></span>
+              </div>
+              <div class="hero-stats-line">
+                ❤️ 체력 <strong>${st.maxHp}</strong> · ⚔️ 공격력 <strong>${st.atk}</strong> · 🛡️ 방어 <strong>${st.def}</strong>
+              </div>
+              <div class="hero-equip-line">
+                <span>무기: <strong>${wpText}</strong></span> |
+                <span>1회성 요리: <strong>${mealText}</strong></span> |
+                <span>비상 포션: <strong>${potText}</strong></span>
+              </div>
+            </div>
+            <div class="hero-actions-col">
+              <button class="kairo-btn-mini" data-train-hero="${h.id}">
+                📈 훈련 레벨업 (${h.level * 75}G)
+              </button>
+              ${
+                this.save.heroes.length > 1
+                  ? `<button class="kairo-btn-mini danger" data-dismiss-hero="${h.id}">하산</button>`
+                  : ''
+              }
             </div>
           </div>
         `;
-
-        const btnCol = document.createElement('div');
-        btnCol.className = 'party-header-btns';
-
-        const enhPreview = this.game.getEnhancePreview({ stockUid: inst.uid });
-        if (enhPreview) {
-          const enhBtn = document.createElement('button');
-          enhBtn.type = 'button';
-          enhBtn.className = 'care-btn enhance-btn';
-          enhBtn.textContent = `🔥 +${enhPreview.nextLevel} 강화 (${(
-            enhPreview.successRate * 100
-          ).toFixed(0)}%)`;
-          enhBtn.addEventListener('click', () => {
-            this.openEnhanceConfirmModal({ stockUid: inst.uid });
-          });
-          btnCol.appendChild(enhBtn);
-        }
-
-        row.appendChild(btnCol);
-        topPanel.appendChild(row);
-      }
-    }
-
-    const rateBox = document.createElement('div');
-    rateBox.className = 'enhance-rate-table-box';
-    const grindLv = this.game.blacksmithTools['smith_grindstone'] ?? 0;
-    const rateChips = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 14]
-      .map((plus) => {
-        const base = BASE_ENHANCE_RATES[plus] * 100;
-        const pctStr = base < 5 ? base.toFixed(2) : base.toFixed(0);
-        return `<span class="rate-pill">+${plus}→+${
-          plus + 1
-        }: <b>${pctStr}%</b></span>`;
       })
-      .join(' ');
-    rateBox.innerHTML = `
-      <div class="enhance-table-title">🔥 +강화 기본 성공 확률표 (실패 시 완전 파괴 · 기본 장비 즉시 복귀 | 누적 성공 ${this.game.totalEnhanceSuccess}회 / 파괴 ${this.game.totalEnhanceDestroyed}회 | 룬 숫돌 Lv.${grindLv})</div>
-      <div class="rate-pill-wrap">${rateChips}</div>
+      .join('');
+
+    return `
+      <div class="info-callout">
+        💡 <strong>카이로소프트식 영웅 등급 상한 & 밸런스 장치:</strong> 고등급(A·S급) 영웅도 처음엔 <strong>Lv.1</strong>로 합류하며,
+        잠재 최대 레벨(C급 Lv.10 ~ S급 Lv.40)은 <strong>현재 여관 시설 레벨(Lv.${this.save.facilities.inn.level})</strong>에 따라 단계적으로 해금됩니다!
+      </div>
+      ${this.buildMaterialBetSelectorHTML('food', false)}
+      ${this.renderSlotMachineWidget(probs, chef, costDesc, canSpin, '영웅 영입 슬롯 돌리기')}
+      <div class="section-divider">🦸 여관 소속 영웅 명단 (${this.save.heroes.length}명)</div>
+      <div class="inv-list">${heroesHTML}</div>
     `;
-    topPanel.appendChild(rateBox);
-
-    this.elUpgradeList.appendChild(topPanel);
-
-    const toolHeader = document.createElement('div');
-    toolHeader.className = 'panel-subtitle';
-    toolHeader.textContent =
-      '🔥 대장간 화로 · 모루 · 숫돌 · 담금질 통 · 장인 업그레이드';
-    this.elUpgradeList.appendChild(toolHeader);
-
-    for (const tool of BLACKSMITH_TOOLS) {
-      this.elUpgradeList.appendChild(this.createShopToolCard(tool));
-    }
-
-    const recHeader = document.createElement('div');
-    recHeader.className = 'panel-subtitle';
-    recHeader.textContent = '🗡️ 장비 단조 레시피 (고급 / 희귀 / 영웅 / 전설)';
-    this.elUpgradeList.appendChild(recHeader);
-
-    const craftableEquips = EQUIPMENT_DEFS.filter((e) => !e.isBase);
-    for (const def of craftableEquips) {
-      const unlocked = this.game.isEquipmentRecipeUnlocked(def.id);
-      const preview = this.game.getEquipmentCraftPreview(def.id);
-      const canCraft = this.game.canCraftEquipment(def.id);
-      const rInfo = RARITY_INFO[def.rarity];
-
-      const matStr = Object.entries(def.craftMaterials)
-        .map(([mId, cnt]) => {
-          const have = this.game.materials[mId] ?? 0;
-          return `${MATERIAL_MAP[mId]?.name ?? mId} ${have}/${cnt}`;
-        })
-        .join(' · ');
-
-      const stStr = Object.entries(def.stats)
-        .filter(([, v]) => (v ?? 0) > 0)
-        .map(([k, v]) => `${k.toUpperCase()}+${v}`)
-        .join(' · ');
-
-      const reqParts: string[] = [];
-      if (def.reqFacilityId) {
-        const fName =
-          BLACKSMITH_TOOLS.find((t) => t.id === def.reqFacilityId)?.name ??
-          def.reqFacilityId;
-        reqParts.push(`${fName} Lv.${def.reqFacilityLevel}`);
-      }
-      if (def.reqToolId) {
-        const tName =
-          BLACKSMITH_TOOLS.find((t) => t.id === def.reqToolId)?.name ??
-          def.reqToolId;
-        reqParts.push(`${tName} Lv.${def.reqToolLevel}`);
-      }
-
-      const card = document.createElement('div');
-      card.className = `upgrade-card${unlocked ? '' : ' locked'}`;
-      card.innerHTML = `
-        <div class="upgrade-info">
-          <div class="upgrade-icon">${def.icon}</div>
-          <div class="upgrade-text-wrap">
-            <div class="upgrade-title-row">
-              <span class="upgrade-name" style="color:${rInfo.color}">[${
-        rInfo.label
-      }] ${def.name}</span>
-              <span class="upgrade-level-badge">${
-                EQUIP_SLOT_LABELS[def.slot]
-              }</span>
-              <span class="upgrade-level-badge">성공률 ${Math.round(
-                preview.successRate * 100
-              )}% · ${preview.durationSec}초</span>
-              <span class="upgrade-level-badge">판매가 ${this.game.getEffectiveEquipSellPrice(
-                def.id
-              )}G</span>
-            </div>
-            <p class="upgrade-desc">${def.description}</p>
-            <p class="upgrade-effects">기본 스탯: ${stStr} | 착용 직업: ${getWearableClassesText(
-        def
-      )}</p>
-            <p class="upgrade-desc">필요 재료: <b>${matStr}</b></p>
-            ${
-              !unlocked
-                ? `<p class="upgrade-unlock-req">🔒 요구 시설: ${reqParts.join(
-                    ' & '
-                  )}</p>`
-                : ''
-            }
-          </div>
-        </div>
-      `;
-
-      const cBtn = document.createElement('button');
-      cBtn.type = 'button';
-      cBtn.className = 'buy-btn';
-      cBtn.disabled = !canCraft;
-      cBtn.innerHTML = `
-        <span class="buy-btn-label">${unlocked ? '단조 시작' : '미해금'}</span>
-        <span class="buy-btn-cost">${def.craftGoldCost} G</span>
-      `;
-      cBtn.addEventListener('click', () => {
-        if (this.game.startCraftEquipment(def.id)) {
-          this.buildTabCards();
-        }
-      });
-      card.appendChild(cBtn);
-      this.elUpgradeList.appendChild(card);
-    }
   }
 
-  private createShopToolCard(
-    tool: (typeof POTION_TOOLS)[number]
-  ): HTMLElement {
-    const lv = this.game.getShopToolLevel(tool.shop, tool.id);
-    const isMax = lv >= tool.maxLevel;
-    const { gold, materials } = this.game.getShopToolUpgradeCost(tool);
-    const canBuy = this.game.canUpgradeShopTool(tool.id);
+  /**
+   * 3. 대장간 [1/3]: 무기 제작 슬롯 (제작 장인의 특화 무기 보너스!)
+   */
+  private buildBlacksmithForgeHTML(): string {
+    const forger = this.save.staff.forger;
+    const isSpec = forger.specialties.includes(this.selectedWeaponType);
+    const specBonus = isSpec ? (forger.tier === 'S' ? 15 : 12) : 0;
 
-    const matStr = Object.entries(materials)
-      .map(([mId, cnt]) => {
-        const have = this.game.materials[mId] ?? 0;
-        return `${MATERIAL_MAP[mId]?.name ?? mId} ${have}/${cnt}`;
-      })
-      .join(' · ');
+    const probs = calculateSlotProbabilities(
+      [this.betTier1, this.betTier2],
+      forger.bonusProb,
+      getFacilityLuckBonus(this.save, 'blacksmith'),
+      specBonus
+    );
 
-    const wageText = tool.dailyWagePerLevel
-      ? ` (고용 급료: 레벨당 -${tool.dailyWagePerLevel}G/일)`
-      : '';
+    const weaponTypeBtns = ALL_WEAPON_TYPES.map((wt) => {
+      const m = WEAPON_TYPE_META[wt];
+      const spec = forger.specialties.includes(wt);
+      return `
+        <button class="weapon-type-btn ${this.selectedWeaponType === wt ? 'selected' : ''}" data-select-wtype="${wt}">
+          <span>${m.icon} ${m.name}</span>
+          ${spec ? `<span class="spec-star">★장인특화 +${forger.tier === 'S' ? 15 : 12}%</span>` : ''}
+        </button>
+      `;
+    }).join('');
 
-    const card = document.createElement('div');
-    card.className = 'upgrade-card';
-    card.innerHTML = `
-      <div class="upgrade-info">
-        <div class="upgrade-icon">${tool.icon}</div>
-        <div class="upgrade-text-wrap">
-          <div class="upgrade-title-row">
-            <span class="upgrade-name">${tool.name}</span>
-            <span class="upgrade-level-badge">Lv.${lv} / ${tool.maxLevel}</span>
+    const ore1Id = `ore_${this.betTier1.toLowerCase()}`;
+    const ore2Id = `ore_${this.betTier2.toLowerCase()}`;
+    const needSame = ore1Id === ore2Id ? 2 : 1;
+    const canSpin =
+      this.save.gold >= 50 &&
+      (this.save.materials[ore1Id] || 0) >= needSame &&
+      (this.save.materials[ore2Id] || 0) >= 1;
+
+    const costDesc = `50G + ${MATERIAL_MAP[ore1Id].icon}${MATERIAL_MAP[ore1Id].name} 1개 + ${MATERIAL_MAP[ore2Id].icon}${MATERIAL_MAP[ore2Id].name} 1개`;
+
+    return `
+      <div class="subtab-bar">
+        <button class="subtab-btn active" data-goto-tab="bs_forge">1️⃣ 무기 제작 슬롯 (${this.save.staff.forger.name})</button>
+        <button class="subtab-btn" data-goto-tab="bs_enhance">2️⃣ 연속 강화 슬롯 (${this.save.staff.enhancer.name})</button>
+        <button class="subtab-btn" data-goto-tab="bs_enchant">3️⃣ 마법 인챈트 슬롯 (${this.save.staff.enchanter.name})</button>
+      </div>
+      <div class="bet-row-label">🗡️ 제작할 무기 종류 선택 (담당 장인의 ★특화 무기일수록 고등급 확률 추가 상승!)</div>
+      <div class="weapon-type-grid">${weaponTypeBtns}</div>
+      ${this.buildMaterialBetSelectorHTML('ore', true)}
+      ${this.renderSlotMachineWidget(probs, forger, costDesc, canSpin, '무기 제작 슬롯 돌리기')}
+      ${this.buildWeaponInventoryHTML()}
+    `;
+  }
+
+  /**
+   * 4. 대장간 [2/3]: 무기 연속 강화 슬롯
+   * 실패(STOP)가 뜨면 무기가 파괴되지 않고 '거기까지 강화 완료(확정)' 됩니다!
+   */
+  private buildBlacksmithEnhanceHTML(): string {
+    const enhancer = this.save.staff.enhancer;
+    const targetWp =
+      this.save.weapons.find((w) => w.id === this.selectedWeaponId) ||
+      this.save.weapons[0] ||
+      null;
+    if (targetWp) this.selectedWeaponId = targetWp.id;
+
+    const oreId = `ore_${this.betTier1.toLowerCase()}`;
+    const rate = targetWp
+      ? getEnhanceSuccessRate(this.save, targetWp, this.betTier1)
+      : 0;
+    const canSpin =
+      !!targetWp &&
+      !targetWp.enhanceLocked &&
+      this.save.gold >= 40 &&
+      (this.save.materials[oreId] || 0) >= 1;
+
+    return `
+      <div class="subtab-bar">
+        <button class="subtab-btn" data-goto-tab="bs_forge">1️⃣ 무기 제작 슬롯 (${this.save.staff.forger.name})</button>
+        <button class="subtab-btn active" data-goto-tab="bs_enhance">2️⃣ 연속 강화 슬롯 (${this.save.staff.enhancer.name})</button>
+        <button class="subtab-btn" data-goto-tab="bs_enchant">3️⃣ 마법 인챈트 슬롯 (${this.save.staff.enchanter.name})</button>
+      </div>
+
+      <div class="info-callout">
+        ⚒️ <strong>연속 강화 규칙:</strong> 강화 슬롯이 성공할 때마다 <strong>+1강 (대성공 시 +2강!)</strong>이 계속 쌓입니다!
+        만약 <strong>실패(🔒STOP)</strong>가 뜨면 무기가 파괴되지 않고 <strong>현재 +수치에서 강화가 최종 확정 완료</strong>됩니다.
+        (+강화 횟수가 높을수록 다음 단계인 <strong>인챈트 슬롯</strong>의 옵션 줄 수와 최소~최대 수치가 폭발적으로 증가합니다!)
+      </div>
+
+      ${this.buildWeaponSelectorDropdown(targetWp)}
+      ${this.buildMaterialBetSelectorHTML('ore', false)}
+
+      ${
+        targetWp
+          ? `
+        <div class="kairo-slot-machine">
+          <div class="slot-header-row">
+            <div class="staff-badge-card">
+              <span class="tier-pill tier-${enhancer.tier}">${enhancer.tier}급 강화장인</span>
+              <strong>${enhancer.name}</strong>
+              <span class="staff-bonus-tag">강화성공 +${enhancer.bonusProb}% · ${enhancer.specialtyLabel}</span>
+            </div>
+            <div class="prob-bar-group">
+              <span class="prob-chip tier-S">현재 +${targetWp.enhanceCount}강 → 성공 확률 ${rate}%</span>
+            </div>
           </div>
-          <p class="upgrade-desc">${tool.description}${wageText}</p>
+
+          <div class="slot-reels-frame">
+            <div class="slot-reel-cell">${this.spinReels[0]}</div>
+            <div class="slot-reel-cell">${this.spinReels[1]}</div>
+            <div class="slot-reel-cell">${this.spinReels[2]}</div>
+          </div>
+
           ${
-            !isMax && matStr
-              ? `<p class="upgrade-effects">상위 레벨 재료: ${matStr}</p>`
+            this.enhanceResultBanner
+              ? `<div class="enhance-banner">${this.enhanceResultBanner}</div>`
               : ''
           }
+
+          <div class="slot-action-bar">
+            <div class="slot-cost-label">
+              ${
+                targetWp.enhanceLocked
+                  ? `🔒 <strong>+${targetWp.enhanceCount}강에서 강화 완료(확정)된 무기입니다! 이제 [3️⃣ 마법 인챈트 슬롯]으로 가세요!</strong>`
+                  : `소모: 40G + ${MATERIAL_MAP[oreId].icon}${MATERIAL_MAP[oreId].name} 1개`
+              }
+            </div>
+            <button id="btn-trigger-enhance" class="kairo-btn-primary ${!canSpin ? 'disabled' : ''}" ${!canSpin ? 'disabled' : ''}>
+              ⚒️ 연속 강화 슬롯 스핀! (+${targetWp.enhanceCount}강 도전)
+            </button>
+          </div>
         </div>
+      `
+          : `<div class="empty-hint">강화할 무기가 없습니다. 먼저 무기를 제작하세요!</div>`
+      }
+      ${this.buildWeaponInventoryHTML()}
+    `;
+  }
+
+  /**
+   * 5. 대장간 [3/3]: 무기 인챈트 슬롯
+   * 연속 강화 횟수(+수치)에 따라 뜨는 가지 수(1~4줄)와 수치 범위(최소~최대)를 투명하게 알려주고 슬롯 스핀!
+   */
+  private buildBlacksmithEnchantHTML(): string {
+    const enchanter = this.save.staff.enchanter;
+    const targetWp =
+      this.save.weapons.find((w) => w.id === this.selectedWeaponId) ||
+      this.save.weapons[0] ||
+      null;
+    if (targetWp) this.selectedWeaponId = targetWp.id;
+
+    const oreId = `ore_${this.betTier1.toLowerCase()}`;
+    const preview = targetWp
+      ? getEnchantPreviewInfo(this.save, targetWp, this.betTier1)
+      : null;
+
+    const probs = calculateSlotProbabilities(
+      [this.betTier1],
+      enchanter.bonusProb,
+      getFacilityLuckBonus(this.save, 'blacksmith'),
+      targetWp && enchanter.specialties.includes(targetWp.type) ? 15 : 0
+    );
+
+    const canSpin =
+      !!targetWp &&
+      this.save.gold >= 60 &&
+      (this.save.materials[oreId] || 0) >= 1;
+    const costDesc = `60G + ${MATERIAL_MAP[oreId].icon}${MATERIAL_MAP[oreId].name} 1개`;
+
+    const rangeBadges = preview
+      ? preview.ranges
+          .map(
+            (r) => `
+          <div class="range-preview-chip" style="border-left: 3px solid ${r.color}">
+            <strong>${r.name}</strong>
+            <span>${r.statLabel} <b>${r.minVal} ~ ${r.maxVal}</b></span>
+          </div>
+        `
+          )
+          .join('')
+      : '';
+
+    return `
+      <div class="subtab-bar">
+        <button class="subtab-btn" data-goto-tab="bs_forge">1️⃣ 무기 제작 슬롯 (${this.save.staff.forger.name})</button>
+        <button class="subtab-btn" data-goto-tab="bs_enhance">2️⃣ 연속 강화 슬롯 (${this.save.staff.enhancer.name})</button>
+        <button class="subtab-btn active" data-goto-tab="bs_enchant">3️⃣ 마법 인챈트 슬롯 (${this.save.staff.enchanter.name})</button>
+      </div>
+
+      ${this.buildWeaponSelectorDropdown(targetWp)}
+      ${this.buildMaterialBetSelectorHTML('ore', false)}
+
+      ${
+        targetWp && preview
+          ? `
+        <div class="enchant-preview-box">
+          <div class="enchant-preview-header">
+            ✨ <strong>[${targetWp.icon} ${targetWp.name} +${targetWp.enhanceCount}강]</strong> 인챈트 예상 스펙:
+            <span class="highlight-badge">동시 부여 옵션 수: <strong>${preview.slotCount}가지</strong></span>
+            <small>(+2강 이상 2줄, +5강 이상 3줄, +8강 이상 4줄!)</small>
+          </div>
+          <div class="range-preview-grid">${rangeBadges}</div>
+        </div>
+        ${this.renderSlotMachineWidget(probs, enchanter, costDesc, canSpin, '마법 인챈트 슬롯 돌리기')}
+      `
+          : `<div class="empty-hint">인챈트할 무기가 없습니다.</div>`
+      }
+      ${this.buildWeaponInventoryHTML()}
+    `;
+  }
+
+  private buildWeaponSelectorDropdown(targetWp: WeaponItem | null): string {
+    if (this.save.weapons.length === 0) return '';
+    const btns = this.save.weapons
+      .map((w) => {
+        const active = targetWp?.id === w.id ? 'selected' : '';
+        return `
+          <button class="weapon-pick-chip ${active} tier-border-${w.tier}" data-pick-weapon="${w.id}">
+            <span>${w.icon} [${w.tier}] ${w.name} <strong>+${w.enhanceCount}강</strong> ${w.enhanceLocked ? '🔒확정' : ''}</span>
+            <small>공격력 ${Math.round(w.baseAtk * (1 + w.enhanceCount * 0.18))} · 인챈트 ${w.enchants.length}줄</small>
+          </button>
+        `;
+      })
+      .join('');
+    return `
+      <div class="bet-row-label">🎯 대상 무기 선택</div>
+      <div class="weapon-pick-list">${btns}</div>
+    `;
+  }
+
+  private buildWeaponInventoryHTML(): string {
+    if (this.save.weapons.length === 0) return '';
+    const rows = this.save.weapons
+      .map((w) => {
+        const enhAtk = Math.round(w.baseAtk * (1 + w.enhanceCount * 0.18));
+        const encText =
+          w.enchants.length > 0
+            ? w.enchants.map((e) => `${e.statLabel}${e.value}`).join(', ')
+            : '인챈트 없음';
+        const heroOptions = this.save.heroes
+          .map(
+            (h) =>
+              `<option value="${h.id}" ${w.equippedHeroId === h.id ? 'selected' : ''}>${h.name} (${h.className})</option>`
+          )
+          .join('');
+
+        return `
+          <div class="inv-item-card tier-border-${w.tier}">
+            <div>
+              <span class="tier-pill tier-${w.tier}">${w.tier}급</span>
+              <strong>${w.icon} ${w.name} +${w.enhanceCount}강</strong>
+              ${w.enhanceLocked ? `<span class="locked-tag">🔒강화완료</span>` : ''}
+              <div class="sub-text">최종 공격력 <strong>+${enhAtk}</strong> (기본 ${w.baseAtk}) | ✨ ${encText}</div>
+            </div>
+            <div class="inv-actions">
+              <select class="kairo-select" data-equip-weapon="${w.id}">
+                <option value="">-- 장착 영웅 선택 --</option>
+                ${heroOptions}
+              </select>
+            </div>
+          </div>
+        `;
+      })
+      .join('');
+
+    return `
+      <div class="section-divider">🗡️ 보유 무기 보관함 (${this.save.weapons.length}개)</div>
+      <div class="inv-list">${rows}</div>
+    `;
+  }
+
+  /**
+   * 6. 포션가게: 약초 조합 1회 슬롯
+   */
+  private buildPotionBrewHTML(): string {
+    const alch = this.save.staff.alchemist;
+    const probs = calculateSlotProbabilities(
+      [this.betTier1, this.betTier2],
+      alch.bonusProb,
+      getFacilityLuckBonus(this.save, 'potion'),
+      this.betTier1 !== this.betTier2 ? 6 : 3
+    );
+
+    const h1Id = `herb_${this.betTier1.toLowerCase()}`;
+    const h2Id = `herb_${this.betTier2.toLowerCase()}`;
+    const needSame = h1Id === h2Id ? 2 : 1;
+    const canSpin =
+      this.save.gold >= 30 &&
+      (this.save.materials[h1Id] || 0) >= needSame &&
+      (this.save.materials[h2Id] || 0) >= 1;
+
+    const costDesc = `30G + ${MATERIAL_MAP[h1Id].icon}${MATERIAL_MAP[h1Id].name} 1개 + ${MATERIAL_MAP[h2Id].icon}${MATERIAL_MAP[h2Id].name} 1개`;
+
+    const potListHTML =
+      this.save.potions.length === 0
+        ? `<div class="empty-hint">보유한 포션이 없습니다. 약초를 조합해 포션 슬롯을 돌리세요!</div>`
+        : this.save.potions
+            .map(
+              (p) => `
+          <div class="inv-item-card tier-border-${p.tier}">
+            <div>
+              <span class="tier-pill tier-${p.tier}">${p.tier}급</span>
+              <strong>${p.icon} ${p.name}</strong>
+              <div class="sub-text">${p.desc}</div>
+            </div>
+            <div class="inv-actions">
+              <button class="kairo-btn-mini" data-equip-potion="${p.id}">🎒 영웅 가방에 넣기</button>
+              <button class="kairo-btn-mini gold" data-sell-potion="${p.id}">💰 판매 (+${p.sellGold}G)</button>
+            </div>
+          </div>
+        `
+            )
+            .join('');
+
+    return `
+      ${this.buildMaterialBetSelectorHTML('herb', true)}
+      ${this.renderSlotMachineWidget(probs, alch, costDesc, canSpin, '포션 연금 슬롯 돌리기')}
+      <div class="section-divider">🧪 연성된 포션 진열대 (${this.save.potions.length}개)</div>
+      <div class="inv-list">${potListHTML}</div>
+    `;
+  }
+
+  /**
+   * 7. 왕국 거래처: 시세 슬롯 없이 깔끔한 정가 재료 상점 & 마일리지(가루) 확정 교환소
+   */
+  private buildTradeMarketHTML(): string {
+    const scrapCosts: Record<RankTier, number> = { C: 8, B: 20, A: 45, S: 95 };
+    const rows = MATERIALS.map((m) => {
+      const count = this.save.materials[m.id] || 0;
+      const scCost = scrapCosts[m.tier];
+      return `
+        <div class="trade-item-card tier-border-${m.tier}">
+          <div class="trade-item-left">
+            <span class="tier-pill tier-${m.tier}">${m.tier}급</span>
+            <strong>${m.icon} ${m.name}</strong>
+            <span class="stock-count">보유: <b>${count}개</b></span>
+            <div class="sub-text">${m.desc}</div>
+          </div>
+          <div class="trade-item-actions">
+            <button class="kairo-btn-mini" data-buy-mat="${m.id}" ${this.save.gold < m.buyPrice ? 'disabled' : ''}>
+              🛒 구매 (${m.buyPrice}G)
+            </button>
+            <button class="kairo-btn-mini gold" data-sell-mat="${m.id}" ${count <= 0 ? 'disabled' : ''}>
+              💰 판매 (+${m.sellPrice}G)
+            </button>
+            <button class="kairo-btn-mini purple" data-scrap-mat="${m.id}" ${this.save.scrap < scCost ? 'disabled' : ''}>
+              ♻️ 마일리지 교환 (${scCost}가루)
+            </button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="info-callout">
+        💎 <strong>왕국 거래처 (정가 상점 & 마일리지 교환소):</strong>
+        던전에서 얻은 남는 재료를 팔거나 부족한 재료를 정가로 구매하세요!
+        특히 슬롯에서 <strong>[🗑️ 버리기]</strong>를 선택해 모은 <strong>♻️ 마일리지 가루(보유: ${this.save.scrap}개)</strong>로 A~S급 희귀 재료를 100% 확정 교환할 수 있습니다.
+      </div>
+      <div class="trade-grid">${rows}</div>
+    `;
+  }
+
+  /**
+   * 8. 직원 고용 슬롯: 요리사 / 대장간 3인(제작·강화·인챈트) / 연금술사 스카우트
+   */
+  private buildStaffHireHTML(): string {
+    const roleBtns = (Object.keys(STAFF_ROLE_META) as StaffRoleId[])
+      .map((r) => {
+        const meta = STAFF_ROLE_META[r];
+        const cur = this.save.staff[r];
+        return `
+          <button class="staff-role-tab ${this.selectedStaffRole === r ? 'selected' : ''}" data-select-srole="${r}">
+            <div><strong>${meta.icon} ${meta.title}</strong></div>
+            <small>현재: [${cur.tier}급] ${cur.name} (+${cur.bonusProb}%)</small>
+          </button>
+        `;
+      })
+      .join('');
+
+    const curStaff = this.save.staff[this.selectedStaffRole];
+    const facId = STAFF_ROLE_META[this.selectedStaffRole].facility;
+    const probs = calculateSlotProbabilities(
+      [this.betTier1],
+      curStaff.bonusProb,
+      getFacilityLuckBonus(this.save, facId)
+    );
+
+    const hireGoldMap: Record<RankTier, number> = {
+      C: 100,
+      B: 240,
+      A: 500,
+      S: 950,
+    };
+    const tiers: RankTier[] = ['C', 'B', 'A', 'S'];
+    const betTierBtns = tiers
+      .map(
+        (t) => `
+        <button class="mat-bet-btn ${this.betTier1 === t ? 'selected' : ''} tier-border-${t}" data-bet-slot="1" data-bet-tier="${t}">
+          <div class="mat-meta">
+            <strong>[${t}급 스카우트 공고]</strong>
+            <small>베팅 비용: ${hireGoldMap[t]}G</small>
+          </div>
+        </button>
+      `
+      )
+      .join('');
+
+    const cost = hireGoldMap[this.betTier1];
+    const canSpin = this.save.gold >= cost;
+
+    return `
+      <div class="info-callout">
+        👨‍🍳 <strong>직원 고용 슬롯 특징:</strong> 대장간은 <strong>제작·강화·인챈트 3명의 담당 직원</strong>이 각각 따로 배치됩니다!
+        고등급 직원일수록 슬롯 대박 확률 보너스가 높고, <strong>다룰 수 있는 특화 무기 개수(C급 1종 → S급 5종 전체 마스터!)</strong>가 늘어납니다.
+      </div>
+      <div class="staff-role-grid">${roleBtns}</div>
+      <div class="bet-row-label">💰 스카우트 공고 등급 베팅</div>
+      <div class="bet-grid">${betTierBtns}</div>
+      ${this.renderSlotMachineWidget(probs, curStaff, `${cost}G`, canSpin, '직원 스카우트 슬롯 돌리기')}
+    `;
+  }
+
+  /**
+   * 9. 시설 업그레이드 슬롯: 기본 +1레벨 보장 + 특수 시설 특성 추첨
+   */
+  private buildFacilityUpHTML(): string {
+    const facIds: FacilityId[] = ['inn', 'blacksmith', 'potion', 'trade'];
+    const facBtns = facIds
+      .map((fid) => {
+        const f = this.save.facilities[fid];
+        return `
+          <button class="staff-role-tab ${this.selectedFacilityId === fid ? 'selected' : ''}" data-select-fac="${fid}">
+            <div><strong>${f.name} (Lv.${f.level})</strong></div>
+            <small>보유 특성: ${f.passives.length}개</small>
+          </button>
+        `;
+      })
+      .join('');
+
+    const fac = this.save.facilities[this.selectedFacilityId];
+    const baseCost = fac.level * 220;
+    const oreId = `ore_${this.betTier1.toLowerCase()}`;
+    const probs = calculateSlotProbabilities(
+      [this.betTier1],
+      10,
+      getFacilityLuckBonus(this.save, this.selectedFacilityId)
+    );
+    const canSpin =
+      this.save.gold >= baseCost && (this.save.materials[oreId] || 0) >= 1;
+    const costDesc = `${baseCost}G + 증축 자재 ${MATERIAL_MAP[oreId].icon}${MATERIAL_MAP[oreId].name} 1개`;
+
+    const passivesHTML =
+      fac.passives.length === 0
+        ? `<div class="empty-hint">아직 획득한 특수 시설 특성이 없습니다. 업그레이드 슬롯을 돌려 특성을 획득하세요!</div>`
+        : fac.passives
+            .map(
+              (p) => `
+          <div class="inv-item-card tier-border-${p.tier}">
+            <div>
+              <span class="tier-pill tier-${p.tier}">${p.tier}급 특성</span>
+              <strong>${p.name}</strong>
+              <div class="sub-text">${p.desc}</div>
+            </div>
+          </div>
+        `
+            )
+            .join('');
+
+    return `
+      <div class="info-callout">
+        🏰 <strong>시설 업그레이드 슬롯:</strong> 업그레이드 슬롯을 돌리면 <strong>기본 +1레벨 상승(잭팟 시 +2레벨!)</strong>과 함께
+        시설 전용 패시브 특성이 뽑힙니다. 마음에 들면 <strong>[채택]</strong>하여 레벨업과 특성을 확정하고, 마음에 안 들면 <strong>[버리기]</strong>로 마일리지를 챙겨 다시 좋은 특성을 노릴 수 있습니다!
+      </div>
+      <div class="staff-role-grid">${facBtns}</div>
+      ${this.buildMaterialBetSelectorHTML('ore', false)}
+      ${this.renderSlotMachineWidget(probs, this.save.staff.forger, costDesc, canSpin, `${fac.name} 업그레이드 슬롯 돌리기`)}
+      <div class="section-divider">✨ [${fac.name}] 적용 중인 시설 특성 (${fac.passives.length}개)</div>
+      <div class="inv-list">${passivesHTML}</div>
+    `;
+  }
+
+  /**
+   * 10. 던전 원정 출발 & 던전 내 전투 슬롯 & 클리어 후 보상 룰렛 슬롯
+   */
+  private buildDungeonPrepHTML(): string {
+    const zoneCards = DUNGEON_ZONES.map((z) => {
+      const clears = this.save.clearedDungeons[z.id] || 0;
+      return `
+        <button class="dungeon-zone-card ${this.selectedDungeonId === z.id ? 'selected' : ''} tier-border-${z.dropTier}" data-select-dungeon="${z.id}">
+          <div>
+            <span class="tier-pill tier-${z.dropTier}">${z.dropTier}급 재료 드랍</span>
+            <strong>${z.name}</strong>
+          </div>
+          <div class="sub-text">${z.floorText} | 보스: ${z.bossName}</div>
+          <small>클리어 횟수: ${clears}회 · 기본 보상 ${z.baseGoldReward}G</small>
+        </button>
+      `;
+    }).join('');
+
+    const partySummary = this.save.heroes
+      .slice(0, 4)
+      .map((h) => {
+        const st = getHeroCombatStats(this.save, h);
+        return `
+          <div class="party-member-chip tier-border-${h.tier}">
+            <strong>${HERO_CLASS_META[h.classId].icon} ${h.name} (Lv.${h.level})</strong>
+            <span>❤️${st.maxHp} ⚔️${st.atk}</span>
+            <small>${h.activeMeal ? `🍽️${h.activeMeal.name}` : '식사 없음'} | ${h.equippedPotionId ? '🧪포션장착' : '포션없음'}</small>
+          </div>
+        `;
+      })
+      .join('');
+
+    return `
+      <div class="bet-row-label">🗺️ 탐험할 던전 구역 선택 (상위 던전일수록 B·A·S급 고등급 재료가 드랍됩니다!)</div>
+      <div class="dungeon-zone-grid">${zoneCards}</div>
+
+      <div class="section-divider">🛡️ 출정 파티 (최대 4인 자동 편성)</div>
+      <div class="party-chip-grid">${partySummary}</div>
+
+      <div class="slot-action-bar" style="margin-top:14px;">
+        <div>💡 출발 전 여관에서 <strong>1회성 요리</strong>를 먹이고, 포션가게에서 <strong>포션</strong>을 챙겨주면 돌파력이 급상승합니다!</div>
+        <button id="btn-launch-dungeon" class="kairo-btn-primary">
+          ⚔️ 지금 던전 원정 출발!
+        </button>
       </div>
     `;
+  }
 
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'buy-btn';
-    btn.disabled = !canBuy;
-    btn.innerHTML = `
-      <span class="buy-btn-label">${
-        isMax ? '최대 레벨' : lv === 0 ? '보유 골드 건설' : '강화'
-      }</span>
-      <span class="buy-btn-cost">${isMax ? 'MAX' : `${formatGold(gold)} G`}</span>
+  /**
+   * 11. 데이터 저장 관리 (IndexedDB + LocalStorage 이중 자동저장 & JSON 내보내기/불러오기)
+   */
+  private buildSaveManageHTML(): string {
+    return `
+      <div class="info-callout">
+        💾 <strong>이중 금고 자동 저장 작동 중:</strong> 모든 슬롯 결과와 여관 경영 데이터는 브라우저 내장 데이터베이스인
+        <strong>IndexedDB</strong>와 <strong>LocalStorage</strong> 두 곳에 실시간으로 동시 저장됩니다.
+        다른 기기로 옮기거나 영구 백업하고 싶을 때 아래 JSON 세이브 파일 다운로드/불러오기를 이용하세요!
+      </div>
+      <div class="save-actions-box">
+        <button id="btn-export-json" class="kairo-btn-keep">
+          📥 세이브 파일(.json) 내 컴퓨터로 다운로드
+        </button>
+        <label class="kairo-btn-primary" style="cursor:pointer;">
+          📤 세이브 파일(.json) 불러오기
+          <input type="file" id="input-import-json" accept=".json" style="display:none;" />
+        </label>
+        <button id="btn-reset-save" class="kairo-btn-discard">
+          ⚠️ 처음부터 새로 시작 (초기화)
+        </button>
+      </div>
     `;
-    btn.addEventListener('click', () => {
-      if (this.game.upgradeShopTool(tool.id)) {
-        this.buildTabCards();
-      }
-    });
-    card.appendChild(btn);
-    return card;
   }
 
-  // --------------------------------------------------------------------------
-  // 6. 여관 업그레이드 탭 (메뉴 · 객실 · 직원 · 시설)
-  // --------------------------------------------------------------------------
-  private buildInnUpgradesTab(category: UpgradeCategory): void {
-    const items = UPGRADES.filter((u) => u.category === category);
-    for (const def of items) {
-      const card = this.createUpgradeCardElement(def);
-      this.elUpgradeList.appendChild(card);
-    }
-    this.updateLiveUpgradeCardStates();
-  }
-
-  private createUpgradeCardElement(def: UpgradeDef): HTMLElement {
-    const lv = this.game.upgrades[def.id] ?? 0;
-    const isUnlocked = this.game.reputation >= def.unlockRep;
-    const cost = getUpgradeCost(def, lv);
-    const matReqs = getInnUpgradeMaterialRequirements(def.id, lv);
-    const matText = Object.entries(matReqs)
-      .map(
-        ([mId, cnt]) =>
-          `${MATERIAL_MAP[mId]?.name ?? mId} ${
-            this.game.materials[mId] ?? 0
-          }/${cnt}`
-      )
-      .join(' · ');
-
-    const card = document.createElement('div');
-    card.className = `upgrade-card${isUnlocked ? '' : ' locked'}`;
-    card.dataset.upgradeId = def.id;
-
-    const info = document.createElement('div');
-    info.className = 'upgrade-info';
-
-    const iconBox = document.createElement('div');
-    iconBox.className = 'upgrade-icon';
-    iconBox.textContent = def.icon;
-
-    const textWrap = document.createElement('div');
-    textWrap.className = 'upgrade-text-wrap';
-
-    const titleRow = document.createElement('div');
-    titleRow.className = 'upgrade-title-row';
-
-    const nameEl = document.createElement('span');
-    nameEl.className = 'upgrade-name';
-    nameEl.textContent = def.name;
-
-    const lvBadge = document.createElement('span');
-    lvBadge.className = 'upgrade-level-badge';
-    lvBadge.dataset.role = 'level-badge';
-    lvBadge.textContent = `Lv.${lv}`;
-
-    titleRow.appendChild(nameEl);
-    titleRow.appendChild(lvBadge);
-
-    const descEl = document.createElement('p');
-    descEl.className = 'upgrade-desc';
-    descEl.textContent = def.description;
-
-    const effectsEl = document.createElement('p');
-    effectsEl.className = 'upgrade-effects';
-    effectsEl.textContent = this.formatUpgradeEffectText(def);
-
-    textWrap.appendChild(titleRow);
-    textWrap.appendChild(descEl);
-    textWrap.appendChild(effectsEl);
-
-    if (matText) {
-      const matEl = document.createElement('p');
-      matEl.className = 'upgrade-desc';
-      matEl.dataset.role = 'mat-req';
-      matEl.textContent = `📦 상위 레벨 재료: ${matText}`;
-      textWrap.appendChild(matEl);
-    }
-
-    if (!isUnlocked) {
-      const reqEl = document.createElement('p');
-      reqEl.className = 'upgrade-unlock-req';
-      reqEl.textContent = `🔒 해금 조건: 여관 평판 ${formatGold(
-        def.unlockRep
-      )} 이상`;
-      textWrap.appendChild(reqEl);
-    }
-
-    info.appendChild(iconBox);
-    info.appendChild(textWrap);
-
-    const buyBtn = document.createElement('button');
-    buyBtn.type = 'button';
-    buyBtn.className = 'buy-btn';
-    buyBtn.dataset.role = 'buy-btn';
-
-    const btnLabel = document.createElement('span');
-    btnLabel.className = 'buy-btn-label';
-    btnLabel.dataset.role = 'buy-label';
-    btnLabel.textContent = isUnlocked ? (lv === 0 ? '구매' : '강화') : '미해금';
-
-    const btnCost = document.createElement('span');
-    btnCost.className = 'buy-btn-cost';
-    btnCost.dataset.role = 'buy-cost';
-    btnCost.textContent = `${formatGold(cost)} G`;
-
-    buyBtn.appendChild(btnLabel);
-    buyBtn.appendChild(btnCost);
-
-    buyBtn.addEventListener('click', () => {
-      if (this.game.buyUpgrade(def.id)) {
-        this.buildTabCards();
-      }
+  private attachModalInnerHandlers(): void {
+    // 모달 상단 서브탭 이동
+    document.querySelectorAll('[data-goto-tab]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const t = btn.getAttribute('data-goto-tab') as ModalTab;
+        sfx.playClick();
+        this.openModal(t);
+      });
     });
 
-    card.appendChild(info);
-    card.appendChild(buyBtn);
-    return card;
-  }
+    // 베팅 재료 등급 선택
+    document.querySelectorAll('[data-bet-tier]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (this.isSpinning || this.pendingDecision) return;
+        const slot = Number(btn.getAttribute('data-bet-slot'));
+        const tier = btn.getAttribute('data-bet-tier') as RankTier;
+        sfx.playClick();
+        if (slot === 1) this.betTier1 = tier;
+        else this.betTier2 = tier;
+        this.renderModalContent();
+      });
+    });
 
-  private formatUpgradeEffectText(def: UpgradeDef): string {
-    const parts: string[] = [];
-    if (def.clickPerLevel > 0) {
-      parts.push(`서빙·단가 보너스 +${formatGold(def.clickPerLevel)}G`);
-    }
-    if (def.category === 'menu') {
-      parts.push(`영웅 식사 버프 강화`);
-    }
-    if (def.category === 'room') {
-      parts.push(`영웅 부상·피로 회복 가속`);
-    }
-    if (def.maxGuestsBonusPerLevel) {
-      parts.push(`수용 손님 증가`);
-    }
-    if (def.autoServeSpeedBonus) {
-      parts.push(`자동 서빙 속도 +${Math.round(def.autoServeSpeedBonus * 100)}%`);
-    }
-    if (def.spawnRateBonus) {
-      parts.push(`방문 빈도 상승`);
-    }
-    if (def.globalMultiplierBonus) {
-      parts.push(`전체 거래 수익 +${Math.round(def.globalMultiplierBonus * 100)}%`);
-    }
-    if (def.lootChanceBonus) {
-      parts.push(`전리품 팁 확률 상승`);
-    }
-    if (def.dailyWagePerLevel) {
-      parts.push(`일일 급료 -${def.dailyWagePerLevel}G/Lv`);
-    }
-    if (def.dailyUpkeepPerLevel) {
-      parts.push(`일일 유지비 -${def.dailyUpkeepPerLevel}G/Lv`);
-    }
-    return `효과: ${parts.join(' · ')}`;
-  }
+    // 무기 종류 선택
+    document.querySelectorAll('[data-select-wtype]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (this.isSpinning || this.pendingDecision) return;
+        this.selectedWeaponType = btn.getAttribute('data-select-wtype') as WeaponTypeId;
+        sfx.playClick();
+        this.renderModalContent();
+      });
+    });
 
-  private updateLiveUpgradeCardStates(): void {
-    const cards =
-      this.elUpgradeList.querySelectorAll<HTMLElement>('.upgrade-card');
-    cards.forEach((card) => {
-      const id = card.dataset.upgradeId;
-      if (!id) return;
-      const def = UPGRADES.find((u) => u.id === id);
-      if (!def) return;
+    // 강화/인챈트 대상 무기 선택
+    document.querySelectorAll('[data-pick-weapon]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (this.isSpinning || this.pendingDecision) return;
+        this.selectedWeaponId = btn.getAttribute('data-pick-weapon');
+        this.enhanceResultBanner = null;
+        sfx.playClick();
+        this.renderModalContent();
+      });
+    });
 
-      const lv = this.game.upgrades[id] ?? 0;
-      const isUnlocked = this.game.reputation >= def.unlockRep;
-      const cost = getUpgradeCost(def, lv);
-      const canBuy = this.game.canBuyUpgrade(id);
+    // 직원 직군 선택
+    document.querySelectorAll('[data-select-srole]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (this.isSpinning || this.pendingDecision) return;
+        this.selectedStaffRole = btn.getAttribute('data-select-srole') as StaffRoleId;
+        sfx.playClick();
+        this.renderModalContent();
+      });
+    });
 
-      const lvBadge = card.querySelector<HTMLElement>(
-        '[data-role="level-badge"]'
-      );
-      if (lvBadge) lvBadge.textContent = `Lv.${lv}`;
+    // 시설 선택
+    document.querySelectorAll('[data-select-fac]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (this.isSpinning || this.pendingDecision) return;
+        this.selectedFacilityId = btn.getAttribute('data-select-fac') as FacilityId;
+        sfx.playClick();
+        this.renderModalContent();
+      });
+    });
 
-      const buyBtn = card.querySelector<HTMLButtonElement>(
-        '[data-role="buy-btn"]'
-      );
-      const buyLabel = card.querySelector<HTMLElement>(
-        '[data-role="buy-label"]'
-      );
-      const buyCost = card.querySelector<HTMLElement>('[data-role="buy-cost"]');
+    // 던전 구역 선택
+    document.querySelectorAll('[data-select-dungeon]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        this.selectedDungeonId = btn.getAttribute('data-select-dungeon') || 'dungeon_1';
+        sfx.playClick();
+        this.renderModalContent();
+      });
+    });
 
-      if (buyBtn) buyBtn.disabled = !canBuy;
-      if (buyLabel) {
-        buyLabel.textContent = isUnlocked
-          ? lv === 0
-            ? '구매'
-            : '강화'
-          : '미해금';
+    // 메인 슬롯 스핀 실행 버튼 (베팅 재료 선소모 후 결과 생성 -> 채택/버리기 대기)
+    const spinBtn = document.getElementById('btn-trigger-spin');
+    spinBtn?.addEventListener('click', () => {
+      this.handleTriggerMainSlot();
+    });
+
+    // 연속 강화 슬롯 스핀 버튼
+    const enhBtn = document.getElementById('btn-trigger-enhance');
+    enhBtn?.addEventListener('click', () => {
+      this.handleTriggerEnhanceSlot();
+    });
+
+    // 슬롯 결과 [채택(진행)] 버튼
+    const keepBtn = document.getElementById('btn-decision-keep');
+    keepBtn?.addEventListener('click', () => {
+      this.handleDecisionKeep();
+    });
+
+    // 슬롯 결과 [버리기(마일리지 가루 획득)] 버튼
+    const discardBtn = document.getElementById('btn-decision-discard');
+    discardBtn?.addEventListener('click', () => {
+      this.handleDecisionDiscard();
+    });
+
+    // 요리 영웅에게 먹이기 / 판매
+    document.querySelectorAll('[data-feed-dish]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-feed-dish');
+        const idx = this.save.dishes.findIndex((d) => d.id === id);
+        if (idx < 0) return;
+        const dish = this.save.dishes[idx];
+        const targetHero =
+          this.save.heroes.find((h) => !h.activeMeal) || this.save.heroes[0];
+        if (!targetHero) return;
+        targetHero.activeMeal = dish;
+        const st = getHeroCombatStats(this.save, targetHero);
+        targetHero.currentHp = st.maxHp;
+        this.save.dishes.splice(idx, 1);
+        sfx.playSuccess();
+        this.triggerActorSpeech(targetHero.id, `${dish.name} 최고!`, 'happy');
+        saveGameData(this.save);
+        this.renderModalContent();
+      });
+    });
+
+    document.querySelectorAll('[data-sell-dish]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-sell-dish');
+        const idx = this.save.dishes.findIndex((d) => d.id === id);
+        if (idx < 0) return;
+        const dish = this.save.dishes[idx];
+        this.save.gold += dish.sellGold;
+        this.save.dishes.splice(idx, 1);
+        sfx.playCoin();
+        this.updateTopHud();
+        saveGameData(this.save);
+        this.renderModalContent();
+      });
+    });
+
+    // 포션 영웅에게 장착 / 판매
+    document.querySelectorAll('[data-equip-potion]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-equip-potion');
+        const targetHero =
+          this.save.heroes.find((h) => !h.equippedPotionId) || this.save.heroes[0];
+        if (!targetHero || !id) return;
+        targetHero.equippedPotionId = id;
+        sfx.playSuccess();
+        this.triggerActorSpeech(targetHero.id, '비상 포션 준비 완료!', 'happy');
+        saveGameData(this.save);
+        this.renderModalContent();
+      });
+    });
+
+    document.querySelectorAll('[data-sell-potion]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-sell-potion');
+        const idx = this.save.potions.findIndex((p) => p.id === id);
+        if (idx < 0) return;
+        const pot = this.save.potions[idx];
+        this.save.gold += pot.sellGold;
+        this.save.potions.splice(idx, 1);
+        sfx.playCoin();
+        this.updateTopHud();
+        saveGameData(this.save);
+        this.renderModalContent();
+      });
+    });
+
+    // 무기 영웅 장착 드롭다운
+    document.querySelectorAll('[data-equip-weapon]').forEach((sel) => {
+      sel.addEventListener('change', (e) => {
+        const wpId = sel.getAttribute('data-equip-weapon');
+        const heroId = (e.target as HTMLSelectElement).value || null;
+        const wp = this.save.weapons.find((w) => w.id === wpId);
+        if (!wp) return;
+
+        // 기존에 이 무기를 끼고 있던 영웅 해제
+        for (const h of this.save.heroes) {
+          if (h.weaponId === wp.id) h.weaponId = null;
+        }
+        wp.equippedHeroId = heroId;
+        if (heroId) {
+          const hero = this.save.heroes.find((h) => h.id === heroId);
+          if (hero) {
+            // 그 영웅이 끼고 있던 다른 무기 해제
+            for (const otherWp of this.save.weapons) {
+              if (otherWp.id !== wp.id && otherWp.equippedHeroId === hero.id) {
+                otherWp.equippedHeroId = null;
+              }
+            }
+            hero.weaponId = wp.id;
+            this.triggerActorSpeech(hero.id, `${wp.name} 장착!`, 'happy');
+          }
+        }
+        sfx.playClick();
+        this.syncMapActors();
+        saveGameData(this.save);
+        this.renderModalContent();
+      });
+    });
+
+    // 영웅 골드 훈련 레벨업
+    document.querySelectorAll('[data-train-hero]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const hid = btn.getAttribute('data-train-hero');
+        const hero = this.save.heroes.find((h) => h.id === hid);
+        if (!hero) return;
+        const cap = getEffectiveHeroLevelCap(this.save, hero);
+        if (hero.level >= cap) {
+          alert(`현재 여관 시설 레벨(Lv.${this.save.facilities.inn.level})의 레벨 상한(Lv.${cap})에 도달했습니다! 여관을 업그레이드하면 상한선이 늘어납니다.`);
+          return;
+        }
+        const cost = hero.level * 75;
+        if (this.save.gold < cost) return;
+        this.save.gold -= cost;
+        this.grantPartyExp([hero.id], hero.level * 50);
+        sfx.playSuccess();
+        this.updateTopHud();
+        saveGameData(this.save);
+        this.renderModalContent();
+      });
+    });
+
+    document.querySelectorAll('[data-dismiss-hero]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (this.save.heroes.length <= 1) return;
+        const hid = btn.getAttribute('data-dismiss-hero');
+        this.save.heroes = this.save.heroes.filter((h) => h.id !== hid);
+        this.syncMapActors();
+        saveGameData(this.save);
+        this.renderModalContent();
+      });
+    });
+
+    // 거래처 구매 / 판매 / 마일리지 교환
+    document.querySelectorAll('[data-buy-mat]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const mid = btn.getAttribute('data-buy-mat')!;
+        const mat = MATERIAL_MAP[mid];
+        if (!mat || this.save.gold < mat.buyPrice) return;
+        this.save.gold -= mat.buyPrice;
+        this.save.materials[mid] = (this.save.materials[mid] || 0) + 1;
+        sfx.playCoin();
+        this.updateTopHud();
+        saveGameData(this.save);
+        this.renderModalContent();
+      });
+    });
+
+    document.querySelectorAll('[data-sell-mat]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const mid = btn.getAttribute('data-sell-mat')!;
+        const mat = MATERIAL_MAP[mid];
+        if (!mat || (this.save.materials[mid] || 0) <= 0) return;
+        this.save.materials[mid]--;
+        this.save.gold += mat.sellPrice;
+        sfx.playCoin();
+        this.updateTopHud();
+        saveGameData(this.save);
+        this.renderModalContent();
+      });
+    });
+
+    document.querySelectorAll('[data-scrap-mat]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const mid = btn.getAttribute('data-scrap-mat')!;
+        const mat = MATERIAL_MAP[mid];
+        const scrapCosts: Record<RankTier, number> = { C: 8, B: 20, A: 45, S: 95 };
+        const cost = scrapCosts[mat.tier];
+        if (this.save.scrap < cost) return;
+        this.save.scrap -= cost;
+        this.save.materials[mid] = (this.save.materials[mid] || 0) + 1;
+        sfx.playSuccess();
+        this.updateTopHud();
+        saveGameData(this.save);
+        this.renderModalContent();
+      });
+    });
+
+    // 던전 출발 버튼
+    const launchBtn = document.getElementById('btn-launch-dungeon');
+    launchBtn?.addEventListener('click', () => {
+      this.startDungeonRun(this.selectedDungeonId);
+      this.closeModal();
+    });
+
+    // 세이브 파일 내보내기 / 불러오기 / 초기화
+    document.getElementById('btn-export-json')?.addEventListener('click', () => {
+      exportSaveToJsonFile(this.save);
+    });
+
+    const importInput = document.getElementById('input-import-json') as HTMLInputElement | null;
+    importInput?.addEventListener('change', async () => {
+      const file = importInput.files?.[0];
+      if (!file) return;
+      try {
+        this.save = await importSaveFromJsonFile(file);
+        this.syncMapActors();
+        this.updateTopHud();
+        this.renderModalContent();
+        alert('세이브 파일을 성공적으로 불러왔습니다!');
+      } catch (e) {
+        alert('세이브 파일 불러오기에 실패했습니다.');
       }
-      if (buyCost) {
-        buyCost.textContent = `${formatGold(cost)} G`;
-      }
+    });
+
+    document.getElementById('btn-reset-save')?.addEventListener('click', async () => {
+      if (!confirm('정말로 모든 데이터를 초기화하고 처음부터 새로 시작할까요?')) return;
+      this.save = createInitialSaveData();
+      await saveGameData(this.save);
+      this.syncMapActors();
+      this.updateTopHud();
+      this.renderModalContent();
     });
   }
 
-  private buildCodexCards(): void {
-    for (const g of GUEST_TYPES) {
-      const unlocked = this.game.reputation >= g.unlockRep;
-      const visitCount = this.game.discoveredGuests[g.id] ?? 0;
+  private handleTriggerMainSlot(): void {
+    const tab = this.activeModal;
+    if (!tab) return;
 
-      const card = document.createElement('div');
-      card.className = `upgrade-card${unlocked ? '' : ' locked'}`;
+    if (tab === 'inn_cook') {
+      const m1 = `food_${this.betTier1.toLowerCase()}`;
+      const m2 = `food_${this.betTier2.toLowerCase()}`;
+      if (this.save.gold < 30) return;
+      this.save.gold -= 30;
+      this.save.materials[m1]--;
+      this.save.materials[m2]--;
 
-      const info = document.createElement('div');
-      info.className = 'upgrade-info';
+      this.executeSlotSpin(() => {
+        const res = rollCookingDish(this.save, this.betTier1, this.betTier2);
+        if (res.isJackpot) {
+          this.save.totalJackpots++;
+          sfx.playJackpot();
+        } else sfx.playSlotStop();
+        this.pendingDecision = {
+          kind: 'cook',
+          reels: res.reels,
+          isJackpot: res.isJackpot,
+          scrapRefund: res.scrapRefund,
+          dish: res.dish,
+        };
+      });
+    } else if (tab === 'inn_hero') {
+      const goldCostMap: Record<RankTier, number> = { C: 120, B: 260, A: 520, S: 980 };
+      const cost = goldCostMap[this.betTier1];
+      const m1 = `food_${this.betTier1.toLowerCase()}`;
+      if (this.save.gold < cost) return;
+      this.save.gold -= cost;
+      this.save.materials[m1]--;
 
-      const iconBox = document.createElement('div');
-      iconBox.className = 'upgrade-icon';
+      this.executeSlotSpin(() => {
+        const res = rollHeroRecruitCandidate(this.save, this.betTier1);
+        if (res.isJackpot) {
+          this.save.totalJackpots++;
+          sfx.playJackpot();
+        } else sfx.playSlotStop();
+        this.pendingDecision = {
+          kind: 'hero',
+          reels: res.reels,
+          isJackpot: res.isJackpot,
+          scrapRefund: res.scrapRefund,
+          hero: res.hero,
+        };
+      });
+    } else if (tab === 'bs_forge') {
+      const o1 = `ore_${this.betTier1.toLowerCase()}`;
+      const o2 = `ore_${this.betTier2.toLowerCase()}`;
+      if (this.save.gold < 50) return;
+      this.save.gold -= 50;
+      this.save.materials[o1]--;
+      this.save.materials[o2]--;
 
-      if (unlocked) {
-        const img = document.createElement('img');
-        img.src = getGuestPortraitDataUrl(g.id);
-        img.alt = `${g.name} 도트 스프라이트`;
-        img.className = 'pixel-portrait';
-        iconBox.appendChild(img);
+      this.executeSlotSpin(() => {
+        const res = rollWeaponForge(
+          this.save,
+          this.selectedWeaponType,
+          this.betTier1,
+          this.betTier2
+        );
+        if (res.isJackpot) {
+          this.save.totalJackpots++;
+          sfx.playJackpot();
+        } else sfx.playSlotStop();
+        this.pendingDecision = {
+          kind: 'forge',
+          reels: res.reels,
+          isJackpot: res.isJackpot,
+          scrapRefund: res.scrapRefund,
+          weapon: res.weapon,
+        };
+      });
+    } else if (tab === 'bs_enchant') {
+      const targetWp = this.save.weapons.find((w) => w.id === this.selectedWeaponId);
+      if (!targetWp || this.save.gold < 60) return;
+      const o1 = `ore_${this.betTier1.toLowerCase()}`;
+      this.save.gold -= 60;
+      this.save.materials[o1]--;
+
+      this.executeSlotSpin(() => {
+        const res = rollWeaponEnchant(this.save, targetWp, this.betTier1);
+        if (res.isJackpot) {
+          this.save.totalJackpots++;
+          sfx.playJackpot();
+        } else sfx.playSlotStop();
+        this.pendingDecision = {
+          kind: 'enchant',
+          reels: res.reels,
+          isJackpot: res.isJackpot,
+          scrapRefund: res.scrapRefund,
+          targetWeaponId: targetWp.id,
+          enchants: res.enchants,
+        };
+      });
+    } else if (tab === 'potion_brew') {
+      const h1 = `herb_${this.betTier1.toLowerCase()}`;
+      const h2 = `herb_${this.betTier2.toLowerCase()}`;
+      if (this.save.gold < 30) return;
+      this.save.gold -= 30;
+      this.save.materials[h1]--;
+      this.save.materials[h2]--;
+
+      this.executeSlotSpin(() => {
+        const res = rollAlchemyPotion(this.save, this.betTier1, this.betTier2);
+        if (res.isJackpot) {
+          this.save.totalJackpots++;
+          sfx.playJackpot();
+        } else sfx.playSlotStop();
+        this.pendingDecision = {
+          kind: 'potion',
+          reels: res.reels,
+          isJackpot: res.isJackpot,
+          scrapRefund: res.scrapRefund,
+          potion: res.potion,
+        };
+      });
+    } else if (tab === 'staff_hire') {
+      const hireGoldMap: Record<RankTier, number> = { C: 100, B: 240, A: 500, S: 950 };
+      const cost = hireGoldMap[this.betTier1];
+      if (this.save.gold < cost) return;
+      this.save.gold -= cost;
+
+      this.executeSlotSpin(() => {
+        const res = rollStaffHireCandidate(
+          this.save,
+          this.selectedStaffRole,
+          this.betTier1
+        );
+        if (res.isJackpot) {
+          this.save.totalJackpots++;
+          sfx.playJackpot();
+        } else sfx.playSlotStop();
+        this.pendingDecision = {
+          kind: 'staff',
+          reels: res.reels,
+          isJackpot: res.isJackpot,
+          scrapRefund: res.scrapRefund,
+          staffCandidate: res.candidate,
+        };
+      });
+    } else if (tab === 'facility_up') {
+      const fac = this.save.facilities[this.selectedFacilityId];
+      const baseCost = fac.level * 220;
+      const o1 = `ore_${this.betTier1.toLowerCase()}`;
+      if (this.save.gold < baseCost) return;
+      this.save.gold -= baseCost;
+      this.save.materials[o1]--;
+
+      this.executeSlotSpin(() => {
+        const res = rollFacilityUpgrade(
+          this.save,
+          this.selectedFacilityId,
+          this.betTier1
+        );
+        if (res.greatLevelUp) {
+          this.save.totalJackpots++;
+          sfx.playJackpot();
+        } else sfx.playSlotStop();
+        this.pendingDecision = {
+          kind: 'facility',
+          reels: res.reels,
+          isJackpot: res.greatLevelUp,
+          scrapRefund: res.scrapRefund,
+          facilityId: this.selectedFacilityId,
+          facilityPassive: res.passive,
+          greatLevelUp: res.greatLevelUp,
+        };
+      });
+    }
+  }
+
+  private handleTriggerEnhanceSlot(): void {
+    const targetWp = this.save.weapons.find((w) => w.id === this.selectedWeaponId);
+    if (!targetWp || targetWp.enhanceLocked) return;
+    const o1 = `ore_${this.betTier1.toLowerCase()}`;
+    if (this.save.gold < 40 || (this.save.materials[o1] || 0) < 1) return;
+
+    this.save.gold -= 40;
+    this.save.materials[o1]--;
+
+    this.executeSlotSpin(() => {
+      const res = rollWeaponEnhance(this.save, targetWp, this.betTier1);
+      this.spinReels = res.reels;
+      targetWp.enhanceCount = res.newEnhanceCount;
+      targetWp.enhanceLocked = res.locked;
+
+      if (res.success) {
+        if (res.greatSuccess) {
+          sfx.playJackpot();
+          this.enhanceResultBanner = `🎊 대성공 (+2강 상승!) → 현재 +${targetWp.enhanceCount}강! 계속 도전할 수 있습니다!`;
+        } else {
+          sfx.playSuccess();
+          this.enhanceResultBanner = `✨ 강화 성공 (+1강 상승!) → 현재 +${targetWp.enhanceCount}강!`;
+        }
+        this.triggerActorSpeech(
+          this.save.staff.enhancer.id,
+          `+${targetWp.enhanceCount}강 성공!`,
+          'happy'
+        );
       } else {
-        iconBox.textContent = '❔';
+        sfx.playFailStop();
+        this.enhanceResultBanner = `🔒 아쉽게 실패! 하지만 무기는 파괴되지 않고 [ +${targetWp.enhanceCount}강 ]으로 최종 강화 확정 완료되었습니다!`;
+        this.triggerActorSpeech(
+          this.save.staff.enhancer.id,
+          `+${targetWp.enhanceCount}강에서 확정!`,
+          'normal'
+        );
       }
+    });
+  }
 
-      const textWrap = document.createElement('div');
-      textWrap.className = 'upgrade-text-wrap';
+  /**
+   * 슬롯 결과 [채택(진행)] 처리
+   */
+  private handleDecisionKeep(): void {
+    const pd = this.pendingDecision;
+    if (!pd) return;
+    sfx.playSuccess();
 
-      const titleRow = document.createElement('div');
-      titleRow.className = 'upgrade-title-row';
-
-      const nameEl = document.createElement('span');
-      nameEl.className = 'upgrade-name';
-      nameEl.textContent = unlocked
-        ? `${g.name} (${g.title})`
-        : `??? (${g.title})`;
-
-      const badge = document.createElement('span');
-      badge.className = 'upgrade-level-badge';
-      badge.textContent = unlocked
-        ? `방문 ${formatGold(visitCount)}회`
-        : '미해금';
-
-      titleRow.appendChild(nameEl);
-      titleRow.appendChild(badge);
-
-      const descEl = document.createElement('p');
-      descEl.className = 'upgrade-desc';
-      descEl.textContent = unlocked
-        ? g.description
-        : '여관의 평판이 높아지면 소문을 듣고 찾아오는 새로운 모험가입니다.';
-
-      textWrap.appendChild(titleRow);
-      textWrap.appendChild(descEl);
-
-      if (unlocked) {
-        const effectsEl = document.createElement('p');
-        effectsEl.className = 'upgrade-effects';
-        effectsEl.textContent = `서빙 행위당 수입: 기본 ${formatGold(
-          g.baseGold
-        )}G · 평판 +${g.baseRep} · 전리품 팁 〈${g.lootName}〉 (${Math.round(
-          g.lootChance * 100
-        )}%)`;
-        textWrap.appendChild(effectsEl);
-      } else {
-        const reqEl = document.createElement('p');
-        reqEl.className = 'upgrade-unlock-req';
-        reqEl.textContent = `🔒 해금 조건: 여관 평판 ${formatGold(
-          g.unlockRep
-        )} 달성`;
-        textWrap.appendChild(reqEl);
+    if (pd.kind === 'cook' && pd.dish) {
+      this.save.dishes.unshift(pd.dish);
+      this.triggerActorSpeech(this.save.staff.chef.id, `${pd.dish.name} 완성!`, 'happy');
+    } else if (pd.kind === 'potion' && pd.potion) {
+      this.save.potions.unshift(pd.potion);
+      this.triggerActorSpeech(this.save.staff.alchemist.id, `${pd.potion.name} 연성!`, 'happy');
+    } else if (pd.kind === 'forge' && pd.weapon) {
+      this.save.weapons.unshift(pd.weapon);
+      this.selectedWeaponId = pd.weapon.id;
+      this.triggerActorSpeech(this.save.staff.forger.id, `${pd.weapon.name} 제작!`, 'happy');
+    } else if (pd.kind === 'enchant' && pd.enchants && pd.targetWeaponId) {
+      const wp = this.save.weapons.find((w) => w.id === pd.targetWeaponId);
+      if (wp) {
+        wp.enchants = pd.enchants;
+        this.triggerActorSpeech(this.save.staff.enchanter.id, '마법 인챈트 부여!', 'happy');
       }
+    } else if (pd.kind === 'hero' && pd.hero) {
+      this.save.heroes.push(pd.hero);
+      this.syncMapActors();
+      this.triggerActorSpeech(pd.hero.id, '여관에 합류했다!', 'happy');
+    } else if (pd.kind === 'staff' && pd.staffCandidate) {
+      this.save.staff[pd.staffCandidate.role] = pd.staffCandidate;
+      this.syncMapActors();
+      this.triggerActorSpeech(pd.staffCandidate.id, '최고의 솜씨를 보여주지!', 'happy');
+    } else if (pd.kind === 'facility' && pd.facilityId && pd.facilityPassive) {
+      const fac = this.save.facilities[pd.facilityId];
+      fac.level += pd.greatLevelUp ? 2 : 1;
+      fac.passives.push(pd.facilityPassive);
+      this.spawnPop(7, 7, `${fac.name} Lv.${fac.level} 달성!`, '#fde047');
+    }
 
-      info.appendChild(iconBox);
-      info.appendChild(textWrap);
-      card.appendChild(info);
-      this.elUpgradeList.appendChild(card);
+    this.pendingDecision = null;
+    this.updateTopHud();
+    saveGameData(this.save);
+    this.renderModalContent();
+  }
+
+  /**
+   * 슬롯 결과 [버리기] 처리 -> 거래처 패시브 보너스를 반영해 마일리지 가루 지급!
+   */
+  private handleDecisionDiscard(): void {
+    const pd = this.pendingDecision;
+    if (!pd) return;
+    sfx.playClick();
+
+    const scrapBonusPct = this.save.facilities.trade.passives
+      .filter((p) => p.bonusType === 'scrap_bonus')
+      .reduce((acc, p) => acc + p.value, 0);
+    const finalScrap = Math.round(pd.scrapRefund * (1 + scrapBonusPct / 100));
+
+    this.save.scrap += finalScrap;
+    this.spawnPop(10.5, 10.5, `+${finalScrap} 마일리지 가루`, '#c084fc');
+
+    this.pendingDecision = null;
+    this.updateTopHud();
+    saveGameData(this.save);
+    this.renderModalContent();
+  }
+
+  /**
+   * 던전 원정 시작 & 상단 실시간 전투 슬롯 오버레이
+   */
+  public startDungeonRun(zoneId: string): void {
+    const zone =
+      DUNGEON_ZONES.find((z) => z.id === zoneId) || DUNGEON_ZONES[0];
+    const party = this.save.heroes.slice(0, 4);
+    for (const h of party) {
+      const st = getHeroCombatStats(this.save, h);
+      h.currentHp = st.maxHp;
+    }
+
+    const baseHp = zone.recLevel * 75 + 90;
+    this.activeDungeon = {
+      zoneId: zone.id,
+      partyIds: party.map((h) => h.id),
+      wave: 1,
+      maxWaves: 3,
+      waveTimer: 0,
+      slotSpinTimer: 0,
+      currentSlotSymbols: ['⚔️', '🛡️', '🧪'],
+      lastSlotEffect: '던전 입장! 전투 슬롯이 자동으로 회전합니다!',
+      monsterHp: baseHp,
+      monsterMaxHp: baseHp,
+      monsterName: zone.monsterNames[0],
+      isBoss: false,
+      accumulatedGold: 0,
+      accumulatedDrops: [],
+      status: 'fighting',
+      rewardMultiplier: 1,
+      rewardSpun: false,
+      combatLogs: [`🚩 [${zone.name}] 원정대가 출발했습니다!`],
+    };
+
+    sfx.playSuccess();
+    this.renderDungeonBanner();
+  }
+
+  private renderDungeonBanner(): void {
+    const banner = document.getElementById('dungeon-live-panel');
+    if (!banner) return;
+
+    const run = this.activeDungeon;
+    if (!run) {
+      banner.classList.add('hidden');
+      return;
+    }
+    banner.classList.remove('hidden');
+
+    const zone =
+      DUNGEON_ZONES.find((z) => z.id === run.zoneId) || DUNGEON_ZONES[0];
+    const hpPct = Math.max(
+      0,
+      Math.min(100, Math.round((run.monsterHp / run.monsterMaxHp) * 100))
+    );
+
+    const partyBars = run.partyIds
+      .map((hid) => {
+        const h = this.save.heroes.find((hero) => hero.id === hid);
+        if (!h) return '';
+        const st = getHeroCombatStats(this.save, h);
+        const pct = Math.max(0, Math.min(100, Math.round((h.currentHp / st.maxHp) * 100)));
+        return `
+          <div class="d-hero-mini">
+            <span>${HERO_CLASS_META[h.classId].icon}${h.name}</span>
+            <div class="mini-hp-bar"><div class="mini-hp-fill" style="width:${pct}%"></div></div>
+          </div>
+        `;
+      })
+      .join('');
+
+    if (run.status === 'fighting') {
+      banner.innerHTML = `
+        <div class="d-live-header">
+          <div>
+            <span class="d-wave-pill">${zone.name} (Wave ${run.wave}/${run.maxWaves})</span>
+            <strong>${run.monsterName}</strong>
+          </div>
+          <div class="d-mini-slot">
+            <span class="d-slot-label">🎰 던전 전투 슬롯:</span>
+            <span class="d-slot-reel">${run.currentSlotSymbols[0]}</span>
+            <span class="d-slot-reel">${run.currentSlotSymbols[1]}</span>
+            <span class="d-slot-reel">${run.currentSlotSymbols[2]}</span>
+            <small class="d-slot-effect">${run.lastSlotEffect}</small>
+          </div>
+        </div>
+        <div class="d-monster-bar-wrap">
+          <div class="d-monster-bar" style="width:${hpPct}%"></div>
+          <span class="d-monster-hp-text">${run.monsterHp} / ${run.monsterMaxHp} HP</span>
+        </div>
+        <div class="d-party-row">${partyBars}</div>
+        <div class="d-log-line">${run.combatLogs[0] || ''}</div>
+      `;
+    } else if (run.status === 'reward_slot') {
+      const dropsText = run.accumulatedDrops
+        .map((d) => {
+          const m = MATERIAL_MAP[d.materialId];
+          return `${m.icon}${m.name} x${d.count * run.rewardMultiplier}`;
+        })
+        .join(', ');
+
+      banner.innerHTML = `
+        <div class="d-reward-box">
+          <h4>🎉 [${zone.name}] 토벌 성공! 클리어 보상 배율 슬롯!</h4>
+          <p>기본 전리품 100% 보장! 슬롯을 돌려 <strong>전리품 배율(x1.5 ~ x3 대박!)</strong>과 보너스 재료를 뽑으세요!</p>
+          <div class="d-reward-preview">
+            획득 예정: <strong>💰 ${Math.round(run.accumulatedGold * run.rewardMultiplier)}G</strong> |
+            재료: <strong>${dropsText || '기본 재료'}</strong>
+          </div>
+          <div class="d-reward-actions">
+            ${
+              !run.rewardSpun
+                ? `<button id="btn-spin-dungeon-reward" class="kairo-btn-primary">🎰 클리어 보상 슬롯 돌리기!</button>`
+                : `<button id="btn-claim-dungeon-reward" class="kairo-btn-keep">✅ 보상 수령하고 여관으로 귀환 (${run.rewardMultiplier}배 당첨!)</button>`
+            }
+          </div>
+        </div>
+      `;
+
+      document.getElementById('btn-spin-dungeon-reward')?.addEventListener('click', () => {
+        const mults = [1.5, 2, 2, 3];
+        const pick = mults[Math.floor(Math.random() * mults.length)];
+        run.rewardMultiplier = pick;
+        run.rewardSpun = true;
+        if (pick >= 3) sfx.playJackpot();
+        else sfx.playSuccess();
+        this.renderDungeonBanner();
+      });
+
+      document.getElementById('btn-claim-dungeon-reward')?.addEventListener('click', () => {
+        const finalGold = Math.round(run.accumulatedGold * run.rewardMultiplier);
+        this.save.gold += finalGold;
+        for (const d of run.accumulatedDrops) {
+          const cnt = Math.round(d.count * run.rewardMultiplier);
+          this.save.materials[d.materialId] =
+            (this.save.materials[d.materialId] || 0) + cnt;
+        }
+        this.save.clearedDungeons[run.zoneId] =
+          (this.save.clearedDungeons[run.zoneId] || 0) + 1;
+        this.spawnPop(7, 2, `+${finalGold}G 원정 대성공!`, '#fde047');
+        this.activeDungeon = null;
+        sfx.playCoin();
+        this.updateTopHud();
+        saveGameData(this.save);
+        this.renderDungeonBanner();
+      });
+    } else if (run.status === 'defeat') {
+      banner.innerHTML = `
+        <div class="d-reward-box">
+          <h4>💦 원정대가 지쳐 여관으로 후퇴했습니다...</h4>
+          <p>도중에 획득한 골드의 절반(${Math.round(run.accumulatedGold * 0.5)}G)을 챙겨 귀환합니다. 여관에서 요리를 먹이고 무기를 강화해 다시 도전하세요!</p>
+          <button id="btn-close-defeat" class="kairo-btn-discard">🏠 여관으로 귀환</button>
+        </div>
+      `;
+      document.getElementById('btn-close-defeat')?.addEventListener('click', () => {
+        this.save.gold += Math.round(run.accumulatedGold * 0.5);
+        this.activeDungeon = null;
+        this.updateTopHud();
+        saveGameData(this.save);
+        this.renderDungeonBanner();
+      });
     }
   }
 }
 
 window.addEventListener('DOMContentLoaded', () => {
-  new InnAppController();
+  const app = new KairoSlotInnApp();
+  app.init();
 });
