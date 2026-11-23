@@ -103,7 +103,20 @@ export function calculateSlotProbabilities(
   return { C: probC, B: probB, A: probA, S: probS };
 }
 
-export function rollTierFromProbs(probs: TierProbabilities): {
+const THEME_FACES: Record<string, Record<RankTier, string>> = {
+  cook: { C: 'mushroom', B: 'meat', A: 'cheese', S: 'seven' },
+  hero: { C: 'hero', B: 'star', A: 'chest', S: 'seven' },
+  forge: { C: 'copper', B: 'steel', A: 'sword', S: 'seven' },
+  potion: { C: 'herb', B: 'flask', A: 'potion', S: 'seven' },
+  staff: { C: 'hero', B: 'bell', A: 'star', S: 'seven' },
+  facility: { C: 'copper', B: 'coin', A: 'chest', S: 'seven' },
+  default: { C: 'cherry', B: 'bell', A: 'gem', S: 'seven' },
+};
+
+export function rollTierFromProbs(
+  probs: TierProbabilities,
+  theme: keyof typeof THEME_FACES = 'default'
+): {
   tier: RankTier;
   isJackpot: boolean;
   reels: [string, string, string];
@@ -121,21 +134,15 @@ export function rollTierFromProbs(probs: TierProbabilities): {
   }
 
   const isJackpot = tier === 'S' || (tier === 'A' && slotRandom() < 0.35);
-  const symbolMap: Record<RankTier, string> = {
-    C: '🍒',
-    B: '🔔',
-    A: '💎',
-    S: '7️⃣',
-  };
-
+  const symbolMap = THEME_FACES[theme] || THEME_FACES.default;
   const mainSym = symbolMap[tier];
-  const pool = ['🍒', '🔔', '💎', '7️⃣', '⭐'];
+  const pool = Object.values(symbolMap);
   const reels: [string, string, string] = isJackpot
     ? [mainSym, mainSym, mainSym]
     : [
         mainSym,
         mainSym,
-        pool.find((s) => s !== mainSym) || '🍒',
+        pool.find((s) => s !== mainSym) || 'cherry',
       ];
 
   return { tier, isJackpot, reels };
@@ -177,7 +184,7 @@ export function rollStaffHireCandidate(
     save.staff[role].bonusProb,
     getFacilityLuckBonus(save, facId)
   );
-  const { tier, isJackpot, reels } = rollTierFromProbs(probs);
+  const { tier, isJackpot, reels } = rollTierFromProbs(probs, 'staff');
 
   const names = STAFF_NAME_POOL[role][tier];
   const name = names[Math.floor(slotRandom() * names.length)];
@@ -273,7 +280,7 @@ export function rollHeroRecruitCandidate(
     save.staff.chef.bonusProb,
     getFacilityLuckBonus(save, 'inn')
   );
-  const { tier, isJackpot, reels } = rollTierFromProbs(probs);
+  const { tier, isJackpot, reels } = rollTierFromProbs(probs, 'hero');
 
   const classes: HeroClassId[] = ['knight', 'warrior', 'archer', 'mage', 'rogue'];
   const classId = classes[Math.floor(slotRandom() * classes.length)];
@@ -339,7 +346,7 @@ export function rollCookingDish(
     getFacilityLuckBonus(save, 'inn'),
     combBonus
   );
-  const { tier, isJackpot, reels } = rollTierFromProbs(probs);
+  const { tier, isJackpot, reels } = rollTierFromProbs(probs, 'cook');
 
   const dishCatalog: Record<
     RankTier,
@@ -410,7 +417,7 @@ export function rollAlchemyPotion(
     getFacilityLuckBonus(save, 'potion'),
     combBonus
   );
-  const { tier, isJackpot, reels } = rollTierFromProbs(probs);
+  const { tier, isJackpot, reels } = rollTierFromProbs(probs, 'potion');
 
   const potCatalog: Record<
     RankTier,
@@ -484,7 +491,7 @@ export function rollWeaponForge(
     getFacilityLuckBonus(save, 'blacksmith'),
     specBonus
   );
-  const { tier, isJackpot, reels } = rollTierFromProbs(probs);
+  const { tier, isJackpot, reels } = rollTierFromProbs(probs, 'forge');
   const meta = WEAPON_TYPE_META[weaponType];
 
   const tierMult: Record<RankTier, number> = {
@@ -575,8 +582,8 @@ export function rollWeaponEnhance(
     const add = greatSuccess ? 2 : 1;
     const newCount = weapon.enhanceCount + add;
     const reels: [string, string, string] = greatSuccess
-      ? ['7️⃣', '7️⃣', '7️⃣']
-      : ['⚒️', '⚒️', '⚒️'];
+      ? ['seven', 'seven', 'seven']
+      : ['hammer', 'hammer', 'spark'];
     return {
       success: true,
       greatSuccess,
@@ -591,7 +598,7 @@ export function rollWeaponEnhance(
       greatSuccess: false,
       newEnhanceCount: weapon.enhanceCount,
       locked: true,
-      reels: ['⚒️', '💥', '🔒'],
+      reels: ['hammer', 'spark', 'lock'],
     };
   }
 }
@@ -608,7 +615,7 @@ export function getEnchantPreviewInfo(
   slotCount: number;
   minMult: number;
   maxMult: number;
-  ranges: { name: string; statLabel: string; minVal: number; maxVal: number; color: string }[];
+  ranges: { id: string; name: string; statLabel: string; minVal: number; maxVal: number; color: string }[];
 } {
   const enchanter = save.staff.enchanter;
   const isSpec = enchanter.specialties.includes(weapon.type);
@@ -624,6 +631,7 @@ export function getEnchantPreviewInfo(
   const maxMult = (1.35 + enh * 0.38) * oreMult[oreTier] * staffFactor;
 
   const ranges = ENCHANT_OPTIONS.map((opt) => ({
+    id: opt.id,
     name: opt.name,
     statLabel: opt.statLabel,
     minVal: Math.max(1, Math.round(opt.baseMin * minMult)),
@@ -666,8 +674,8 @@ export function rollWeaponEnchant(
   });
 
   const reels: [string, string, string] = isJackpot
-    ? ['✨', '✨', '✨']
-    : ['🔮', '✨', '🔮'];
+    ? ['seven', 'seven', 'seven']
+    : ['gem', 'spark', 'gem'];
 
   return {
     enchants,
@@ -695,7 +703,7 @@ export function rollFacilityUpgrade(
     10,
     getFacilityLuckBonus(save, facilityId)
   );
-  const { tier, isJackpot, reels } = rollTierFromProbs(probs);
+  const { tier, isJackpot, reels } = rollTierFromProbs(probs, 'facility');
   const pool = FACILITY_PASSIVE_POOL[facilityId];
   const matching = pool.find((p) => p.tier === tier) || pool[0];
 

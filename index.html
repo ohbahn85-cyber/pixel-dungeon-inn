@@ -38,7 +38,15 @@
 
       <main id="iso-stage">
         <canvas id="iso-canvas"></canvas>
-        <section id="dungeon-live-panel" class="hidden"></section>
+        <button id="expedition-chip" class="hidden" title="원정 보기">
+          <span class="exp-icon"></span>
+          <span class="exp-wave">1/3</span>
+        </button>
+        <section id="dungeon-stage" class="hidden">
+          <canvas id="dungeon-canvas"></canvas>
+          <div id="dungeon-hud" class="hidden"></div>
+          <button id="dungeon-back-btn" title="여관으로">여관</button>
+        </section>
       </main>
 
       <footer id="kairo-bottom-dock">

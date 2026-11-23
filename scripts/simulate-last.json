@@ -1,57 +1,57 @@
 {
   "seed": 20261123,
-  "simulatedDurationSec": 10810,
-  "simulatedDurationText": "3시간 0분 10초",
-  "finalGold": 788357,
-  "scrap": 1917,
+  "simulatedDurationSec": 18006,
+  "simulatedDurationText": "5시간 0분 6초",
+  "finalGold": 475809,
+  "scrap": 2319,
   "heroes": 8,
   "innLevel": 8,
   "weapons": 8,
-  "maxEnhance": 9,
-  "lockedWeapons": 8,
+  "maxEnhance": 10,
+  "lockedWeapons": 3,
   "potionsCrafted": 2,
-  "slotSpins": 544,
-  "jackpots": 120,
+  "slotSpins": 657,
+  "jackpots": 135,
   "dungeonClears": {
-    "dungeon_1": 23,
-    "dungeon_2": 5,
-    "dungeon_3": 8,
-    "dungeon_4": 154
+    "dungeon_1": 28,
+    "dungeon_2": 85,
+    "dungeon_3": 136,
+    "dungeon_4": 3
   },
   "firstClears": {
     "dungeon_1": {
-      "sec": 49,
-      "text": "0분 49초"
+      "sec": 80,
+      "text": "1분 20초"
     },
     "dungeon_2": {
-      "sec": 231,
-      "text": "3분 51초"
+      "sec": 1550,
+      "text": "25분 50초"
     },
     "dungeon_3": {
-      "sec": 389,
-      "text": "6분 29초"
+      "sec": 5197,
+      "text": "1시간 26분 37초"
     },
     "dungeon_4": {
-      "sec": 818,
-      "text": "13분 38초"
+      "sec": 13357,
+      "text": "3시간 42분 37초"
     }
   },
-  "wins": 190,
-  "fails": 137,
-  "guestGold": 4734,
+  "wins": 252,
+  "fails": 144,
+  "guestGold": 2334,
   "emergencyFloorHits": 0,
   "materials": {
-    "food_c": 1,
-    "food_b": 8,
-    "food_a": 15,
-    "food_s": 271,
-    "ore_c": 62,
-    "ore_b": 8,
-    "ore_a": 15,
-    "ore_s": 275,
+    "food_c": 0,
+    "food_b": 117,
+    "food_a": 235,
+    "food_s": 7,
+    "ore_c": 128,
+    "ore_b": 139,
+    "ore_a": 209,
+    "ore_s": 3,
     "herb_c": 0,
-    "herb_b": 11,
-    "herb_a": 4,
-    "herb_s": 253
+    "herb_b": 153,
+    "herb_a": 230,
+    "herb_s": 8
   }
 }

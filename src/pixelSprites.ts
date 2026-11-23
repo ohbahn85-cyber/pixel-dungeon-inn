@@ -305,15 +305,15 @@ export function bakeIsoWallSegment(
         // 하단 웨인스코팅(나무 걸레받이)
         col = relY === wallH - 4 ? PAL.o : wainscot;
       } else {
-        // 벽돌/목재 텍스처 디더
-        const brickRow = Math.floor(relY / 4);
-        const offset = (brickRow % 2) * 3;
-        if (relY % 4 === 0) {
-          col = wallDark;
-        } else if ((x + offset) % 6 === 0) {
-          col = wallDark;
-        } else if (side === 'left' && (x + relY) % 3 === 0) {
-          col = wallLight;
+        // 양쪽 모두 같은 따뜻한 회반죽. 조명만 다름 (왼쪽이 조금 밝음).
+        const grain = (x * 3 + relY * 5) % 7;
+        if (side === 'left') {
+          col = grain === 0 ? wallLight : wallMain;
+        } else {
+          col = grain === 0 ? wallMain : wallDark;
+        }
+        if ((x + relY * 2) % 13 === 0 && relY % 2 === 0) {
+          col = side === 'left' ? wallMain : wallDark;
         }
       }
 
@@ -1483,33 +1483,40 @@ function buildCandleFrames(): HTMLCanvasElement[] {
 }
 
 function buildStairsSprite(): HTMLCanvasElement {
+  // 또렷한 아이소 계단: 밝은 디딤판, 어두운 챌판, 왼쪽 난간, 그림자
   return bakeGridSprite([
-    'OOOO..............',
-    'OWuWOOOOO.........',
-    'OWuuWWuuWOOOO.....',
-    'OnuuuuuuuuuuWOOO..',
-    'OWuuuWWWWuuuuuuWO.',
-    'OnnnnnnnnuuuuuunO.',
-    'OWuuuuuuunnnnnnnO.',
-    'OWuuWWWWuuuuuuuWO.',
-    'OnnnnnnnuuuuuuunO.',
-    '.OWuuuuunnnnnnnO..',
-    '.OWuuuuuuuuuuWO...',
-    '..OnnnnnnnnnnO....',
-    '...OOOOOOOOOO.....',
+    'OO............................',
+    'OmWOOO........................',
+    'OmWWWuWOOO....................',
+    'OImnnnnWuWOOO.................',
+    'OImWWWWWWuuuWOOO..............',
+    'OIImnnnnnnnnnWuWOOO...........',
+    'OIImWWWWWWWWWuuuuuWOOO........',
+    'OIIImnnnnnnnnnnnnnnWuWOOO.....',
+    'OIIImWWWWWWWWWWWWWuuuuuWOO....',
+    'OIIIImnnnnnnnnnnnnnnnnnnnWO...',
+    'OIIIImWuWWWWWWWWWWWWWuuuuWO...',
+    'OIIIIImnnnnnnnnnnnnnnnnnnO....',
+    'OIIIIImWWWWWWWWWWWWWWWWWO.....',
+    '.OIIIIOnnnnnnnnnnnnnnnnO......',
+    '.OIIIIIOOOOOOOOOOOOOOOO.......',
+    '..OIIIIO......................',
+    '...OIIIO......................',
+    '....OOOO......................',
   ]);
 }
 
 function buildDoormatSprite(): HTMLCanvasElement {
   return bakeGridSprite([
-    '....OOOOOOOOOO....',
-    '..OOnnnnnnnnnnOO..',
-    '.OnnWWWnnnWWWnnnO.',
-    '.OnnuuunnnuuunnnO.',
-    '.OnnWWWnnnWWWnnnO.',
-    '.OnnuuunnnuuunnnO.',
-    '..OOnnnnnnnnnnOO..',
-    '....OOOOOOOOOO....',
+    '......OOOOOOOOOOOO......',
+    '....OOnnnnnnnnnnnnOO....',
+    '...OnnWWWuuWWWuuWWnnO...',
+    '..OnnuuunnnuuunnnnuunO..',
+    '..OnnWWWnnnYYYnnnWWWnO..',
+    '..OnnuuunnnuuunnnnuunO..',
+    '..OnnWWWuuWWWuuWWWnnO...',
+    '...OOnnnnnnnnnnnnnnOO...',
+    '.....OOOOOOOOOOOOOO.....',
   ]);
 }
 
@@ -1527,17 +1534,82 @@ function buildHerbRackSprite(): HTMLCanvasElement {
 }
 
 function buildChimneyHoodSprite(): HTMLCanvasElement {
+  // 용광로 위를 덮는 넓은 철제 후드 + 짧은 연통 소켓
   return bakeGridSprite([
-    '......OOOOOO......',
-    '.....OJjjjjJO.....',
-    '....OJiiiiiiJO....',
-    '...OJiiiiiiiiJO...',
-    '..OJjjjjjjjjjjJO..',
-    '.OOOOOOOOOOOOOOOO.',
-    '.OJjjjOOOOJJjjjJO.',
-    '.OJjJO....OOJjJO..',
-    '..OOO......OOO....',
+    '.........OOOOOO.........',
+    '........OJiiiiJO........',
+    '.......OJijjjjiJO.......',
+    '......OOOOOOOOOOOO......',
+    '....OOJJjjjjjjjjJJOO....',
+    '...OJiiiiiiiiiiiiiJO...',
+    '..OJijjjjjjjjjjjjjiJO..',
+    '.OJjjjjjjjjjjjjjjjjjJO.',
+    '.OOOOOOOOOOOOOOOOOOOOOO.',
+    '.OJjjjJO........OJjjjJO.',
+    '..OOOO............OOOO..',
   ]);
+}
+
+function buildChimneyFlueSprite(): HTMLCanvasElement {
+  // 뒷벽을 타고 올라가는 굴뚝 연통
+  return bakeGridSprite([
+    '...OJJJO...',
+    '...OJiJO...',
+    '...OJjJO...',
+    '...OJiJO...',
+    '..OOJjJOO..',
+    '..OJiiiiO..',
+    '..OJjjjjO..',
+    '..OJiiiiO..',
+    '..OJjjjjO..',
+    '..OJiiiiO..',
+    '..OJjjjjO..',
+    '..OJiiiiO..',
+    '..OJjjjjO..',
+    '..OOOOOOO..',
+  ]);
+}
+
+function buildChimneySmokeFrames(): HTMLCanvasElement[] {
+  const frames = [
+    [
+      '....gg.......',
+      '...gwwg......',
+      '....gw.g.....',
+      '..g..g.......',
+      '.gwwg........',
+      '..gg.........',
+      '...g.........',
+    ],
+    [
+      '..g...g......',
+      '.gwwg........',
+      '...gwwg......',
+      '....gg.g.....',
+      '...g.........',
+      '..gww........',
+      '...g.........',
+    ],
+    [
+      '.....gwwg....',
+      '....g..g.....',
+      '..gwwg.......',
+      '.g..g........',
+      '..gg..g......',
+      '....g........',
+      '.............',
+    ],
+    [
+      '...g..gg.....',
+      '..gwwg.......',
+      '....gwwg.....',
+      '.g...g.......',
+      '..gww........',
+      '...g.........',
+      '.............',
+    ],
+  ];
+  return frames.map((rows) => bakeGridSprite(rows));
 }
 
 function buildBarCounterSprite(): HTMLCanvasElement {
@@ -1559,23 +1631,60 @@ function buildBarCounterSprite(): HTMLCanvasElement {
 }
 
 function buildEntranceDoorSprite(): HTMLCanvasElement {
+  // 현관 문: 간판+브래킷, 굵은 문틀, 두 짝 패널, 황동 손잡이, 돌 문턱
   return bakeGridSprite([
-    '......OOOOOOOOOO......',
-    '.....OnuuuuuuuunO.....',
-    '....OnuWWWWWWWWWunO...',
-    '...OnuWuuuuuuuuuWunO..',
-    '...OnuWuOOOOOOOWunO...',
-    '...OnuWuOnnnnnOWunO...',
-    '...OnuWuOnYyynOWunO...',
-    '...OnuWuOnYyynOWunO...',
-    '...OnuWuOnnnnnOWunO...',
-    '...OnuWuOOOOOOOWunO...',
-    '...OnuWuuuuuuuuuWunO..',
-    '...OnuWuuuuuuuuuWunO..',
-    '...OnuWWWWWWWWWunO...',
-    '...OnuuuuuuuuuuuunO...',
-    '....OOOOOOOOOOOOOO....',
+    '................OOOO..............',
+    '...............OnnnO..............',
+    '.......OOOOOOOOnuuuOOOOOO.........',
+    '.......ORRRRRROnYYYOnnnO..........',
+    '.......ORyyyyROnYYYOnuuO..........',
+    '.......ORyYkyROOOOOOnnnO..........',
+    '.......ORyyyyR....................',
+    '.......ORRRRRO.........OOOOOOOOOOO',
+    '.......OOOOOOO........OnuuuuuuuunO',
+    '......................OnuWWWWWWuO',
+    '..............OOOOOOOOOnuWuWWWWuO',
+    '.............OnuuuuuuuunuWuOOOWuO',
+    '.............OnuWWWWWWWunuWuOnnWuO',
+    '.............OnuWuOOOWunuWuOnYnWuO',
+    '.............OnuWuOnnWunuWuOnnnWuO',
+    '.............OnuWuOOOWunuWuOOOWuO',
+    '.............OnuWuuuuWunuWuuuuuWuO',
+    '.............OnuWuOOOWunuWuOOOWuO',
+    '.............OnuWuOnnWunuWuOnnWuO',
+    '.............OnuWuOnnWunuWuOnYyWuO',
+    '.............OnuWuOOOWunuWuOOOWuO',
+    '.............OnuWWWWWWWunuWWWWWWuO',
+    '.............OnuuuuuuuuunuuuuuuuunO',
+    '..............OOOOOOOOOOOOOOOOOOOO',
+    '..............OnnnnnnnnnnnnnnnnnO',
+    '...............OmmmmmmmmmmmmmmmO.',
+    '................OOOOOOOOOOOOOOOO.',
   ]);
+}
+
+function buildEntranceLampFrames(): HTMLCanvasElement[] {
+  const glow0 = [
+    '....YF....',
+    '...OYyO...',
+    '..OYfFyO..',
+    '..OYffyO..',
+    '...OkKO...',
+    '....OO....',
+    '....nO....',
+    '....nO....',
+  ]
+  const glow1 = [
+    '...FYF....',
+    '..OYYyO...',
+    '.OYfFFyO..',
+    '.OYfffyO..',
+    '..OYkKO...',
+    '...OOO....',
+    '....nO....',
+    '....nO....',
+  ]
+  return [bakeGridSprite(glow0), bakeGridSprite(glow1)]
 }
 
 // ============================================================================
@@ -1693,8 +1802,11 @@ export interface PixelSpriteAtlas {
     doormat: HTMLCanvasElement;
     herbRack: HTMLCanvasElement;
     chimneyHood: HTMLCanvasElement;
+    chimneyFlue: HTMLCanvasElement;
+    chimneySmoke: HTMLCanvasElement[];
     barCounter: HTMLCanvasElement;
     entranceDoor: HTMLCanvasElement;
+    entranceLamp: HTMLCanvasElement[];
   };
   getCharacterSprite: (
     archetype: ActorArchetypeId,
@@ -1895,8 +2007,11 @@ export function createPixelSpriteAtlas(): PixelSpriteAtlas {
       doormat: buildDoormatSprite(),
       herbRack: buildHerbRackSprite(),
       chimneyHood: buildChimneyHoodSprite(),
+      chimneyFlue: buildChimneyFlueSprite(),
+      chimneySmoke: buildChimneySmokeFrames(),
       barCounter: buildBarCounterSprite(),
       entranceDoor: buildEntranceDoorSprite(),
+      entranceLamp: buildEntranceLampFrames(),
     },
     getCharacterSprite(archetype, state, facing, frameIdx, weapon) {
       const f = frameIdx & 3;

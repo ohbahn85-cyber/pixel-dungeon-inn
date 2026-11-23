@@ -384,8 +384,10 @@ export class IsoRenderer {
       { sprite: a.roomSigns.inn, gx: 3.4, gy: 0.85, gz: 16 },
 
       // —— 대장간 코너 (뒷오른쪽) ——
-      { sprite: a.chimneyHood, gx: 9.3, gy: 1.05, gz: 16 },
-      { sprite: furnace, gx: 9.3, gy: 1.25, gz: 3, occlude: true },
+      { sprite: a.chimneyFlue, gx: 9.35, gy: 0.42, gz: 22 },
+      { sprite: a.chimneyHood, gx: 9.3, gy: 1.02, gz: 14 },
+      { sprite: a.chimneySmoke[frame % a.chimneySmoke.length], gx: 9.35, gy: 0.28, gz: 36 },
+      { sprite: furnace, gx: 9.3, gy: 1.28, gz: 3, occlude: true },
       { sprite: a.bsAnvil, gx: 8.95, gy: 3.05, gz: 1, occlude: true },
       { sprite: a.bsWeaponRack, gx: 11.4, gy: 1.35, gz: 2, occlude: true },
       { sprite: altar, gx: 11.2, gy: 3.85, gz: 1, occlude: true },
@@ -409,14 +411,15 @@ export class IsoRenderer {
       { sprite: a.treasureChest, gx: 11.25, gy: 8.2, gz: 1, occlude: true },
       { sprite: a.tradeMushroom, gx: 8.15, gy: 11.25, gz: 1, occlude: true },
       { sprite: a.plant, gx: 11.4, gy: 11.4, gz: 1, occlude: true },
-      { sprite: a.doormat, gx: ENTRANCE.gx, gy: 11.45, gz: 0 },
-      { sprite: a.entranceDoor, gx: ENTRANCE.gx, gy: ENTRANCE.gy, gz: 4, occlude: true },
+      { sprite: a.doormat, gx: ENTRANCE.gx, gy: 12.42, gz: 0 },
+      { sprite: a.entranceDoor, gx: ENTRANCE.gx, gy: 12.08, gz: 1, occlude: true },
+      { sprite: a.entranceLamp[torchFrame % a.entranceLamp.length], gx: 5.45, gy: 12.0, gz: 16 },
       { sprite: a.barrel, gx: 8.2, gy: 8.3, gz: 1, occlude: true },
       { sprite: torch, gx: 7.9, gy: 7.3, gz: 16 },
       { sprite: a.roomSigns.trade, gx: 10.2, gy: 7.35, gz: 8 },
 
       // —— 공용: 계단, 기둥, 낮은 칸막이 ——
-      { sprite: a.stairs, gx: 1.25, gy: 6.45, gz: 2, occlude: true },
+      { sprite: a.stairs, gx: 2.35, gy: 5.85, gz: 3, occlude: true },
       { sprite: a.pillar, gx: 6.15, gy: 6.15, gz: 2, occlude: true },
       { sprite: a.pillar, gx: 7.7, gy: 6.15, gz: 2, occlude: true },
 

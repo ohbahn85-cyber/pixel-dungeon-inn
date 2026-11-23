@@ -11,7 +11,26 @@ import {
   WEAPON_TYPE_META,
 } from './data';
 import { IsoRenderer } from './isoRenderer';
+import { DungeonRenderer } from './dungeonRenderer';
 import { HERO_WAYPOINTS, STAFF_HOME, findPath, nearestWalkable } from './innMap';
+import {
+  CALENDAR_WEEK_SEC,
+  GUEST_INCOME_INTERVAL_SEC,
+  calculateGuestIncome,
+  claimDungeonDefeatGold,
+  claimDungeonReward,
+  createDungeonRun,
+  facilityUpgradeGold,
+  spinDungeonRewardMultiplier,
+  stepDungeonCombat,
+} from './gameLogic';
+import {
+  PixelReelMachine,
+  mountReelFrame,
+  themeForTab,
+  getEnchantRuneSprite,
+  ReelId,
+} from './reelSprites';
 import {
   calculateSlotProbabilities,
   getEffectiveHeroLevelCap,
@@ -110,9 +129,13 @@ class KairoSlotInnApp {
 
   // 슬롯 회전 연출 및 채택/버리기 결정 대기 상태
   private isSpinning = false;
-  private spinReels: [string, string, string] = ['7️⃣', '7️⃣', '7️⃣'];
+  private spinReels: [string, string, string] = ['seven', 'cherry', 'bell'];
   private pendingDecision: PendingDecision | null = null;
   private enhanceResultBanner: string | null = null;
+  private reelMachine: PixelReelMachine | null = null;
+  private dungeonView: DungeonRenderer | null = null;
+  private watchingDungeon = false;
+  private rewardSpinning = false;
 
   private lastFrameTime = performance.now();
   private calendarAccum = 0;
@@ -136,12 +159,34 @@ class KairoSlotInnApp {
       else if (clicked === 'blacksmith') this.openModal('bs_forge');
       else if (clicked === 'potion') this.openModal('potion_brew');
       else if (clicked === 'trade') this.openModal('trade_market');
-      else if (clicked === 'dungeon_gate') this.openModal('dungeon_prep');
+      else if (clicked === 'dungeon_gate') {
+        if (this.activeDungeon) this.openDungeonView();
+        else this.openModal('dungeon_prep');
+      }
+    });
+
+    const dCanvas = document.getElementById('dungeon-canvas') as HTMLCanvasElement | null;
+    if (dCanvas) {
+      this.dungeonView = new DungeonRenderer(dCanvas);
+      window.addEventListener('resize', () => this.dungeonView?.resize());
+    }
+    document.getElementById('expedition-chip')?.addEventListener('click', () => {
+      sfx.playClick();
+      this.openDungeonView();
+    });
+    document.getElementById('dungeon-back-btn')?.addEventListener('click', () => {
+      sfx.playClick();
+      this.closeDungeonView();
     });
 
     this.syncMapActors();
     this.bindUIEvents();
     this.updateTopHud();
+    this.syncExpeditionChip();
+
+    if (new URLSearchParams(location.search).has('shot')) {
+      (window as unknown as { __game: unknown }).__game = this.shotApi();
+    }
 
     requestAnimationFrame((now) => this.loop(now));
   }
@@ -261,13 +306,17 @@ class KairoSlotInnApp {
       now / 1000
     );
 
+    if (this.watchingDungeon && this.dungeonView && this.activeDungeon) {
+      this.dungeonView.attach(this.save, this.activeDungeon);
+      this.dungeonView.render(dt, now / 1000);
+    }
+
     requestAnimationFrame((n) => this.loop(n));
   }
 
   private updateCalendarAndIncome(dt: number): void {
-    // 카이로소프트 스타일 달력(5Y 4M 3W) 진행
     this.calendarAccum += dt;
-    if (this.calendarAccum >= 7) {
+    if (this.calendarAccum >= CALENDAR_WEEK_SEC) {
       this.calendarAccum = 0;
       this.save.week++;
       if (this.save.week > 4) {
@@ -282,21 +331,10 @@ class KairoSlotInnApp {
       saveGameData(this.save);
     }
 
-    // 영웅들과 손님들이 여관·상점을 이용하며 창출하는 실시간 골드 수입
     this.guestIncomeAccum += dt;
-    if (this.guestIncomeAccum >= 5.5) {
+    if (this.guestIncomeAccum >= GUEST_INCOME_INTERVAL_SEC) {
       this.guestIncomeAccum = 0;
-      const innLv = this.save.facilities.inn.level;
-      const tradeLv = this.save.facilities.trade.level;
-      const passiveGoldPct = Object.values(this.save.facilities)
-        .flatMap((f) => f.passives)
-        .filter((p) => p.bonusType === 'gold_income')
-        .reduce((acc, p) => acc + p.value, 0);
-
-      const baseEarn = Math.round(
-        (12 + innLv * 8 + tradeLv * 6 + this.save.heroes.length * 5) *
-          (1 + passiveGoldPct / 100)
-      );
+      const baseEarn = calculateGuestIncome(this.save);
       this.save.gold += baseEarn;
       this.spawnPop(4.2, 5.2, `+${baseEarn}G`, '#fde047');
       this.updateTopHud();
@@ -419,172 +457,39 @@ class KairoSlotInnApp {
   }
 
   /**
-   * 던전 안에서의 미니 전투 슬롯 & 자동 전투 업데이트
+   * 던전 전투는 공유 로직(stepDungeonCombat)으로 진행하고, 화면은 던전 뷰에 맡긴다.
    */
   private updateDungeonCombat(dt: number): void {
     const run = this.activeDungeon;
-    if (!run || run.status !== 'fighting') return;
-
-    run.waveTimer += dt;
-    run.slotSpinTimer += dt;
-
-    // 2.2초마다 던전 상단 미니 전투 슬롯이 자동으로 돌아가며 특수 효과 발동!
-    if (run.slotSpinTimer >= 2.2) {
-      run.slotSpinTimer = 0;
-      this.triggerDungeonCombatSlot(run);
-      this.renderDungeonBanner();
+    if (!run) return;
+    if (run.status !== 'fighting') {
+      this.syncExpeditionChip();
+      return;
     }
 
-    // 1.1초마다 파티 기본 공방 교전
-    if (run.waveTimer >= 1.1) {
-      run.waveTimer = 0;
-      const zone =
-        DUNGEON_ZONES.find((z) => z.id === run.zoneId) || DUNGEON_ZONES[0];
-
-      let partyAtk = 0;
-      let partyAlive = 0;
-      for (const hid of run.partyIds) {
-        const hero = this.save.heroes.find((h) => h.id === hid);
-        if (!hero || hero.currentHp <= 0) continue;
-        partyAlive++;
-        const st = getHeroCombatStats(this.save, hero);
-        partyAtk += st.atk;
-
-        // 포션 자동 사용 체크 (체력 45% 이하일 때 장착한 포션 발동!)
-        if (hero.currentHp < st.maxHp * 0.45 && hero.equippedPotionId) {
-          const potIdx = this.save.potions.findIndex(
-            (p) => p.id === hero.equippedPotionId
-          );
-          if (potIdx >= 0) {
-            const pot = this.save.potions[potIdx];
-            const healAmt = Math.round(st.maxHp * (pot.healPct / 100));
-            hero.currentHp = Math.min(st.maxHp, hero.currentHp + healAmt);
-            partyAtk = Math.round(partyAtk * (1 + pot.atkBuffPct / 100));
-            run.combatLogs.unshift(
-              `🧪 ${hero.name} +${healAmt}`
-            );
-            this.save.potions.splice(potIdx, 1);
-            hero.equippedPotionId = null;
-          }
-        }
-      }
-
-      if (partyAlive === 0) {
-        run.status = 'defeat';
-        sfx.playFailStop();
-        this.consumeOneTimeMeals(run.partyIds);
-        this.renderDungeonBanner();
-        return;
-      }
-
-      // 몬스터 타격
-      const dmgToMonster = Math.max(8, Math.round(partyAtk * (0.9 + Math.random() * 0.25)));
-      run.monsterHp = Math.max(0, run.monsterHp - dmgToMonster);
-
-      // 몬스터 반격
-      if (run.monsterHp > 0) {
-        const monsterAtk = (zone.recLevel * 9 + 14) * (run.isBoss ? 1.35 : 1.0);
-        for (const hid of run.partyIds) {
-          const hero = this.save.heroes.find((h) => h.id === hid);
-          if (!hero || hero.currentHp <= 0) continue;
-          const st = getHeroCombatStats(this.save, hero);
-          const hit = Math.max(
-            3,
-            Math.round((monsterAtk - st.def * 0.6) / Math.max(1, partyAlive))
-          );
-          hero.currentHp = Math.max(0, hero.currentHp - hit);
-        }
-      } else {
-        // 현재 웨이브 몬스터 처치!
-        const goldDrop = Math.round(
-          (zone.baseGoldReward / run.maxWaves) * (run.isBoss ? 1.8 : 1.0)
-        );
-        run.accumulatedGold += goldDrop;
-
-        // 던전 등급에 맞는 식재료/광석/약초 드랍!
-        const dropMats = MATERIALS.filter(
-          (m) => m.tier === zone.dropTier || (m.tier === 'C' && Math.random() < 0.4)
-        );
-        const pickedMat =
-          dropMats[Math.floor(Math.random() * dropMats.length)] || MATERIALS[0];
-        const existingDrop = run.accumulatedDrops.find(
-          (d) => d.materialId === pickedMat.id
-        );
-        if (existingDrop) existingDrop.count += 1;
-        else run.accumulatedDrops.push({ materialId: pickedMat.id, count: 1 });
-
-        run.combatLogs.unshift(
-          `${run.monsterName} +${goldDrop}G`
-        );
-
-        // 영웅 경험치 및 레벨업 처리 (여관 등급 상한선 적용!)
-        this.grantPartyExp(run.partyIds, zone.recLevel * 25);
-
-        if (run.wave >= run.maxWaves) {
-          // 보스까지 클리어 완료 -> 클리어 보상 룰렛 슬롯 단계로 진입!
-          run.status = 'reward_slot';
-          sfx.playSuccess();
-          this.consumeOneTimeMeals(run.partyIds);
-        } else {
-          run.wave++;
-          run.isBoss = run.wave === run.maxWaves;
-          run.monsterName = run.isBoss
-            ? `👑 ${zone.bossName}`
-            : zone.monsterNames[run.wave % zone.monsterNames.length];
-          const baseHp = (zone.recLevel * 75 + 90) * (run.isBoss ? 1.9 : 1.0);
-          run.monsterMaxHp = Math.round(baseHp);
-          run.monsterHp = run.monsterMaxHp;
-        }
-      }
-
-      this.renderDungeonBanner();
+    const outcome = stepDungeonCombat(this.save, run, dt);
+    if (this.watchingDungeon) {
+      this.dungeonView?.attach(this.save, run);
+      this.dungeonView?.pushOutcome(outcome);
     }
-  }
-
-  private triggerDungeonCombatSlot(run: ActiveDungeonRun): void {
-    const outcomes: {
-      syms: [string, string, string];
-      label: string;
-      type: 'crit' | 'heal' | 'gold' | 'jackpot';
-    }[] = [
-      { syms: ['⚔️', '⚔️', '🔥'], label: '연쇄 강타', type: 'crit' },
-      { syms: ['🧪', '💚', '🧪'], label: '치유', type: 'heal' },
-      { syms: ['💰', '💰', '💎'], label: '보물', type: 'gold' },
-      { syms: ['7️⃣', '7️⃣', '7️⃣'], label: '777', type: 'jackpot' },
-    ];
-    const r = Math.random();
-    const pick =
-      r < 0.16
-        ? outcomes[3]
-        : r < 0.45
-        ? outcomes[0]
-        : r < 0.72
-        ? outcomes[1]
-        : outcomes[2];
-
-    run.currentSlotSymbols = pick.syms;
-    run.lastSlotEffect = pick.label;
-
-    if (pick.type === 'crit') {
-      const bonusDmg = Math.round(run.monsterMaxHp * 0.22);
-      run.monsterHp = Math.max(1, run.monsterHp - bonusDmg);
-    } else if (pick.type === 'heal') {
-      for (const hid of run.partyIds) {
-        const h = this.save.heroes.find((hero) => hero.id === hid);
-        if (!h) continue;
-        const st = getHeroCombatStats(this.save, h);
-        h.currentHp = Math.min(st.maxHp, h.currentHp + Math.round(st.maxHp * 0.2));
-      }
-    } else if (pick.type === 'gold') {
-      run.accumulatedGold += 65;
-    } else if (pick.type === 'jackpot') {
-      const nuke = Math.round(run.monsterMaxHp * 0.45);
-      run.monsterHp = Math.max(1, run.monsterHp - nuke);
+    if (outcome.slotTriggered) {
+      this.dungeonView?.spinCombatReels(run.currentSlotSymbols);
+      if (outcome.slotType === 'jackpot') sfx.playSuccess();
+    }
+    for (const lv of outcome.leveledUpHeroes) {
+      this.triggerActorSpeech(lv.heroId, `Lv.${lv.newLevel}`, 'happy');
+    }
+    if (outcome.statusChanged === 'reward_slot') {
       sfx.playSuccess();
+      this.renderDungeonHud();
+    } else if (outcome.statusChanged === 'defeat') {
+      sfx.playFailStop();
+      this.renderDungeonHud();
     }
+    this.syncExpeditionChip();
   }
 
-  private grantPartyExp(partyIds: string[], expGain: number): void {
+    private grantPartyExp(partyIds: string[], expGain: number): void {
     for (const hid of partyIds) {
       const hero = this.save.heroes.find((h) => h.id === hid);
       if (!hero) continue;
@@ -606,20 +511,6 @@ class KairoSlotInnApp {
       }
     }
     this.syncMapActors();
-  }
-
-  /**
-   * 1회성 요리는 던전 원정 1회가 끝나면 깔끔하게 소모됩니다!
-   */
-  private consumeOneTimeMeals(partyIds: string[]): void {
-    for (const hid of partyIds) {
-      const hero = this.save.heroes.find((h) => h.id === hid);
-      if (hero) {
-        hero.activeMeal = null;
-        const st = getHeroCombatStats(this.save, hero);
-        hero.currentHp = st.maxHp;
-      }
-    }
   }
 
   private bindUIEvents(): void {
@@ -676,6 +567,8 @@ class KairoSlotInnApp {
   public closeModal(): void {
     this.activeModal = null;
     this.pendingDecision = null;
+    this.reelMachine?.destroy();
+    this.reelMachine = null;
     const backdrop = document.getElementById('modal-backdrop');
     if (backdrop) backdrop.classList.add('hidden');
   }
@@ -684,37 +577,94 @@ class KairoSlotInnApp {
    * 3번 규칙: 먼저 투입할 재료/비용 등급을 베팅하여 릴 확률을 높인 뒤 스핀!
    * 결과가 나오면 [채택(진행)]할지 [버리기(마일리지 가루 획득)]할지 결정!
    */
-  private executeSlotSpin(onComplete: () => void): void {
+  private executeSlotSpin(
+    finalReels: [string, string, string],
+    isJackpot: boolean,
+    onComplete: () => void
+  ): void {
     if (this.isSpinning) return;
     this.isSpinning = true;
     this.save.totalSlotSpins++;
     sfx.playSlotTick();
+    const theme = themeForTab(this.activeModal);
+    const host = document.getElementById('slot-reels-host');
+    if (host && !this.reelMachine) {
+      this.reelMachine = mountReelFrame(host, finalReels, theme);
+    }
+    document.getElementById('btn-trigger-spin')?.setAttribute('disabled', 'true');
+    const start = performance.now();
+    const tickSfx = window.setInterval(() => sfx.playSlotTick(), 90);
+    this.reelMachine?.spinTo(finalReels as ReelId[], isJackpot, () => {
+      window.clearInterval(tickSfx);
+      this.isSpinning = false;
+      this.spinReels = finalReels;
+      if (isJackpot) sfx.playJackpot();
+      else sfx.playSlotStop();
+      onComplete();
+      this.updateTopHud();
+      saveGameData(this.save);
+      this.renderModalContent();
+      void start;
+    });
+  }
 
-    const pool = ['🍒', '🔔', '💎', '7️⃣', '⭐', '🔥'];
-    let ticks = 0;
-    const timer = setInterval(() => {
-      ticks++;
-      this.spinReels = [
-        pool[Math.floor(Math.random() * pool.length)],
-        pool[Math.floor(Math.random() * pool.length)],
-        pool[Math.floor(Math.random() * pool.length)],
-      ];
-      sfx.playSlotTick();
-      const reelBoxes = document.querySelectorAll('.slot-reel-cell');
-      reelBoxes.forEach((el, idx) => {
-        el.textContent = this.spinReels[idx];
-        el.classList.add('spinning');
-      });
+  private mountModalReels(): void {
+    this.reelMachine?.destroy();
+    this.reelMachine = null;
+    const host = document.getElementById('slot-reels-host');
+    if (!host) return;
+    const theme = themeForTab(this.activeModal);
+    const symbols = (this.pendingDecision?.reels || this.spinReels) as string[];
+    this.reelMachine = mountReelFrame(host, symbols, theme, {
+      jackpot: !!this.pendingDecision?.isJackpot,
+    });
+  }
 
-      if (ticks >= 9) {
-        clearInterval(timer);
-        this.isSpinning = false;
-        onComplete();
-        this.updateTopHud();
-        saveGameData(this.save);
-        this.renderModalContent();
+  private bindEnchantTooltips(root: HTMLElement): void {
+    root.querySelectorAll<HTMLElement>('[data-rune-id]').forEach((el) => {
+      const canvas = el.querySelector('canvas');
+      const id = el.getAttribute('data-rune-id') || '';
+      if (canvas) {
+        const spr = getEnchantRuneSprite(id);
+        canvas.width = spr.width * 2;
+        canvas.height = spr.height * 2;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.imageSmoothingEnabled = false;
+          ctx.drawImage(spr, 0, 0, canvas.width, canvas.height);
+        }
       }
-    }, 65);
+    });
+    let tip = document.getElementById('kairo-tip');
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.id = 'kairo-tip';
+      tip.className = 'hidden';
+      document.body.appendChild(tip);
+    }
+    const show = (el: HTMLElement, ev: PointerEvent) => {
+      const text = el.getAttribute('data-tip');
+      if (!text || !tip) return;
+      tip.textContent = text;
+      tip.classList.remove('hidden');
+      const r = el.getBoundingClientRect();
+      tip.style.left = `${Math.round(r.left + r.width / 2)}px`;
+      tip.style.top = `${Math.round(r.top - 8)}px`;
+      void ev;
+    };
+    const hide = () => tip?.classList.add('hidden');
+    root.querySelectorAll<HTMLElement>('[data-tip]').forEach((el) => {
+      el.addEventListener('pointerenter', (ev) => show(el, ev));
+      el.addEventListener('pointerleave', hide);
+      let hold: number | null = null;
+      el.addEventListener('pointerdown', (ev) => {
+        hold = window.setTimeout(() => show(el, ev), 380);
+      });
+      el.addEventListener('pointerup', () => {
+        if (hold) window.clearTimeout(hold);
+      });
+      el.addEventListener('pointercancel', hide);
+    });
   }
 
   private renderModalContent(): void {
@@ -767,6 +717,9 @@ class KairoSlotInnApp {
     }
 
     this.attachModalInnerHandlers();
+    this.mountModalReels();
+    const bodyEl2 = document.getElementById('modal-body');
+    if (bodyEl2) this.bindEnchantTooltips(bodyEl2);
   }
 
   private renderSlotMachineWidget(
@@ -776,10 +729,6 @@ class KairoSlotInnApp {
     canSpin: boolean,
     spinBtnLabel: string
   ): string {
-    const reels = this.pendingDecision
-      ? this.pendingDecision.reels
-      : this.spinReels;
-
     return `
       <div class="kairo-slot-machine ${this.pendingDecision?.isJackpot ? 'jackpot-glow' : ''}">
         <div class="slot-header-row">
@@ -796,11 +745,7 @@ class KairoSlotInnApp {
           </div>
         </div>
 
-        <div class="slot-reels-frame">
-          <div class="slot-reel-cell">${reels[0]}</div>
-          <div class="slot-reel-cell">${reels[1]}</div>
-          <div class="slot-reel-cell">${reels[2]}</div>
-        </div>
+        <div class="slot-reels-frame" id="slot-reels-host"></div>
 
         ${
           this.pendingDecision
@@ -1176,11 +1121,7 @@ class KairoSlotInnApp {
             </div>
           </div>
 
-          <div class="slot-reels-frame">
-            <div class="slot-reel-cell">${this.spinReels[0]}</div>
-            <div class="slot-reel-cell">${this.spinReels[1]}</div>
-            <div class="slot-reel-cell">${this.spinReels[2]}</div>
-          </div>
+          <div class="slot-reels-frame" id="slot-reels-host"></div>
 
           ${
             this.enhanceResultBanner
@@ -1240,18 +1181,27 @@ class KairoSlotInnApp {
       (this.save.materials[oreId] || 0) >= 1;
     const costDesc = `60G + ${MATERIAL_MAP[oreId].icon}${MATERIAL_MAP[oreId].name} 1개`;
 
-    const rangeBadges = preview
+    const maxRange = preview
+      ? Math.max(...preview.ranges.map((r) => r.maxVal), 1)
+      : 1;
+    const runes = preview
       ? preview.ranges
-          .map(
-            (r) => `
-          <div class="range-preview-chip" style="border-left: 3px solid ${r.color}">
-            <strong>${r.name}</strong>
-            <span>${r.statLabel} <b>${r.minVal} ~ ${r.maxVal}</b></span>
-          </div>
-        `
-          )
+          .map((r) => {
+            const w = Math.max(8, Math.round((r.maxVal / maxRange) * 100));
+            const tip = `${r.name} ${r.statLabel}${r.minVal}–${r.maxVal}`;
+            return `
+          <button type="button" class="enchant-rune" data-rune-id="${r.id}" data-tip="${tip}" style="--rune:${r.color}">
+            <canvas width="24" height="24"></canvas>
+            <span class="rune-bar"><i style="width:${w}%"></i></span>
+            <small>${r.minVal}–${r.maxVal}</small>
+          </button>`;
+          })
           .join('')
       : '';
+
+    const slimCost = targetWp
+      ? `60G + ${MATERIAL_MAP[oreId].icon}`
+      : costDesc;
 
     return `
       <div class="subtab-bar">
@@ -1267,14 +1217,13 @@ class KairoSlotInnApp {
         targetWp && preview
           ? `
         <div class="enchant-preview-box">
-          <div class="enchant-preview-header">
-            ✨ <strong>[${targetWp.icon} ${targetWp.name} +${targetWp.enhanceCount}강]</strong> 인챈트 예상 스펙:
-            <span class="highlight-badge">동시 부여 옵션 수: <strong>${preview.slotCount}가지</strong></span>
-            <small>(+2강 이상 2줄, +5강 이상 3줄, +8강 이상 4줄!)</small>
+          <div class="enchant-compact-head">
+            <span class="ench-plus">+${targetWp.enhanceCount}</span>
+            <span class="ench-slots" title="옵션 ${preview.slotCount}줄">${'●'.repeat(preview.slotCount)}${'○'.repeat(4 - preview.slotCount)}</span>
           </div>
-          <div class="range-preview-grid">${rangeBadges}</div>
+          <div class="enchant-rune-row">${runes}</div>
         </div>
-        ${this.renderSlotMachineWidget(probs, enchanter, costDesc, canSpin, '돌리기')}
+        ${this.renderSlotMachineWidget(probs, enchanter, slimCost, canSpin, '돌리기')}
       `
           : `<div class="empty-hint">무기 없음</div>`
       }
@@ -1288,9 +1237,8 @@ class KairoSlotInnApp {
       .map((w) => {
         const active = targetWp?.id === w.id ? 'selected' : '';
         return `
-          <button class="weapon-pick-chip ${active} tier-border-${w.tier}" data-pick-weapon="${w.id}">
-            <span>${w.icon} [${w.tier}] ${w.name} <strong>+${w.enhanceCount}강</strong> ${w.enhanceLocked ? '🔒확정' : ''}</span>
-            <small>공격력 ${Math.round(w.baseAtk * (1 + w.enhanceCount * 0.18))} · 인챈트 ${w.enchants.length}줄</small>
+          <button class="weapon-pick-chip ${active} tier-border-${w.tier}" data-pick-weapon="${w.id}" title="${w.name} ${w.tier} 공격 ${Math.round(w.baseAtk * (1 + w.enhanceCount * 0.18))}">
+            <span>${w.icon} +${w.enhanceCount}${w.enhanceLocked ? ' 🔒' : ''}</span>
           </button>
         `;
       })
@@ -1497,7 +1445,7 @@ class KairoSlotInnApp {
       .join('');
 
     const fac = this.save.facilities[this.selectedFacilityId];
-    const baseCost = fac.level * 220;
+    const baseCost = facilityUpgradeGold(fac.level);
     const oreId = `ore_${this.betTier1.toLowerCase()}`;
     const probs = calculateSlotProbabilities(
       [this.betTier1],
@@ -1918,12 +1866,9 @@ class KairoSlotInnApp {
       this.save.materials[m1]--;
       this.save.materials[m2]--;
 
-      this.executeSlotSpin(() => {
-        const res = rollCookingDish(this.save, this.betTier1, this.betTier2);
-        if (res.isJackpot) {
-          this.save.totalJackpots++;
-          sfx.playJackpot();
-        } else sfx.playSlotStop();
+      const res = rollCookingDish(this.save, this.betTier1, this.betTier2);
+      this.executeSlotSpin(res.reels, res.isJackpot, () => {
+        if (res.isJackpot) this.save.totalJackpots++;
         this.pendingDecision = {
           kind: 'cook',
           reels: res.reels,
@@ -1940,12 +1885,9 @@ class KairoSlotInnApp {
       this.save.gold -= cost;
       this.save.materials[m1]--;
 
-      this.executeSlotSpin(() => {
-        const res = rollHeroRecruitCandidate(this.save, this.betTier1);
-        if (res.isJackpot) {
-          this.save.totalJackpots++;
-          sfx.playJackpot();
-        } else sfx.playSlotStop();
+      const res = rollHeroRecruitCandidate(this.save, this.betTier1);
+      this.executeSlotSpin(res.reels, res.isJackpot, () => {
+        if (res.isJackpot) this.save.totalJackpots++;
         this.pendingDecision = {
           kind: 'hero',
           reels: res.reels,
@@ -1962,17 +1904,14 @@ class KairoSlotInnApp {
       this.save.materials[o1]--;
       this.save.materials[o2]--;
 
-      this.executeSlotSpin(() => {
-        const res = rollWeaponForge(
+      const res = rollWeaponForge(
           this.save,
           this.selectedWeaponType,
           this.betTier1,
           this.betTier2
         );
-        if (res.isJackpot) {
-          this.save.totalJackpots++;
-          sfx.playJackpot();
-        } else sfx.playSlotStop();
+      this.executeSlotSpin(res.reels, res.isJackpot, () => {
+        if (res.isJackpot) this.save.totalJackpots++;
         this.pendingDecision = {
           kind: 'forge',
           reels: res.reels,
@@ -1988,12 +1927,9 @@ class KairoSlotInnApp {
       this.save.gold -= 60;
       this.save.materials[o1]--;
 
-      this.executeSlotSpin(() => {
-        const res = rollWeaponEnchant(this.save, targetWp, this.betTier1);
-        if (res.isJackpot) {
-          this.save.totalJackpots++;
-          sfx.playJackpot();
-        } else sfx.playSlotStop();
+      const res = rollWeaponEnchant(this.save, targetWp, this.betTier1);
+      this.executeSlotSpin(res.reels, res.isJackpot, () => {
+        if (res.isJackpot) this.save.totalJackpots++;
         this.pendingDecision = {
           kind: 'enchant',
           reels: res.reels,
@@ -2011,12 +1947,9 @@ class KairoSlotInnApp {
       this.save.materials[h1]--;
       this.save.materials[h2]--;
 
-      this.executeSlotSpin(() => {
-        const res = rollAlchemyPotion(this.save, this.betTier1, this.betTier2);
-        if (res.isJackpot) {
-          this.save.totalJackpots++;
-          sfx.playJackpot();
-        } else sfx.playSlotStop();
+      const res = rollAlchemyPotion(this.save, this.betTier1, this.betTier2);
+      this.executeSlotSpin(res.reels, res.isJackpot, () => {
+        if (res.isJackpot) this.save.totalJackpots++;
         this.pendingDecision = {
           kind: 'potion',
           reels: res.reels,
@@ -2031,16 +1964,13 @@ class KairoSlotInnApp {
       if (this.save.gold < cost) return;
       this.save.gold -= cost;
 
-      this.executeSlotSpin(() => {
-        const res = rollStaffHireCandidate(
+      const res = rollStaffHireCandidate(
           this.save,
           this.selectedStaffRole,
           this.betTier1
         );
-        if (res.isJackpot) {
-          this.save.totalJackpots++;
-          sfx.playJackpot();
-        } else sfx.playSlotStop();
+      this.executeSlotSpin(res.reels, res.isJackpot, () => {
+        if (res.isJackpot) this.save.totalJackpots++;
         this.pendingDecision = {
           kind: 'staff',
           reels: res.reels,
@@ -2051,22 +1981,19 @@ class KairoSlotInnApp {
       });
     } else if (tab === 'facility_up') {
       const fac = this.save.facilities[this.selectedFacilityId];
-      const baseCost = fac.level * 220;
+      const baseCost = facilityUpgradeGold(fac.level);
       const o1 = `ore_${this.betTier1.toLowerCase()}`;
       if (this.save.gold < baseCost) return;
       this.save.gold -= baseCost;
       this.save.materials[o1]--;
 
-      this.executeSlotSpin(() => {
-        const res = rollFacilityUpgrade(
+      const res = rollFacilityUpgrade(
           this.save,
           this.selectedFacilityId,
           this.betTier1
         );
-        if (res.greatLevelUp) {
-          this.save.totalJackpots++;
-          sfx.playJackpot();
-        } else sfx.playSlotStop();
+      this.executeSlotSpin(res.reels, !!res.greatLevelUp, () => {
+        if (res.greatLevelUp) this.save.totalJackpots++;
         this.pendingDecision = {
           kind: 'facility',
           reels: res.reels,
@@ -2089,31 +2016,26 @@ class KairoSlotInnApp {
     this.save.gold -= 40;
     this.save.materials[o1]--;
 
-    this.executeSlotSpin(() => {
-      const res = rollWeaponEnhance(this.save, targetWp, this.betTier1);
-      this.spinReels = res.reels;
+    const res = rollWeaponEnhance(this.save, targetWp, this.betTier1);
+    this.executeSlotSpin(res.reels, res.greatSuccess, () => {
       targetWp.enhanceCount = res.newEnhanceCount;
       targetWp.enhanceLocked = res.locked;
 
       if (res.success) {
-        if (res.greatSuccess) {
-          sfx.playJackpot();
-          this.enhanceResultBanner = `+2 → +${targetWp.enhanceCount}`;
-        } else {
-          sfx.playSuccess();
-          this.enhanceResultBanner = `+1 → +${targetWp.enhanceCount}`;
-        }
+        this.enhanceResultBanner = res.greatSuccess
+          ? `+2 → +${targetWp.enhanceCount}`
+          : `+1 → +${targetWp.enhanceCount}`;
         this.triggerActorSpeech(
           this.save.staff.enhancer.id,
-          `+${targetWp.enhanceCount}강 성공!`,
+          `+${targetWp.enhanceCount}`,
           'happy'
         );
       } else {
         sfx.playFailStop();
-        this.enhanceResultBanner = `🔒 STOP +${targetWp.enhanceCount}`;
+        this.enhanceResultBanner = `🔒 +${targetWp.enhanceCount}`;
         this.triggerActorSpeech(
           this.save.staff.enhancer.id,
-          `+${targetWp.enhanceCount}강에서 확정!`,
+          `+${targetWp.enhanceCount}`,
           'normal'
         );
       }
@@ -2188,166 +2110,162 @@ class KairoSlotInnApp {
   }
 
   /**
-   * 던전 원정 시작 & 상단 실시간 전투 슬롯 오버레이
+   * 던전 원정 시작. 여관 맵의 작은 표시와 함께 던전 장면을 연다.
    */
   public startDungeonRun(zoneId: string): void {
-    const zone =
-      DUNGEON_ZONES.find((z) => z.id === zoneId) || DUNGEON_ZONES[0];
-    const party = this.save.heroes.slice(0, 4);
-    for (const h of party) {
-      const st = getHeroCombatStats(this.save, h);
-      h.currentHp = st.maxHp;
-    }
-
-    const baseHp = zone.recLevel * 75 + 90;
-    this.activeDungeon = {
-      zoneId: zone.id,
-      partyIds: party.map((h) => h.id),
-      wave: 1,
-      maxWaves: 3,
-      waveTimer: 0,
-      slotSpinTimer: 0,
-      currentSlotSymbols: ['⚔️', '🛡️', '🧪'],
-      lastSlotEffect: '전투',
-      monsterHp: baseHp,
-      monsterMaxHp: baseHp,
-      monsterName: zone.monsterNames[0],
-      isBoss: false,
-      accumulatedGold: 0,
-      accumulatedDrops: [],
-      status: 'fighting',
-      rewardMultiplier: 1,
-      rewardSpun: false,
-      combatLogs: [zone.name],
-    };
-
+    this.activeDungeon = createDungeonRun(this.save, zoneId);
     sfx.playSuccess();
-    this.renderDungeonBanner();
+    this.closeModal();
+    this.openDungeonView();
+    this.syncExpeditionChip();
+    this.renderDungeonHud();
   }
 
-  private renderDungeonBanner(): void {
-    const banner = document.getElementById('dungeon-live-panel');
-    if (!banner) return;
+  public openDungeonView(): void {
+    if (!this.activeDungeon) return;
+    this.watchingDungeon = true;
+    const stage = document.getElementById('dungeon-stage');
+    stage?.classList.remove('hidden');
+    this.dungeonView?.resize();
+    this.dungeonView?.attach(this.save, this.activeDungeon, true);
+    this.renderDungeonHud();
+    this.syncExpeditionChip();
+  }
 
+  public closeDungeonView(): void {
+    this.watchingDungeon = false;
+    document.getElementById('dungeon-stage')?.classList.add('hidden');
+    this.syncExpeditionChip();
+  }
+
+  private syncExpeditionChip(): void {
+    const chip = document.getElementById('expedition-chip');
+    if (!chip) return;
     const run = this.activeDungeon;
-    if (!run) {
-      banner.classList.add('hidden');
+    const show = !!run && !this.watchingDungeon;
+    chip.classList.toggle('hidden', !show);
+    chip.classList.toggle('is-fighting', run?.status === 'fighting');
+    const wave = chip.querySelector('.exp-wave');
+    if (wave && run) wave.textContent = `${run.wave}/${run.maxWaves}`;
+  }
+
+  private renderDungeonHud(): void {
+    const hud = document.getElementById('dungeon-hud');
+    if (!hud) return;
+    const run = this.activeDungeon;
+    if (!run || !this.watchingDungeon) {
+      hud.innerHTML = '';
+      hud.classList.add('hidden');
       return;
     }
-    banner.classList.remove('hidden');
-
-    const zone =
-      DUNGEON_ZONES.find((z) => z.id === run.zoneId) || DUNGEON_ZONES[0];
-    const hpPct = Math.max(
-      0,
-      Math.min(100, Math.round((run.monsterHp / run.monsterMaxHp) * 100))
-    );
-
-    const partyBars = run.partyIds
-      .map((hid) => {
-        const h = this.save.heroes.find((hero) => hero.id === hid);
-        if (!h) return '';
-        const st = getHeroCombatStats(this.save, h);
-        const pct = Math.max(0, Math.min(100, Math.round((h.currentHp / st.maxHp) * 100)));
-        return `
-          <div class="d-hero-mini">
-            <span>${HERO_CLASS_META[h.classId].icon}${h.name}</span>
-            <div class="mini-hp-bar"><div class="mini-hp-fill" style="width:${pct}%"></div></div>
-          </div>
-        `;
-      })
-      .join('');
+    hud.classList.remove('hidden');
 
     if (run.status === 'fighting') {
-      banner.innerHTML = `
-        <div class="d-live-header">
-          <div>
-            <span class="d-wave-pill">${zone.name} (Wave ${run.wave}/${run.maxWaves})</span>
-            <strong>${run.monsterName}</strong>
-          </div>
-          <div class="d-mini-slot">
-            <span class="d-slot-label">전투</span>
-            <span class="d-slot-reel">${run.currentSlotSymbols[0]}</span>
-            <span class="d-slot-reel">${run.currentSlotSymbols[1]}</span>
-            <span class="d-slot-reel">${run.currentSlotSymbols[2]}</span>
-            <small class="d-slot-effect">${run.lastSlotEffect}</small>
-          </div>
-        </div>
-        <div class="d-monster-bar-wrap">
-          <div class="d-monster-bar" style="width:${hpPct}%"></div>
-          <span class="d-monster-hp-text">${run.monsterHp} / ${run.monsterMaxHp} HP</span>
-        </div>
-        <div class="d-party-row">${partyBars}</div>
-        <div class="d-log-line">${run.combatLogs[0] || ''}</div>
-      `;
-    } else if (run.status === 'reward_slot') {
-      const dropsText = run.accumulatedDrops
-        .map((d) => {
-          const m = MATERIAL_MAP[d.materialId];
-          return `${m.icon}${m.name} x${d.count * run.rewardMultiplier}`;
-        })
-        .join(', ');
+      hud.innerHTML = '';
+      return;
+    }
 
-      banner.innerHTML = `
+    if (run.status === 'reward_slot') {
+      const gold = Math.round(run.accumulatedGold * run.rewardMultiplier);
+      hud.innerHTML = `
         <div class="d-reward-box">
-          <h4>${zone.name} 클리어</h4>
-          <div class="d-reward-preview">
-            <strong>${Math.round(run.accumulatedGold * run.rewardMultiplier)}G</strong>
-            · ${dropsText || '-'}
-          </div>
+          <div id="reward-reels-host" class="slot-reels-frame reward-reels"></div>
+          <div class="d-reward-preview"><strong>${gold}G</strong></div>
           <div class="d-reward-actions">
             ${
               !run.rewardSpun
-                ? `<button id="btn-spin-dungeon-reward" class="kairo-btn-primary">배율 슬롯</button>`
-                : `<button id="btn-claim-dungeon-reward" class="kairo-btn-keep">수령 x${run.rewardMultiplier}</button>`
+                ? `<button id="btn-spin-dungeon-reward" class="kairo-btn-primary">×?</button>`
+                : `<button id="btn-claim-dungeon-reward" class="kairo-btn-keep">×${run.rewardMultiplier}</button>`
             }
           </div>
         </div>
       `;
-
+      const host = document.getElementById('reward-reels-host');
+      const face =
+        run.rewardSpun
+          ? run.rewardMultiplier >= 3
+            ? (['seven', 'seven', 'seven'] as ReelId[])
+            : run.rewardMultiplier >= 2
+              ? (['x2', 'x2', 'x2'] as ReelId[])
+              : (['x15', 'x15', 'x15'] as ReelId[])
+          : (['x15', 'x2', 'x3'] as ReelId[]);
+      if (host) {
+        const machine = mountReelFrame(host, face, 'reward', {
+          jackpot: run.rewardSpun && run.rewardMultiplier >= 3,
+        });
+        (hud as unknown as { _reels?: PixelReelMachine })._reels?.destroy();
+        (hud as unknown as { _reels?: PixelReelMachine })._reels = machine;
+      }
       document.getElementById('btn-spin-dungeon-reward')?.addEventListener('click', () => {
-        const mults = [1.5, 2, 2, 3];
-        const pick = mults[Math.floor(Math.random() * mults.length)];
-        run.rewardMultiplier = pick;
-        run.rewardSpun = true;
-        if (pick >= 3) sfx.playJackpot();
-        else sfx.playSuccess();
-        this.renderDungeonBanner();
+        if (this.rewardSpinning) return;
+        this.rewardSpinning = true;
+        const pick = spinDungeonRewardMultiplier(run);
+        const faces: ReelId[] =
+          pick >= 3 ? ['seven', 'seven', 'seven'] : pick >= 2 ? ['x2', 'x2', 'x2'] : ['x15', 'x15', 'x15'];
+        const host2 = document.getElementById('reward-reels-host');
+        const machine = host2
+          ? mountReelFrame(host2, ['x15', 'x2', 'seven'], 'reward')
+          : null;
+        machine?.spinTo(faces, pick >= 3, () => {
+          this.rewardSpinning = false;
+          if (pick >= 3) sfx.playJackpot();
+          else sfx.playSuccess();
+          this.renderDungeonHud();
+        });
       });
-
       document.getElementById('btn-claim-dungeon-reward')?.addEventListener('click', () => {
-        const finalGold = Math.round(run.accumulatedGold * run.rewardMultiplier);
-        this.save.gold += finalGold;
-        for (const d of run.accumulatedDrops) {
-          const cnt = Math.round(d.count * run.rewardMultiplier);
-          this.save.materials[d.materialId] =
-            (this.save.materials[d.materialId] || 0) + cnt;
-        }
-        this.save.clearedDungeons[run.zoneId] =
-          (this.save.clearedDungeons[run.zoneId] || 0) + 1;
+        const { finalGold } = claimDungeonReward(this.save, run);
         this.spawnPop(7, 2, `+${finalGold}G`, '#fde047');
         this.activeDungeon = null;
         sfx.playCoin();
         this.updateTopHud();
         saveGameData(this.save);
-        this.renderDungeonBanner();
+        this.closeDungeonView();
+        this.syncExpeditionChip();
       });
-    } else if (run.status === 'defeat') {
-      banner.innerHTML = `
+      return;
+    }
+
+    if (run.status === 'defeat') {
+      const half = Math.round(run.accumulatedGold * 0.5);
+      hud.innerHTML = `
         <div class="d-reward-box">
-          <h4>후퇴</h4>
-          <p>${Math.round(run.accumulatedGold * 0.5)}G</p>
+          <div class="d-reward-preview"><strong>${half}G</strong></div>
           <button id="btn-close-defeat" class="kairo-btn-discard">귀환</button>
         </div>
       `;
       document.getElementById('btn-close-defeat')?.addEventListener('click', () => {
-        this.save.gold += Math.round(run.accumulatedGold * 0.5);
+        claimDungeonDefeatGold(this.save, run);
         this.activeDungeon = null;
         this.updateTopHud();
         saveGameData(this.save);
-        this.renderDungeonBanner();
+        this.closeDungeonView();
+        this.syncExpeditionChip();
       });
     }
+  }
+
+  private shotApi() {
+    return {
+      openTab: (tab: ModalTab) => this.openModal(tab),
+      startZone: (id: string) => {
+        this.startDungeonRun(id);
+      },
+      forceReward: () => {
+        if (!this.activeDungeon) this.startDungeonRun('dungeon_1');
+        const run = this.activeDungeon!;
+        run.status = 'reward_slot';
+        run.accumulatedGold = Math.max(run.accumulatedGold, 200);
+        run.rewardSpun = false;
+        this.openDungeonView();
+        this.renderDungeonHud();
+      },
+      spinCurrent: () => {
+        const btn = document.getElementById('btn-trigger-spin') as HTMLButtonElement | null;
+        btn?.click();
+      },
+      worldPoint: (gx: number, gy: number, gz = 0) => this.renderer.isoToScreen(gx, gy, gz),
+    };
   }
 }
 

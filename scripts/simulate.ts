@@ -8,6 +8,7 @@ import {
   claimDungeonDefeatGold,
   claimDungeonReward,
   createDungeonRun,
+  facilityUpgradeGold,
   GUEST_INCOME_INTERVAL_SEC,
   spinDungeonRewardMultiplier,
   stepDungeonCombat,
@@ -28,7 +29,7 @@ import { createInitialSaveData } from '../src/storage';
 import { FacilityId, GameSaveData, RankTier } from '../src/types';
 
 const SEED = 20261123;
-const MAX_SEC = 10800; // 3시간
+const MAX_SEC = 18000; // 5시간 (4구역 3–4시간 목표 측정용)
 const GOLD_COST_HERO: Record<RankTier, number> = { C: 120, B: 260, A: 520, S: 980 };
 const HIRE_COST: Record<RankTier, number> = { C: 100, B: 240, A: 500, S: 950 };
 
@@ -48,7 +49,7 @@ function farmZone(
   t: number
 ): { t: number; win: boolean; duration: number } {
   const start = t;
-  t += 12; // 출정 준비·이동
+  t += 18; // 출정 준비·던전 입장 연출
   const run = createDungeonRun(save, zoneId);
   let guard = 0;
   while (run.status === 'fighting' && guard < 800) {
@@ -78,13 +79,18 @@ function partyReadyFor(save: GameSaveData, zoneId: string, recLevel: number, rec
   const maxLv = Math.max(...heroes.map((h) => h.level));
   const bestEnhance = Math.max(0, ...save.weapons.map((w) => w.enhanceCount));
   const clears = save.clearedDungeons;
-  if (zoneId === 'dungeon_2' && (clears.dungeon_1 || 0) < 2) return false;
-  if (zoneId === 'dungeon_3' && ((clears.dungeon_2 || 0) < 4 || maxLv < 10)) return false;
+  if (zoneId === 'dungeon_2') {
+    if ((clears.dungeon_1 || 0) < 10) return false;
+    if (maxLv < 5 || bestEnhance < 2) return false;
+  }
+  if (zoneId === 'dungeon_3') {
+    if ((clears.dungeon_2 || 0) < 8 || maxLv < 12) return false;
+    if (save.facilities.inn.level < 2 || bestEnhance < 4) return false;
+  }
   if (zoneId === 'dungeon_4') {
-    // 의미 있는 육성 후에만 4구역 (잠재 상한·시설 락·+강화 요구)
-    if ((clears.dungeon_3 || 0) < 8) return false;
+    if ((clears.dungeon_3 || 0) < 10) return false;
     if (save.facilities.inn.level < 4) return false;
-    if (maxLv < 18 || bestEnhance < 6) return false;
+    if (maxLv < 20 || bestEnhance < 7) return false;
   }
   return maxLv >= recLevel * 0.65 && bestEnhance >= Math.max(0, recEnhance - 1);
 }
@@ -185,7 +191,7 @@ function tryRecruit(save: GameSaveData): boolean {
 function tryUpgradeInn(save: GameSaveData): boolean {
   const facId: FacilityId = 'inn';
   const fac = save.facilities[facId];
-  const cost = fac.level * 220;
+  const cost = facilityUpgradeGold(fac.level);
   if (fac.level >= 8) return false;
   if (save.gold < cost || !hasMats(save, 'ore_c')) return false;
   save.gold -= cost;
@@ -268,10 +274,10 @@ function main(): void {
       tryEnhance(save),
       tryEnchant(save),
       save.gold > 400 && tryRecruit(save),
-      save.gold > 600 && tryUpgradeInn(save),
+      save.gold > 900 && tryUpgradeInn(save),
       save.gold > 800 && tryHire(save),
     ].filter(Boolean).length;
-    t += slotActions * 5; // 슬롯 연출·채택 시간
+    t += slotActions * 8; // 릴 연출·채택 시간
 
     // 출정: 가능한 가장 높은 구역, 아니면 1구역 파밍
     let zone = 'dungeon_1';
@@ -345,7 +351,7 @@ function main(): void {
   fs.writeFileSync(outPath, JSON.stringify(report, null, 2), 'utf8');
 
   console.log('==============================================================');
-  console.log('📊 [픽셀 던전 여관 v5: 슬롯 타이쿤 · 아이소 맵 3시간 시뮬]');
+  console.log('📊 [픽셀 던전 여관 v7: 슬롯 타이쿤 · 아이소 맵 5시간 시뮬]');
   console.log('==============================================================');
   console.log(`• 시드: ${SEED} | 시간: ${report.simulatedDurationText}`);
   console.log(

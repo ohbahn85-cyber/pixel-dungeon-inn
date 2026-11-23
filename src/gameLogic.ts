@@ -1,7 +1,6 @@
 import {
   DUNGEON_ZONES,
   HERO_TIER_GROWTH_MULT,
-  MATERIAL_MAP,
   MATERIALS,
 } from './data';
 import {
@@ -16,7 +15,25 @@ import {
 } from './types';
 
 export const CALENDAR_WEEK_SEC = 7.0;
-export const GUEST_INCOME_INTERVAL_SEC = 5.5;
+export const GUEST_INCOME_INTERVAL_SEC = 7.0;
+export const COMBAT_SWING_SEC = 1.35;
+export const COMBAT_SLOT_SEC = 2.4;
+
+/** 웨이브당 경험치. 구역이 올라도 완만하게만 늘어 상위 구역이 너무 빨리 열리지 않게 함. */
+export function waveExpForZone(recLevel: number): number {
+  if (recLevel <= 2) return 6;
+  if (recLevel <= 8) return 11;
+  if (recLevel <= 16) return 15;
+  return 20;
+}
+
+export function monsterMaxHpFor(recLevel: number, isBoss: boolean): number {
+  return Math.round((recLevel * 100 + 160) * (isBoss ? 2.1 : 1.0));
+}
+
+export function facilityUpgradeGold(level: number): number {
+  return level * 360;
+}
 export const SCRAP_EXCHANGE_COSTS: Record<RankTier, number> = {
   C: 8,
   B: 20,
@@ -45,7 +62,7 @@ export function calculateGuestIncome(save: GameSaveData): number {
     .reduce((acc, p) => acc + p.value, 0);
 
   return Math.round(
-    (12 + innLv * 8 + tradeLv * 6 + save.heroes.length * 5) *
+    (8 + innLv * 6 + tradeLv * 4 + save.heroes.length * 3) *
       (1 + passiveGoldPct / 100)
   );
 }
@@ -115,7 +132,7 @@ export function createDungeonRun(
     h.currentHp = st.maxHp;
   }
 
-  const baseHp = zone.recLevel * 75 + 90;
+  const baseHp = monsterMaxHpFor(zone.recLevel, false);
   return {
     zoneId: zone.id,
     partyIds: party.map((h) => h.id),
@@ -123,7 +140,7 @@ export function createDungeonRun(
     maxWaves: 3,
     waveTimer: 0,
     slotSpinTimer: 0,
-    currentSlotSymbols: ['⚔️', '🛡️', '🧪'],
+    currentSlotSymbols: ['crit', 'heal', 'seven'],
     lastSlotEffect: 'READY',
     monsterHp: baseHp,
     monsterMaxHp: baseHp,
@@ -147,10 +164,10 @@ export function triggerDungeonCombatSlot(
     label: string;
     type: 'crit' | 'heal' | 'gold' | 'jackpot';
   }[] = [
-    { syms: ['⚔️', '⚔️', '🔥'], label: '💥 -22% HP', type: 'crit' },
-    { syms: ['🧪', '💚', '🧪'], label: '💚 +20% HP', type: 'heal' },
-    { syms: ['💰', '💰', '💎'], label: '🪙 +65G', type: 'gold' },
-    { syms: ['7️⃣', '7️⃣', '7️⃣'], label: '⚡ -45% HP', type: 'jackpot' },
+    { syms: ['crit', 'crit', 'spark'], label: '강타', type: 'crit' },
+    { syms: ['flask', 'heal', 'flask'], label: '치유', type: 'heal' },
+    { syms: ['coin', 'coin', 'chest'], label: '보물', type: 'gold' },
+    { syms: ['seven', 'seven', 'seven'], label: '777', type: 'jackpot' },
   ];
   const r = slotRandom();
   const pick =
@@ -192,6 +209,9 @@ export interface CombatTickOutcome {
   statusChanged?: 'reward_slot' | 'defeat';
   leveledUpHeroes: { heroId: string; newLevel: number }[];
   potionsUsed: number;
+  damageToMonster?: number;
+  heroHits?: { heroId: string; heroIndex: number; damage: number }[];
+  heals?: { heroId: string; heroIndex: number; amount: number }[];
 }
 
 export function stepDungeonCombat(
@@ -211,16 +231,16 @@ export function stepDungeonCombat(
   run.waveTimer += dt;
   run.slotSpinTimer += dt;
 
-  // 2.2초마다 전투 미니슬롯 회전
-  if (run.slotSpinTimer >= 2.2) {
-    run.slotSpinTimer -= 2.2;
+  // 전투 미니슬롯 회전
+  if (run.slotSpinTimer >= COMBAT_SLOT_SEC) {
+    run.slotSpinTimer -= COMBAT_SLOT_SEC;
     result.slotTriggered = true;
     result.slotType = triggerDungeonCombatSlot(save, run);
   }
 
-  // 1.1초마다 파티 기본 공방 교전
-  if (run.waveTimer >= 1.1) {
-    run.waveTimer -= 1.1;
+  // 파티 기본 공방 교전
+  if (run.waveTimer >= COMBAT_SWING_SEC) {
+    run.waveTimer -= COMBAT_SWING_SEC;
     const zone =
       DUNGEON_ZONES.find((z) => z.id === run.zoneId) || DUNGEON_ZONES[0];
 
@@ -243,12 +263,16 @@ export function stepDungeonCombat(
           const healAmt = Math.round(st.maxHp * (pot.healPct / 100));
           hero.currentHp = Math.min(st.maxHp, hero.currentHp + healAmt);
           partyAtk = Math.round(partyAtk * (1 + pot.atkBuffPct / 100));
-          run.combatLogs.unshift(
-            `🧪 ${hero.name} +${healAmt}HP / +${pot.atkBuffPct}%ATK`
-          );
+          run.combatLogs.unshift(`${hero.name} +${healAmt}`);
           save.potions.splice(potIdx, 1);
           hero.equippedPotionId = null;
           result.potionsUsed++;
+          result.heals = result.heals || [];
+          result.heals.push({
+            heroId: hero.id,
+            heroIndex: run.partyIds.indexOf(hid),
+            amount: healAmt,
+          });
         }
       }
     }
@@ -266,21 +290,24 @@ export function stepDungeonCombat(
       Math.round(partyAtk * (0.9 + slotRandom() * 0.25))
     );
     run.monsterHp = Math.max(0, run.monsterHp - dmgToMonster);
+    result.damageToMonster = dmgToMonster;
 
     if (run.monsterHp > 0) {
       // 몬스터 반격
       const monsterAtk =
-        (zone.recLevel * 9 + 14) * (run.isBoss ? 1.35 : 1.0);
-      for (const hid of run.partyIds) {
+        (zone.recLevel * 11 + 16) * (run.isBoss ? 1.4 : 1.0);
+      result.heroHits = [];
+      run.partyIds.forEach((hid, heroIndex) => {
         const hero = save.heroes.find((h) => h.id === hid);
-        if (!hero || hero.currentHp <= 0) continue;
+        if (!hero || hero.currentHp <= 0) return;
         const st = getHeroCombatStats(save, hero);
         const hit = Math.max(
           3,
           Math.round((monsterAtk - st.def * 0.6) / Math.max(1, partyAlive))
         );
         hero.currentHp = Math.max(0, hero.currentHp - hit);
-      }
+        result.heroHits!.push({ heroId: hero.id, heroIndex, damage: hit });
+      });
 
       // 반격 직후 전원 쓰러졌는지 확인
       const stillAlive = run.partyIds.some((hid) => {
@@ -313,14 +340,12 @@ export function stepDungeonCombat(
       if (existingDrop) existingDrop.count += 1;
       else run.accumulatedDrops.push({ materialId: pickedMat.id, count: 1 });
 
-      run.combatLogs.unshift(
-        `+${goldDrop}G ${ MATERIAL_MAP[pickedMat.id].icon }×1`
-      );
+      run.combatLogs.unshift(`+${goldDrop}G`);
 
       result.leveledUpHeroes = grantPartyExp(
         save,
         run.partyIds,
-        zone.recLevel * 25
+        waveExpForZone(zone.recLevel)
       );
 
       if (run.wave >= run.maxWaves) {
@@ -333,9 +358,7 @@ export function stepDungeonCombat(
         run.monsterName = run.isBoss
           ? zone.bossName
           : zone.monsterNames[run.wave % zone.monsterNames.length];
-        const baseHp =
-          (zone.recLevel * 75 + 90) * (run.isBoss ? 1.9 : 1.0);
-        run.monsterMaxHp = Math.round(baseHp);
+        run.monsterMaxHp = monsterMaxHpFor(zone.recLevel, run.isBoss);
         run.monsterHp = run.monsterMaxHp;
       }
     }
