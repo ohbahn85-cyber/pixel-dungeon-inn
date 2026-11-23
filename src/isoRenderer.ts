@@ -180,8 +180,9 @@ export class IsoRenderer {
       }
     }
 
-    // 창문 빛줄기 (바닥 위, 가구 아래)
+    // 창문 빛줄기 + 난로/램프 빛의 웅덩이 (바닥 위, 가구 아래)
     this.drawLightShafts(wctx);
+    this.drawLightPools(wctx);
 
     // 뒷벽 (두 면) + 장식
     this.drawBackWalls(atlas, activeDungeon);
@@ -254,18 +255,39 @@ export class IsoRenderer {
     const checker = (gx + gy) % 2 === 0;
     let spr = checker ? atlas.tiles.innLight : atlas.tiles.innDark;
 
-    // 구역 악센트(러그)만 다른 타일 — 건물 전체는 원목 바닥
-    const diningRug = gx >= 3 && gx <= 5 && gy >= 3 && gy <= 5;
-    const smithPad = gx >= 8 && gx <= 11 && gy >= 1 && gy <= 3;
-    const potionRug = gx >= 2 && gx <= 4 && gy >= 8 && gy <= 10;
-    const tradeRug = gx >= 8 && gx <= 10 && gy >= 8 && gy <= 10;
-    const mat = gx >= 6 && gx <= 7 && gy >= 11 && gy <= 12;
+    // 복도와 출입 동선의 패인 마루 (직사각 러그가 아님)
+    const worn =
+      ((gx === 6 || gx === 7) && gy >= 2 && gy <= 12) ||
+      (gx === 5 && gy >= 3 && gy <= 6) ||
+      (gx === 8 && (gy === 2 || gy === 3 || gy === 8 || gy === 9)) ||
+      (gx === 3 && gy === 3) ||
+      (gx === 4 && gy === 8);
+    // 대장간 석재는 용광로 주변만 불규칙하게
+    const smithPad =
+      (gx >= 9 && gx <= 11 && gy >= 1 && gy <= 2) ||
+      (gx === 9 && gy === 3) ||
+      (gx === 8 && gy === 1) ||
+      (gx === 10 && gy === 3);
+    // 식탁 아래 겹치는 작은 러그
+    const diningRug =
+      (gx === 4 && (gy === 3 || gy === 4)) ||
+      (gx === 3 && gy === 4) ||
+      (gx === 5 && gy === 4);
+    // 가마솥 발치만 차가운 석판
+    const potionRug = (gx === 3 && (gy === 9 || gy === 10)) || (gx === 2 && gy === 9);
+    // 상점 카운터와 현관으로 이어지는 러너
+    const tradeRug =
+      (gx === 8 && (gy === 9 || gy === 10)) ||
+      (gx === 9 && gy === 10) ||
+      (gx === 7 && gy === 11);
+    const mat = (gx === 6 || gx === 7) && gy >= 11 && gy <= 12;
 
-    if (diningRug) spr = checker ? atlas.tiles.innCarpetLight : atlas.tiles.innCarpetDark;
-    else if (smithPad) spr = checker ? atlas.tiles.bsLight : atlas.tiles.bsDark;
+    if (smithPad) spr = checker ? atlas.tiles.bsLight : atlas.tiles.bsDark;
+    else if (diningRug) spr = checker ? atlas.tiles.innCarpetLight : atlas.tiles.innCarpetDark;
     else if (potionRug) spr = checker ? atlas.tiles.potLight : atlas.tiles.potDark;
     else if (tradeRug) spr = checker ? atlas.tiles.tradeLight : atlas.tiles.tradeDark;
     else if (mat) spr = checker ? atlas.tiles.corridorDark : atlas.tiles.innDark;
+    else if (worn) spr = checker ? atlas.tiles.innWornLight : atlas.tiles.innWornDark;
 
     const p = this.isoToWorld(gx, gy, 0);
     this.worldCtx.drawImage(spr, Math.round(p.x - TILE_W / 2), Math.round(p.y - TILE_H / 2));
@@ -296,6 +318,33 @@ export class IsoRenderer {
         const wdt = 3 + Math.floor(t * 7);
         for (let px = -wdt; px <= wdt; px++) {
           if (((px + i) & 1) === 0) wctx.fillRect(x + px, y, 1, 2);
+        }
+      }
+    }
+    wctx.restore();
+  }
+
+  private drawLightPools(wctx: CanvasRenderingContext2D): void {
+    const pools: { gx: number; gy: number; r: number; rgb: string; a: number }[] = [
+      { gx: 2.2, gy: 1.3, r: 18, rgb: '227,138,59', a: 0.22 },
+      { gx: 4.1, gy: 3.6, r: 12, rgb: '242,214,117', a: 0.16 },
+      { gx: 9.3, gy: 1.4, r: 20, rgb: '227,138,59', a: 0.26 },
+      { gx: 3.2, gy: 9.5, r: 14, rgb: '199,164,224', a: 0.16 },
+      { gx: 6.5, gy: 12.0, r: 16, rgb: '242,214,117', a: 0.2 },
+      { gx: 8.8, gy: 9.4, r: 11, rgb: '242,214,117', a: 0.12 },
+    ];
+    wctx.save();
+    for (const pool of pools) {
+      const p = this.isoToWorld(pool.gx, pool.gy, 0);
+      for (let y = -pool.r; y <= pool.r; y++) {
+        for (let x = -pool.r * 2; x <= pool.r * 2; x++) {
+          const nx = x / (pool.r * 2);
+          const ny = y / pool.r;
+          const d = nx * nx + ny * ny;
+          if (d > 1) continue;
+          if (((x + y) & 1) !== 0) continue;
+          wctx.fillStyle = `rgba(${pool.rgb},${(pool.a * (1 - d)).toFixed(3)})`;
+          wctx.fillRect(Math.round(p.x + x), Math.round(p.y + y), 1, 1);
         }
       }
     }
@@ -366,70 +415,77 @@ export class IsoRenderer {
     const torch = a.wallTorch[torchFrame];
     const candle = a.candleFrames[candleFrame];
     const list: PropBlit[] = [
-      // —— 식당·부엌 (뒷왼쪽) ——
-      { sprite: hearth, gx: 2.2, gy: 1.15, gz: 4, occlude: true },
-      { sprite: a.barCounter, gx: 1.35, gy: 3.4, gz: 1, occlude: true },
-      { sprite: a.innTable, gx: 4.05, gy: 3.7, gz: 1, occlude: true },
-      { sprite: a.chair, gx: 3.35, gy: 3.5, gz: 1, occlude: true },
-      { sprite: a.chair, gx: 4.75, gy: 3.55, gz: 1, occlude: true },
-      { sprite: a.chair, gx: 4.05, gy: 4.45, gz: 1, occlude: true },
-      { sprite: candle, gx: 4.05, gy: 3.55, gz: 12 },
-      { sprite: a.innTable, gx: 5.3, gy: 2.15, gz: 1, occlude: true },
-      { sprite: a.chair, gx: 5.3, gy: 2.7, gz: 1, occlude: true },
-      { sprite: a.treasureChest, gx: 5.5, gy: 1.3, gz: 1, occlude: true },
-      { sprite: slot, gx: 2.15, gy: 5.15, gz: 1, occlude: true },
-      { sprite: a.barrel, gx: 1.25, gy: 4.7, gz: 1, occlude: true },
-      { sprite: a.plant, gx: 5.9, gy: 1.9, gz: 1, occlude: true },
+      // —— 식당·부엌: 벽난로+선반 바, 각도 있는 식탁 ——
+      { sprite: hearth, gx: 2.15, gy: 1.08, gz: 4, occlude: true },
+      { sprite: a.fireplaceMantle, gx: 2.15, gy: 0.92, gz: 16 },
+      { sprite: a.barCounter, gx: 1.28, gy: 3.55, gz: 1, occlude: true },
+      { sprite: a.barStool, gx: 2.18, gy: 2.55, gz: 1, occlude: true },
+      { sprite: a.barStool, gx: 2.28, gy: 3.58, gz: 1, occlude: true },
+      { sprite: a.barStool, gx: 2.08, gy: 4.58, gz: 1, occlude: true },
+      { sprite: a.innTable, gx: 4.35, gy: 3.55, gz: 1, occlude: true },
+      { sprite: a.chair, gx: 3.55, gy: 3.22, gz: 1, occlude: true },
+      { sprite: a.chairAngle, gx: 5.18, gy: 3.32, gz: 1, occlude: true },
+      { sprite: a.chairAngle, gx: 4.05, gy: 4.42, gz: 1, occlude: true },
+      { sprite: a.chair, gx: 5.08, gy: 4.22, gz: 1, occlude: true },
+      { sprite: candle, gx: 4.35, gy: 3.4, gz: 12 },
+      { sprite: a.mugPlate, gx: 4.55, gy: 3.7, gz: 11 },
+      { sprite: a.innTable, gx: 5.58, gy: 1.88, gz: 1, occlude: true },
+      { sprite: a.chairAngle, gx: 5.98, gy: 2.48, gz: 1, occlude: true },
+      { sprite: a.treasureChest, gx: 5.55, gy: 1.18, gz: 1, occlude: true },
+      { sprite: slot, gx: 3.15, gy: 5.22, gz: 1, occlude: true },
+      { sprite: a.barrel, gx: 1.22, gy: 5.15, gz: 1, occlude: true },
+      { sprite: a.plant, gx: 5.75, gy: 5.55, gz: 1, occlude: true },
       { sprite: torch, gx: 1.15, gy: 1.2, gz: 16 },
-      { sprite: a.roomSigns.inn, gx: 3.4, gy: 0.85, gz: 16 },
+      { sprite: a.noticeBoard, gx: 3.35, gy: 0.88, gz: 16 },
+      { sprite: a.roomSigns.inn, gx: 4.2, gy: 0.85, gz: 16 },
 
-      // —— 대장간 코너 (뒷오른쪽) ——
-      { sprite: a.chimneyFlue, gx: 9.35, gy: 0.42, gz: 22 },
-      { sprite: a.chimneyHood, gx: 9.3, gy: 1.02, gz: 14 },
-      { sprite: a.chimneySmoke[frame % a.chimneySmoke.length], gx: 9.35, gy: 0.28, gz: 36 },
-      { sprite: furnace, gx: 9.3, gy: 1.28, gz: 3, occlude: true },
-      { sprite: a.bsAnvil, gx: 8.95, gy: 3.05, gz: 1, occlude: true },
-      { sprite: a.bsWeaponRack, gx: 11.4, gy: 1.35, gz: 2, occlude: true },
-      { sprite: altar, gx: 11.2, gy: 3.85, gz: 1, occlude: true },
-      { sprite: a.barrel, gx: 11.4, gy: 4.85, gz: 1, occlude: true },
-      { sprite: torch, gx: 7.9, gy: 1.15, gz: 16 },
-      { sprite: a.roomSigns.blacksmith, gx: 10.3, gy: 0.85, gz: 16 },
+      // —— 대장간: 돌벽에 박힌 용광로, 그루터기 모루 ——
+      { sprite: a.chimneyFlue, gx: 9.38, gy: 0.4, gz: 22 },
+      { sprite: a.chimneyHood, gx: 9.32, gy: 1.0, gz: 14 },
+      { sprite: a.chimneySmoke[frame % a.chimneySmoke.length], gx: 9.38, gy: 0.26, gz: 36 },
+      { sprite: furnace, gx: 9.32, gy: 1.22, gz: 3, occlude: true },
+      { sprite: a.anvilStump, gx: 8.42, gy: 2.88, gz: 1, occlude: true },
+      { sprite: a.bsWeaponRack, gx: 11.42, gy: 1.28, gz: 2, occlude: true },
+      { sprite: altar, gx: 11.05, gy: 4.18, gz: 1, occlude: true },
+      { sprite: a.barrel, gx: 11.28, gy: 4.98, gz: 1, occlude: true },
+      { sprite: a.sack, gx: 10.55, gy: 4.72, gz: 1, occlude: true },
+      { sprite: torch, gx: 7.85, gy: 1.12, gz: 16 },
+      { sprite: a.roomSigns.blacksmith, gx: 10.4, gy: 0.85, gz: 16 },
 
-      // —— 포션 공방 (앞왼쪽) ——
-      { sprite: a.potShelf, gx: 1.2, gy: 8.6, gz: 2, occlude: true },
-      { sprite: a.potShelf, gx: 1.2, gy: 10.3, gz: 2, occlude: true },
-      { sprite: cauldron, gx: 3.25, gy: 9.45, gz: 1, occlude: true },
-      { sprite: a.herbRack, gx: 2.05, gy: 11.45, gz: 2, occlude: true },
-      { sprite: a.potCrystal, gx: 4.85, gy: 11.2, gz: 1, occlude: true },
-      { sprite: a.plant, gx: 5.05, gy: 7.9, gz: 1, occlude: true },
-      { sprite: torch, gx: 1.15, gy: 7.3, gz: 16 },
-      { sprite: a.roomSigns.potion, gx: 3.2, gy: 7.35, gz: 8 },
+      // —— 포션 공방: 벽감 선반과 매달린 약초 ——
+      { sprite: a.potShelf, gx: 1.15, gy: 8.15, gz: 2, occlude: true },
+      { sprite: a.potShelf, gx: 1.15, gy: 9.45, gz: 2, occlude: true },
+      { sprite: a.potShelf, gx: 1.15, gy: 10.75, gz: 2, occlude: true },
+      { sprite: a.hangingHerbs, gx: 2.05, gy: 8.25, gz: 18 },
+      { sprite: a.hangingHerbs, gx: 2.18, gy: 10.55, gz: 18 },
+      { sprite: cauldron, gx: 3.15, gy: 9.62, gz: 1, occlude: true },
+      { sprite: a.potCrystal, gx: 4.55, gy: 11.15, gz: 1, occlude: true },
+      { sprite: a.plant, gx: 4.85, gy: 8.15, gz: 1, occlude: true },
+      { sprite: torch, gx: 1.15, gy: 7.25, gz: 16 },
+      { sprite: a.roomSigns.potion, gx: 1.45, gy: 7.15, gz: 14 },
 
-      // —— 교역소·출입구 (앞오른쪽) ——
-      { sprite: a.tradeCounter, gx: 9.5, gy: 9.05, gz: 1, occlude: true },
-      { sprite: a.tradeCrates, gx: 11.25, gy: 10.4, gz: 1, occlude: true },
-      { sprite: a.treasureChest, gx: 11.25, gy: 8.2, gz: 1, occlude: true },
-      { sprite: a.tradeMushroom, gx: 8.15, gy: 11.25, gz: 1, occlude: true },
-      { sprite: a.plant, gx: 11.4, gy: 11.4, gz: 1, occlude: true },
+      // —— 교역소: 입구를 향한 상점 카운터 ——
+      { sprite: a.tradeCounter, gx: 8.75, gy: 9.52, gz: 1, occlude: true },
+      { sprite: a.scales, gx: 8.92, gy: 9.32, gz: 11 },
+      { sprite: a.tradeCrates, gx: 10.85, gy: 9.15, gz: 1, occlude: true },
+      { sprite: a.tradeCrates, gx: 11.22, gy: 10.35, gz: 1, occlude: true },
+      { sprite: a.treasureChest, gx: 11.15, gy: 7.95, gz: 1, occlude: true },
+      { sprite: a.roomSigns.trade, gx: 7.55, gy: 11.32, gz: 8 },
+      { sprite: a.tradeMushroom, gx: 11.32, gy: 11.22, gz: 1, occlude: true },
+      { sprite: a.plant, gx: 9.15, gy: 11.35, gz: 1, occlude: true },
       { sprite: a.doormat, gx: ENTRANCE.gx, gy: 12.42, gz: 0 },
       { sprite: a.entranceDoor, gx: ENTRANCE.gx, gy: 12.08, gz: 1, occlude: true },
       { sprite: a.entranceLamp[torchFrame % a.entranceLamp.length], gx: 5.45, gy: 12.0, gz: 16 },
-      { sprite: a.barrel, gx: 8.2, gy: 8.3, gz: 1, occlude: true },
-      { sprite: torch, gx: 7.9, gy: 7.3, gz: 16 },
-      { sprite: a.roomSigns.trade, gx: 10.2, gy: 7.35, gz: 8 },
+      { sprite: a.barrel, gx: 9.15, gy: 7.82, gz: 1, occlude: true },
+      { sprite: a.sack, gx: 10.15, gy: 7.55, gz: 1, occlude: true },
+      { sprite: torch, gx: 11.4, gy: 7.2, gz: 16 },
 
-      // —— 공용: 계단, 기둥, 낮은 칸막이 ——
-      { sprite: a.stairs, gx: 2.35, gy: 5.85, gz: 3, occlude: true },
-      { sprite: a.pillar, gx: 6.15, gy: 6.15, gz: 2, occlude: true },
-      { sprite: a.pillar, gx: 7.7, gy: 6.15, gz: 2, occlude: true },
-
-      // 식당↔대장간 낮은 칸막이 (홀 쪽은 틔움)
-      { sprite: w.lowRailRight, gx: 6.45, gy: 1.4, gz: 1, occlude: true },
-      { sprite: w.lowRailRight, gx: 6.45, gy: 2.4, gz: 1, occlude: true },
-      { sprite: w.lowRailRight, gx: 6.45, gy: 3.4, gz: 1, occlude: true },
-      // 식당↔공방 낮은 칸막이
-      { sprite: w.lowRailLeft, gx: 2.6, gy: 6.45, gz: 1, occlude: true },
-      { sprite: w.lowRailLeft, gx: 3.6, gy: 6.45, gz: 1, occlude: true },
+      // —— 건축: 계단·다락 난간·어긋난 기둥·보 ——
+      { sprite: a.stairs, gx: 2.15, gy: 6.25, gz: 3, occlude: true },
+      { sprite: a.pillar, gx: 5.85, gy: 6.45, gz: 2, occlude: true },
+      { sprite: a.pillar, gx: 8.45, gy: 6.65, gz: 2, occlude: true },
+      { sprite: a.sack, gx: 6.85, gy: 5.15, gz: 1, occlude: true },
+      { sprite: a.barrel, gx: 7.35, gy: 8.55, gz: 1, occlude: true },
 
       // 앞쪽 잘라낸 낮은 난간 (출입구는 비움)
       { sprite: w.lowRailRight, gx: 1.0, gy: 12.1, gz: 1 },
@@ -454,8 +510,8 @@ export class IsoRenderer {
       { sprite: w.lowRailLeft, gx: 12.1, gy: 11.0, gz: 1 },
       { sprite: w.lowRailLeft, gx: 12.1, gy: 12.0, gz: 1 },
 
-      { sprite: candle, gx: 1.6, gy: 3.2, gz: 12 },
-      { sprite: candle, gx: 9.5, gy: 8.7, gz: 12 },
+      { sprite: candle, gx: 1.7, gy: 3.35, gz: 12 },
+      { sprite: candle, gx: 8.7, gy: 9.2, gz: 12 },
     ];
 
     if (activeDungeon) {
@@ -467,6 +523,18 @@ export class IsoRenderer {
 
   private blitProp(p: PropBlit): void {
     const pos = this.isoToWorld(p.gx, p.gy, p.gz ?? 0);
+    if ((p.gz ?? 0) < 8 && p.occlude) {
+      const sx = Math.round(pos.x);
+      const sy = Math.round(pos.y + 3);
+      this.worldCtx.fillStyle = 'rgba(39,28,25,0.28)';
+      for (let dy = -3; dy <= 3; dy++) {
+        for (let dx = -8; dx <= 8; dx++) {
+          if (Math.abs(dx) + Math.abs(dy) * 2 > 9) continue;
+          if (((dx + dy) & 1) !== 0) continue;
+          this.worldCtx.fillRect(sx + dx, sy + dy, 1, 1);
+        }
+      }
+    }
     const x = Math.round(pos.x - p.sprite.width / 2);
     const y = Math.round(pos.y - p.sprite.height + 6);
     this.worldCtx.drawImage(p.sprite, x, y);

@@ -21,6 +21,7 @@ import {
   claimDungeonReward,
   createDungeonRun,
   facilityUpgradeGold,
+  monsterMaxHpFor,
   spinDungeonRewardMultiplier,
   stepDungeonCombat,
 } from './gameLogic';
@@ -29,6 +30,7 @@ import {
   mountReelFrame,
   themeForTab,
   getEnchantRuneSprite,
+  normalizeReelId,
   ReelId,
 } from './reelSprites';
 import {
@@ -136,6 +138,7 @@ class KairoSlotInnApp {
   private dungeonView: DungeonRenderer | null = null;
   private watchingDungeon = false;
   private rewardSpinning = false;
+  private combatReels: PixelReelMachine | null = null;
 
   private lastFrameTime = performance.now();
   private calendarAccum = 0;
@@ -474,6 +477,8 @@ class KairoSlotInnApp {
     }
     if (outcome.slotTriggered) {
       this.dungeonView?.spinCombatReels(run.currentSlotSymbols);
+      const faces = run.currentSlotSymbols.map((sym) => normalizeReelId(sym, 'combat'));
+      this.combatReels?.spinTo(faces, outcome.slotType === 'jackpot', () => {});
       if (outcome.slotType === 'jackpot') sfx.playSuccess();
     }
     for (const lv of outcome.leveledUpHeroes) {
@@ -2126,6 +2131,7 @@ class KairoSlotInnApp {
     this.watchingDungeon = true;
     const stage = document.getElementById('dungeon-stage');
     stage?.classList.remove('hidden');
+    this.syncCombatReelBar();
     this.dungeonView?.resize();
     this.dungeonView?.attach(this.save, this.activeDungeon, true);
     this.renderDungeonHud();
@@ -2135,7 +2141,26 @@ class KairoSlotInnApp {
   public closeDungeonView(): void {
     this.watchingDungeon = false;
     document.getElementById('dungeon-stage')?.classList.add('hidden');
+    this.syncCombatReelBar();
     this.syncExpeditionChip();
+  }
+
+  private syncCombatReelBar(): void {
+    const bar = document.getElementById('dungeon-reel-bar');
+    const host = document.getElementById('combat-reels-host');
+    if (!bar || !host) return;
+    if (!this.watchingDungeon || !this.activeDungeon) {
+      bar.classList.add('hidden');
+      this.combatReels?.destroy();
+      this.combatReels = null;
+      return;
+    }
+    bar.classList.remove('hidden');
+    const faces = this.activeDungeon.currentSlotSymbols.map((sym) =>
+      normalizeReelId(sym, 'combat')
+    ) as ReelId[];
+    this.combatReels?.destroy();
+    this.combatReels = mountReelFrame(host, faces, 'combat');
   }
 
   private syncExpeditionChip(): void {
@@ -2258,6 +2283,19 @@ class KairoSlotInnApp {
         run.accumulatedGold = Math.max(run.accumulatedGold, 200);
         run.rewardSpun = false;
         this.openDungeonView();
+        this.renderDungeonHud();
+      },
+      forceBoss: (id: string) => {
+        this.startDungeonRun(id);
+        const run = this.activeDungeon!;
+        const zone = DUNGEON_ZONES.find((z) => z.id === id) || DUNGEON_ZONES[0];
+        run.wave = run.maxWaves;
+        run.isBoss = true;
+        run.monsterName = zone.bossName;
+        run.monsterMaxHp = monsterMaxHpFor(zone.recLevel, true);
+        run.monsterHp = run.monsterMaxHp;
+        run.status = 'fighting';
+        this.dungeonView?.attach(this.save, run, true);
         this.renderDungeonHud();
       },
       spinCurrent: () => {

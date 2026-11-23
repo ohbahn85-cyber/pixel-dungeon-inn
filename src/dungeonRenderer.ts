@@ -2,16 +2,24 @@ import {
   ActorArchetypeId,
   PixelSpriteAtlas,
   createPixelSpriteAtlas,
+  drawTinyPixelText,
 } from './pixelSprites';
-import { getReelSprite, normalizeReelId, ReelId } from './reelSprites';
+import { normalizeReelId, ReelId } from './reelSprites';
 import { CombatTickOutcome } from './gameLogic';
 import { getHeroCombatStats } from './slotEngine';
 import { ActiveDungeonRun, GameSaveData, HeroUnit } from './types';
+import {
+  ThemeId,
+  MonState,
+  getMonsterSprite,
+  getThemeProp,
+  THEME_SKY,
+  THEME_FLOOR,
+  THEME_PARTICLE,
+} from './dungeonArt';
 
 const WORLD_W = 320;
 const WORLD_H = 180;
-
-type ThemeId = 'dungeon_1' | 'dungeon_2' | 'dungeon_3' | 'dungeon_4';
 
 interface FltNum {
   x: number;
@@ -31,291 +39,65 @@ interface Spark {
   color: string;
 }
 
-function hexRgba(hex: string, a = 255): [number, number, number, number] {
-  const c = hex.replace('#', '');
-  const n = parseInt(c, 16);
-  return [(n >> 16) & 255, (n >> 8) & 255, n & 255, a];
+interface Atmos {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  size: number;
+  life: number;
+  max: number;
+  color: string;
 }
 
-function bake(rows: string[], map: Record<string, string>): HTMLCanvasElement {
-  const h = rows.length;
-  const w = rows.reduce((m, r) => Math.max(m, r.length), 0);
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext('2d')!;
-  const img = ctx.createImageData(w, h);
-  const d = img.data;
-  for (let y = 0; y < h; y++) {
-    const row = rows[y];
-    for (let x = 0; x < row.length; x++) {
-      const hex = map[row[x]];
-      if (!hex) continue;
-      const [r, g, b, a] = hexRgba(hex);
-      const i = (y * w + x) * 4;
-      d[i] = r; d[i + 1] = g; d[i + 2] = b; d[i + 3] = a;
+function drawOutlinedText(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  color: string,
+  scale = 2
+): void {
+  const tmp = document.createElement('canvas');
+  tmp.width = text.length * 4 + 4;
+  tmp.height = 8;
+  const tctx = tmp.getContext('2d')!;
+  tctx.imageSmoothingEnabled = false;
+  drawTinyPixelText(tctx, text, 1, 1, '#271c19', '');
+  // inflate outline
+  const img = tctx.getImageData(0, 0, tmp.width, tmp.height);
+  const out = tctx.createImageData(tmp.width, tmp.height);
+  for (let py = 0; py < tmp.height; py++) {
+    for (let px = 0; px < tmp.width; px++) {
+      const i = (py * tmp.width + px) * 4;
+      let ink = img.data[i + 3] > 0;
+      if (!ink) {
+        for (let oy = -1; oy <= 1 && !ink; oy++) {
+          for (let ox = -1; ox <= 1; ox++) {
+            const nx = px + ox;
+            const ny = py + oy;
+            if (nx < 0 || ny < 0 || nx >= tmp.width || ny >= tmp.height) continue;
+            if (img.data[(ny * tmp.width + nx) * 4 + 3] > 0) ink = true;
+          }
+        }
+        if (ink) {
+          out.data[i] = 39;
+          out.data[i + 1] = 28;
+          out.data[i + 2] = 25;
+          out.data[i + 3] = 255;
+        }
+      } else {
+        const n = parseInt(color.slice(1), 16);
+        out.data[i] = (n >> 16) & 255;
+        out.data[i + 1] = (n >> 8) & 255;
+        out.data[i + 2] = n & 255;
+        out.data[i + 3] = 255;
+      }
     }
   }
-  ctx.putImageData(img, 0, 0);
-  return canvas;
-}
-
-const P: Record<string, string> = {
-  O: '#271c19', o: '#3a2a22', S: '#1d1526',
-  s: '#f4cfa6', d: '#dba87b', p: '#d96b70', e: '#271c19', w: '#f5efe6', g: '#d6cbb9',
-  W: '#d4a36a', u: '#b58046', n: '#8c5c2b', m: '#633d19',
-  Y: '#f2d675', y: '#d6ac47', k: '#a67c26', K: '#735114',
-  I: '#cbd5dc', i: '#98a7b3', j: '#687785', J: '#434e59',
-  R: '#e06c62', r: '#b84640', c: '#8a2f2c', C: '#5c1d1c',
-  F: '#fae078', f: '#e38a3b', l: '#b84e22', L: '#752b13',
-  G: '#a5bd7e', v: '#7a9658', h: '#566e3d', H: '#384a27',
-  B: '#8fb3bf', b: '#638896', t: '#466470', T: '#2d434d',
-  P: '#c7a4e0', a: '#946eb3', q: '#684a82', Q: '#442f57',
-  // theme extras
-  M: '#6b8f4a', N: '#4e6a34', A: '#cfe3c0',
-  E: '#d9f0f5', U: '#8ec5d4', V: '#3f6f86',
-  D: '#c9a44c', X: '#8a6a28', Z: '#efe0a8',
-  Lava: '',
-};
-
-function spr(rows: string[]): HTMLCanvasElement {
-  return bake(rows, P);
-}
-
-function themeMonster(zone: ThemeId, boss: boolean, frame: number): HTMLCanvasElement {
-  const f = frame & 1;
-  if (zone === 'dungeon_1') {
-    if (boss) {
-      return spr([
-        '....GGHHGG....',
-        '...GRwwRRHG...',
-        '..GHReeRRRHG..',
-        '.GHRRRRRRRHG.',
-        '.GHvRRRRRvHG.',
-        'GHHvvvvvvHHG',
-        'HvvGGvGGvvvH',
-        '.HvGwwwwGvH.',
-        '.HvvvvvvvvH.',
-        '..Hn....nH..',
-        '..Hn....nH..',
-        '...H....H...',
-      ]);
-    }
-    return spr([
-      f
-        ? [
-            '...ORRRRO...',
-            '..ORwRRRRO..',
-            '.ORRRRcRRO.',
-            '.ORRcRRRcO.',
-            '..OOOOOOO..',
-            '...OvvvO...',
-            '...OvGvO...',
-            '....OOO....',
-          ]
-        : [
-            '....ORRRO...',
-            '...ORwRRRO..',
-            '..ORRRRcRO..',
-            '..ORRcRRRO..',
-            '...OOOOOO...',
-            '....OvvO....',
-            '....OvGO....',
-            '.....OO.....',
-          ],
-    ].flat());
-  }
-  if (zone === 'dungeon_2') {
-    if (boss) {
-      return spr([
-        '...wBBBwBBw...',
-        '..wBBwwwBBw...',
-        '.wBBeewweeBw..',
-        '.wBBBBBBBBw...',
-        'wwBBBBBBBBww..',
-        '.wBBttttBBw...',
-        '..wBTTTTBw....',
-        '..wT....Tw....',
-        '..wT....Tw....',
-        '...T....T.....',
-      ]);
-    }
-    return spr([
-      '..wBBBw...',
-      '.wBwwwBw..',
-      '.wBeeeBw..',
-      '.wBBBBBw..',
-      'wwBttBww..',
-      '.wT..Tw...',
-      '.wT..Tw...',
-      '..T..T....',
-    ]);
-  }
-  if (zone === 'dungeon_3') {
-    if (boss) {
-      return spr([
-        '...YYYYYYYY...',
-        '..YYkkkkkkYY..',
-        '.YYkYwwYYkYY.',
-        '.YkYeeeeYYkY.',
-        '.YYYYYYYYYYY.',
-        'YYYyyyyyyyYYY',
-        '.YYkkkkkkYY.',
-        '.Yk......kY.',
-        '.Yk......kY.',
-        '..Y......Y..',
-      ]);
-    }
-    return spr([
-      '..OJJJO..',
-      '.OJiiiJO.',
-      '.OJeeiJO.',
-      '.OJiiiJO.',
-      'OJYYYYYJO',
-      '.OJjjjJO.',
-      '.OJ...JO.',
-      '..J...J..',
-    ]);
-  }
-  // lava fortress
-  if (boss) {
-    return spr([
-      '..f..RR..f..',
-      '.RfRRRRRRfR.',
-      'RRRRwwwwRRRR',
-      'RRrReeeeRrRR',
-      '.RRRRRRRRRR.',
-      'RRRllllllRRR',
-      '.RRlFFFFlRR.',
-      '.RR......RR.',
-      'RfR......RfR',
-      'f.R......R.f',
-    ]);
-  }
-  return spr([
-    '..ORRRO..',
-    '.ORffRRO.',
-    '.OReeeRO.',
-    '.ORrrrRO.',
-    'ORlllllRO',
-    '.ORlFlRO.',
-    '.OR...RO.',
-    '..R...R..',
-  ]);
-}
-
-function themeProp(zone: ThemeId, kind: 'a' | 'b' | 'c', frame = 0): HTMLCanvasElement {
-  if (zone === 'dungeon_1') {
-    if (kind === 'a') {
-      return spr([
-        '.ORRRO.',
-        'ORwRRRO',
-        'ORRRRcO',
-        'OOOOOOO',
-        '..OvO..',
-        '..OvO..',
-      ]);
-    }
-    if (kind === 'b') {
-      return spr([
-        '..GGG..',
-        '.GvvvG.',
-        'GvvvvvG',
-        '.hhhhh.',
-        '..HHH..',
-      ]);
-    }
-    return spr([
-      '...G...',
-      '..GvG..',
-      '.GvhvG.',
-      '..HvH..',
-      '...H...',
-    ]);
-  }
-  if (zone === 'dungeon_2') {
-    if (kind === 'a') {
-      return spr([
-        '...w...',
-        '..wBw..',
-        '.wBBBw.',
-        'wBBEBBw',
-        '.wBBBw.',
-        '..wTw..',
-        '...T...',
-      ]);
-    }
-    if (kind === 'b') {
-      return spr([
-        '.BBBB.',
-        'BwwwBB',
-        'BBBBBB',
-        '.TTTT.',
-      ]);
-    }
-    return spr([
-      '..E..',
-      '.EbE.',
-      'EbBbE',
-      '.EbE.',
-      '..T..',
-    ]);
-  }
-  if (zone === 'dungeon_3') {
-    if (kind === 'a') {
-      return spr([
-        '.YYYYY.',
-        'YYkkkYY',
-        'YkYYYkY',
-        'YkYYYYk',
-        'YkkkkkY',
-        '.YkkKY.',
-        '..YYY..',
-      ]);
-    }
-    if (kind === 'b') {
-      return spr([
-        'ZYYYYZ',
-        'YXkkXY',
-        'YXXXXY',
-        'YXkkXY',
-        'YYYYYY',
-      ]);
-    }
-    return spr([
-      '.YYY.',
-      'YkwkY',
-      'YkkkY',
-      '.YYY.',
-    ]);
-  }
-  // lava
-  if (kind === 'a') {
-    const glow = frame ? 'F' : 'f';
-    return spr([
-      '.JJJJJ.',
-      'JJoooJJ',
-      `JJ${glow}${glow}${glow}JJ`,
-      'JJlllJJ',
-      'JJLLLJJ',
-      '.JJJJJ.',
-    ]);
-  }
-  if (kind === 'b') {
-    return spr([
-      'CJJJC',
-      'JlllJ',
-      'JfLfJ',
-      'JLLLJ',
-      'CJJJC',
-    ]);
-  }
-  return spr([
-    '.L.',
-    'LfL',
-    'fFf',
-    'LlL',
-  ]);
+  tctx.putImageData(out, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(tmp, 0, 0, tmp.width, tmp.height, Math.round(x), Math.round(y), tmp.width * scale, tmp.height * scale);
 }
 
 export class DungeonRenderer {
@@ -331,6 +113,7 @@ export class DungeonRenderer {
   private viewH = 420;
   private numbers: FltNum[] = [];
   private sparks: Spark[] = [];
+  private atmos: Atmos[] = [];
   private partyLunge = 0;
   private monsterHit = 0;
   private monsterLunge = 0;
@@ -343,6 +126,7 @@ export class DungeonRenderer {
   private lastWave = 1;
   private save: GameSaveData | null = null;
   private run: ActiveDungeonRun | null = null;
+  private dying = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -360,9 +144,13 @@ export class DungeonRenderer {
 
   public resize(): void {
     const rect = this.canvas.parentElement?.getBoundingClientRect();
+    const bar = document.getElementById('dungeon-reel-bar');
+    const barH = bar && !bar.classList.contains('hidden')
+      ? Math.max(72, Math.round(bar.getBoundingClientRect().height))
+      : 0;
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
     this.viewW = rect ? Math.max(320, Math.floor(rect.width)) : 960;
-    this.viewH = rect ? Math.max(220, Math.floor(rect.height)) : 540;
+    this.viewH = rect ? Math.max(180, Math.floor(rect.height - barH)) : 540;
     this.canvas.width = Math.round(this.viewW * dpr);
     this.canvas.height = Math.round(this.viewH * dpr);
     this.canvas.style.width = `${this.viewW}px`;
@@ -381,80 +169,90 @@ export class DungeonRenderer {
       this.monsterWalk = 1;
       this.numbers = [];
       this.sparks = [];
+      this.dying = 0;
+      this.seedAtmos((run.zoneId as ThemeId) || 'dungeon_1');
     }
     if (this.run && run.wave !== this.lastWave) {
       this.monsterWalk = 1;
       this.walkIn = 0.25;
+      this.dying = 0;
+      this.numbers = [];
     }
     this.lastWave = run.wave;
     this.run = run;
   }
 
+  public getReelState(): { faces: ReelId[]; spinning: boolean; flash: number } {
+    return { faces: this.reelFaces, spinning: this.reelSpin > 0, flash: this.reelFlash };
+  }
+
   public pushOutcome(outcome: CombatTickOutcome): void {
     const run = this.run;
     if (!run) return;
-    const mx = 230;
-    const my = 100;
+    const mx = 228;
+    const my = 108;
     if (outcome.damageToMonster) {
       this.partyLunge = 1;
       this.monsterHit = 1;
       this.numbers.push({
-        x: mx + (Math.random() * 16 - 8),
-        y: my - 18,
+        x: mx + (Math.random() * 18 - 9),
+        y: my - 28,
         text: `-${outcome.damageToMonster}`,
         color: '#f2d675',
         age: 0,
-        maxAge: 0.9,
+        maxAge: 0.95,
       });
-      this.burst(mx, my, '#f2d675', 8);
+      this.burst(mx, my, '#f2d675', 10);
     }
     if (outcome.heroHits) {
       this.monsterLunge = 1;
       for (const h of outcome.heroHits) {
-        const px = 70 + h.heroIndex * 22;
-        const py = 118 - (h.heroIndex % 2) * 8;
+        const px = 62 + h.heroIndex * 28;
+        const py = 128 - (h.heroIndex % 2) * 10;
         this.numbers.push({
           x: px,
-          y: py - 16,
+          y: py - 20,
           text: `-${h.damage}`,
           color: '#e06c62',
           age: 0,
-          maxAge: 0.8,
+          maxAge: 0.85,
         });
-        this.burst(px, py, '#e06c62', 5);
+        this.burst(px, py, '#e06c62', 6);
       }
     }
     if (outcome.heals) {
       for (const h of outcome.heals) {
-        const px = 70 + h.heroIndex * 22;
+        const px = 62 + h.heroIndex * 28;
         this.numbers.push({
           x: px,
-          y: 96,
+          y: 100,
           text: `+${h.amount}`,
           color: '#a5bd7e',
           age: 0,
-          maxAge: 0.9,
+          maxAge: 0.95,
         });
       }
     }
     if (outcome.slotType === 'crit' || outcome.slotType === 'jackpot') {
-      const amt = outcome.slotType === 'jackpot'
-        ? Math.round(run.monsterMaxHp * 0.45)
-        : Math.round(run.monsterMaxHp * 0.22);
+      const amt =
+        outcome.slotType === 'jackpot'
+          ? Math.round(run.monsterMaxHp * 0.45)
+          : Math.round(run.monsterMaxHp * 0.22);
       this.numbers.push({
         x: mx,
-        y: my - 30,
+        y: my - 40,
         text: `-${amt}`,
         color: outcome.slotType === 'jackpot' ? '#fae078' : '#e38a3b',
         age: 0,
-        maxAge: 1.1,
+        maxAge: 1.15,
       });
-      this.burst(mx, my, '#fae078', 14);
+      this.burst(mx, my, '#fae078', 16);
       this.monsterHit = 1;
     }
     if (outcome.waveCleared) {
-      this.burst(mx, my, '#f5efe6', 18);
+      this.burst(mx, my, '#f5efe6', 20);
       this.monsterHit = 1;
+      this.dying = 1;
     }
   }
 
@@ -469,11 +267,29 @@ export class DungeonRenderer {
       const a = Math.random() * Math.PI * 2;
       const s = 18 + Math.random() * 40;
       this.sparks.push({
-        x, y,
+        x,
+        y,
         vx: Math.cos(a) * s,
         vy: Math.sin(a) * s - 10,
         life: 0.35 + Math.random() * 0.25,
         color,
+      });
+    }
+  }
+
+  private seedAtmos(theme: ThemeId): void {
+    this.atmos = [];
+    const cols = THEME_PARTICLE[theme];
+    for (let i = 0; i < 36; i++) {
+      this.atmos.push({
+        x: Math.random() * WORLD_W,
+        y: Math.random() * WORLD_H,
+        vx: (Math.random() - 0.5) * 8,
+        vy: theme === 'dungeon_4' ? -(8 + Math.random() * 16) : theme === 'dungeon_1' ? -(4 + Math.random() * 8) : (Math.random() - 0.5) * 6,
+        size: 1 + (i % 2),
+        life: Math.random(),
+        max: 4 + Math.random() * 5,
+        color: cols[i % cols.length],
       });
     }
   }
@@ -499,16 +315,20 @@ export class DungeonRenderer {
     this.reelSpin = Math.max(0, this.reelSpin - dt);
     this.reelFlash = Math.max(0, this.reelFlash - dt);
     this.reelOffset += dt * (this.reelSpin > 0 ? 14 : 0);
+    if (this.dying > 0) this.dying = Math.min(1.2, this.dying + dt * 1.4);
 
     this.drawBackdrop(theme, timeSec);
     this.drawFloor(theme);
-    this.drawProps(theme, timeSec);
+    this.drawMidProps(theme, timeSec, 'back');
     if (run && this.save) {
       this.drawCombatants(theme, timeSec);
       this.drawBars();
       this.drawWavePips();
-      this.drawCombatReels();
     }
+    this.drawMidProps(theme, timeSec, 'front');
+    this.stepAtmos(dt, theme);
+    this.drawAtmos();
+    this.drawLighting(theme, timeSec);
     this.stepFx(dt);
     this.drawFx();
 
@@ -518,6 +338,10 @@ export class DungeonRenderer {
     sctx.fillRect(0, 0, this.viewW, this.viewH);
     sctx.drawImage(
       this.world,
+      0,
+      0,
+      WORLD_W,
+      WORLD_H,
       this.offsetX,
       this.offsetY,
       WORLD_W * this.scale,
@@ -527,117 +351,219 @@ export class DungeonRenderer {
 
   private drawBackdrop(theme: ThemeId, t: number): void {
     const ctx = this.wctx;
-    const skies: Record<ThemeId, [string, string]> = {
-      dungeon_1: ['#2a3a28', '#6a8450'],
-      dungeon_2: ['#1a2c3a', '#4d7a8c'],
-      dungeon_3: ['#3a2a18', '#8a6a32'],
-      dungeon_4: ['#2a1210', '#6a2a18'],
-    };
-    const [top, bot] = skies[theme];
-    const g = ctx.createLinearGradient(0, 0, 0, 110);
+    const [top, mid, bot] = THEME_SKY[theme];
+    const g = ctx.createLinearGradient(0, 0, 0, 100);
     g.addColorStop(0, top);
+    g.addColorStop(0.55, mid);
     g.addColorStop(1, bot);
     ctx.fillStyle = g;
-    ctx.fillRect(0, 0, WORLD_W, 120);
+    ctx.fillRect(0, 0, WORLD_W, 110);
 
-    // dither grain
-    ctx.fillStyle = 'rgba(39,28,25,0.18)';
-    for (let y = 0; y < 120; y += 2) {
-      for (let x = (y & 2); x < WORLD_W; x += 4) ctx.fillRect(x, y, 1, 1);
+    const ground =
+      theme === 'dungeon_1'
+        ? ['#243326', '#1a241c', '#384a27']
+        : theme === 'dungeon_2'
+          ? ['#1b2a33', '#15222c', '#2d434d']
+          : theme === 'dungeon_3'
+            ? ['#3a2a16', '#2c2114', '#5a4320']
+            : ['#2a1410', '#1a0e0c', '#5c1d1c'];
+    ctx.fillStyle = ground[0];
+    ctx.fillRect(0, 88, WORLD_W, WORLD_H - 88);
+    for (let y = 88; y < WORLD_H; y++) {
+      for (let x = 0; x < WORLD_W; x++) {
+        if ((x * 3 + y * 5) % 11 === 0) {
+          ctx.fillStyle = ground[1];
+          ctx.fillRect(x, y, 1, 1);
+        } else if ((x + y * 2) % 13 === 0) {
+          ctx.fillStyle = ground[2];
+          ctx.fillRect(x, y, 2, 1);
+        }
+      }
     }
 
+    const par = Math.sin(t * 0.25) * 4;
+    ctx.globalAlpha = 0.55;
+    this.drawSilhouettes(theme, par - 8, 0.7);
+    ctx.globalAlpha = 0.9;
+    this.drawSilhouettes(theme, par, 1);
+    ctx.globalAlpha = 1;
+
+    // hanging mid-ceiling details
     if (theme === 'dungeon_1') {
       ctx.fillStyle = '#384a27';
-      ctx.fillRect(0, 70, WORLD_W, 40);
-      this.blob('#566e3d', 40, 80, 50, 30);
-      this.blob('#384a27', 200, 74, 70, 36);
+      for (const x of [18, 40, 70, 110, 250, 280, 305]) {
+        const len = 18 + ((x * 3) % 16);
+        ctx.fillRect(x, 0, 3, len);
+        ctx.fillStyle = '#566e3d';
+        ctx.fillRect(x + 3, 2, 2, len - 6);
+        ctx.fillStyle = '#384a27';
+      }
     } else if (theme === 'dungeon_2') {
-      ctx.fillStyle = '#2d434d';
-      ctx.beginPath();
-      ctx.moveTo(0, 110);
-      ctx.lineTo(40, 40);
-      ctx.lineTo(90, 95);
-      ctx.lineTo(140, 30);
-      ctx.lineTo(200, 100);
-      ctx.lineTo(260, 36);
-      ctx.lineTo(320, 110);
-      ctx.fill();
-      ctx.fillStyle = 'rgba(143,179,191,0.35)';
-      for (let i = 0; i < 8; i++) {
-        ctx.fillRect(30 + i * 36, 20 + ((Math.sin(t + i) * 6) | 0), 2, 2);
+      ctx.fillStyle = '#8fb3bf';
+      for (const x of [22, 48, 90, 130, 240, 272, 300]) {
+        const len = 22 + ((x * 5) % 18);
+        for (let y = 0; y < len; y++) {
+          const w = Math.max(1, 4 - Math.floor(y / (len / 4)));
+          ctx.fillStyle = y < 4 ? '#d9f0f5' : y % 5 === 0 ? '#cbd5dc' : '#8fb3bf';
+          ctx.fillRect(x - Math.floor(w / 2), y, w, 1);
+        }
       }
     } else if (theme === 'dungeon_3') {
-      ctx.fillStyle = '#5c4318';
-      ctx.fillRect(0, 50, WORLD_W, 60);
       ctx.fillStyle = '#8a6a28';
-      for (let i = 0; i < 7; i++) {
-        const x = 16 + i * 46;
-        ctx.fillRect(x, 28, 22, 82);
-        ctx.fillStyle = '#c9a44c';
-        ctx.fillRect(x + 2, 30, 18, 6);
-        ctx.fillStyle = '#8a6a28';
+      ctx.fillRect(0, 0, WORLD_W, 10);
+      ctx.fillStyle = '#c4a048';
+      for (let x = 16; x < WORLD_W; x += 42) {
+        ctx.fillRect(x, 10, 4, 16);
+        ctx.fillStyle = '#efe0a8';
+        ctx.fillRect(x + 1, 10, 1, 16);
+        ctx.fillStyle = '#c4a048';
       }
     } else {
-      ctx.fillStyle = '#3d1a12';
-      ctx.fillRect(0, 60, WORLD_W, 50);
-      const flicker = 0.45 + Math.sin(t * 6) * 0.1;
-      ctx.fillStyle = `rgba(227,138,59,${flicker})`;
-      ctx.fillRect(0, 95, WORLD_W, 16);
-      ctx.fillStyle = '#752b13';
-      ctx.fillRect(0, 108, WORLD_W, 8);
+      // lava falls
+      for (const x of [24, 74, 246, 286]) {
+        const flow = Math.floor(t * 28 + x) % 18;
+        for (let y = 0; y < 92; y++) {
+          const w = y > 80 ? 10 : 6;
+          const col = (y + flow) % 6 < 2 ? '#fae078' : (y + flow) % 6 < 4 ? '#e38a3b' : '#b84e22';
+          ctx.fillStyle = col;
+          ctx.fillRect(x, y, w, 1);
+          ctx.fillRect(x + 9, y + 4, 4, 1);
+        }
+        ctx.fillStyle = 'rgba(227,138,59,0.35)';
+        ctx.fillRect(x - 4, 88, 20, 8);
+      }
+      // chains
+      ctx.fillStyle = '#434e59';
+      for (const x of [140, 170, 200]) {
+        for (let y = 0; y < 36; y += 4) ctx.fillRect(x, y, 2, 3);
+      }
     }
   }
 
-  private blob(color: string, x: number, y: number, w: number, h: number): void {
+  private drawSilhouettes(theme: ThemeId, ox: number, depth: number): void {
     const ctx = this.wctx;
-    ctx.fillStyle = color;
-    ctx.fillRect(x, y, w, h);
-    ctx.fillRect(x + 8, y - 10, w - 16, 12);
+    const yBase = 70 + (1 - depth) * 10;
+    if (theme === 'dungeon_1') {
+      const dark = depth > 0.8 ? '#1a241c' : '#121810';
+      const mid = depth > 0.8 ? '#243326' : '#1a241c';
+      const leaf = depth > 0.8 ? '#4e6638' : '#243326';
+      const trees = [8, 36, 68, 108, 198, 232, 268, 304];
+      for (const tx of trees) {
+        const x = Math.round(tx + ox);
+        ctx.fillStyle = '#3a2a22';
+        ctx.fillRect(x + 8, yBase - 10, 5, 22);
+        ctx.fillStyle = mid;
+        ctx.fillRect(x, yBase - 28, 22, 14);
+        ctx.fillRect(x + 3, yBase - 34, 16, 10);
+        ctx.fillStyle = leaf;
+        ctx.fillRect(x + 6, yBase - 38, 10, 8);
+        ctx.fillRect(x + 2, yBase - 24, 6, 4);
+        ctx.fillStyle = dark;
+        ctx.fillRect(x + 16, yBase - 20, 6, 8);
+      }
+    } else if (theme === 'dungeon_2') {
+      ctx.fillStyle = depth > 0.8 ? '#15222c' : '#0e181f';
+      ctx.beginPath();
+      ctx.moveTo(0, 90);
+      for (let x = 0; x <= WORLD_W; x += 20) {
+        const h = 40 + Math.sin(x * 0.04 + ox * 0.1) * 18;
+        ctx.lineTo(x + ox, 90 - h);
+      }
+      ctx.lineTo(WORLD_W, 90);
+      ctx.closePath();
+      ctx.fill();
+    } else if (theme === 'dungeon_3') {
+      ctx.fillStyle = depth > 0.8 ? '#2c2114' : '#1d160e';
+      for (const x of [20, 70, 160, 230, 290].map((v) => v + ox)) {
+        ctx.fillRect(x, yBase - 50, 18, 60);
+        ctx.fillRect(x - 4, yBase - 56, 26, 8);
+        ctx.fillStyle = '#5a4320';
+        ctx.fillRect(x + 4, yBase - 40, 4, 8);
+        ctx.fillRect(x + 10, yBase - 28, 4, 8);
+        ctx.fillStyle = depth > 0.8 ? '#2c2114' : '#1d160e';
+      }
+    } else {
+      ctx.fillStyle = depth > 0.8 ? '#1a0e0c' : '#120808';
+      ctx.beginPath();
+      ctx.moveTo(0, 95);
+      ctx.lineTo(40 + ox, 40);
+      ctx.lineTo(80 + ox, 70);
+      ctx.lineTo(130 + ox, 30);
+      ctx.lineTo(180 + ox, 55);
+      ctx.lineTo(240 + ox, 24);
+      ctx.lineTo(320, 60);
+      ctx.lineTo(320, 95);
+      ctx.closePath();
+      ctx.fill();
+    }
   }
 
   private drawFloor(theme: ThemeId): void {
     const ctx = this.wctx;
-    const pal: Record<ThemeId, [string, string, string]> = {
-      dungeon_1: ['#7a9658', '#566e3d', '#384a27'],
-      dungeon_2: ['#8fb3bf', '#466470', '#2d434d'],
-      dungeon_3: ['#d6ac47', '#a67c26', '#735114'],
-      dungeon_4: ['#5c1d1c', '#3a2a22', '#271c19'],
-    };
-    const [hi, mid, lo] = pal[theme];
-    ctx.fillStyle = lo;
-    ctx.fillRect(0, 118, WORLD_W, WORLD_H - 118);
-    for (let row = 0; row < 7; row++) {
-      for (let col = -1; col < 14; col++) {
-        const x = col * 28 + (row % 2) * 14 - 8;
-        const y = 118 + row * 9;
-        ctx.fillStyle = (col + row) % 2 === 0 ? hi : mid;
+    const [hi, mid, lo, out] = THEME_FLOOR[theme];
+    const tw = 22;
+    const th = 11;
+    const originX = 160;
+    const originY = 78;
+    for (let gy = 0; gy < 8; gy++) {
+      for (let gx = 0; gx < 10; gx++) {
+        const sx = originX + (gx - gy) * (tw / 2);
+        const sy = originY + (gx + gy) * (th / 2);
+        if (sy < 70 || sy > 175 || sx < -20 || sx > 340) continue;
+        const varn = (gx * 3 + gy * 5) % 4;
+        const top = varn === 0 ? hi : varn === 1 ? mid : varn === 2 ? lo : mid;
         ctx.beginPath();
-        ctx.moveTo(x + 14, y);
-        ctx.lineTo(x + 28, y + 6);
-        ctx.lineTo(x + 14, y + 12);
-        ctx.lineTo(x, y + 6);
+        ctx.moveTo(sx, sy);
+        ctx.lineTo(sx + tw / 2, sy + th / 2);
+        ctx.lineTo(sx, sy + th);
+        ctx.lineTo(sx - tw / 2, sy + th / 2);
         ctx.closePath();
+        ctx.fillStyle = top;
         ctx.fill();
-        ctx.fillStyle = 'rgba(39,28,25,0.35)';
-        ctx.fillRect(x + 13, y + 1, 1, 10);
+        ctx.strokeStyle = out;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        // micro variation
+        ctx.fillStyle = varn === 0 ? hi : lo;
+        ctx.fillRect(sx - 2, sy + 4, 3, 1);
       }
     }
   }
 
-  private drawProps(theme: ThemeId, t: number): void {
-    const f = Math.floor(t * 4) & 1;
-    const spots: { kind: 'a' | 'b' | 'c'; x: number; y: number }[] = [
-      { kind: 'a', x: 18, y: 92 },
-      { kind: 'b', x: 48, y: 86 },
-      { kind: 'c', x: 280, y: 90 },
-      { kind: 'a', x: 300, y: 100 },
-      { kind: 'b', x: 250, y: 86 },
-      { kind: 'c', x: 8, y: 108 },
-    ];
+  private drawMidProps(theme: ThemeId, t: number, layer: 'back' | 'front'): void {
+    const ctx = this.wctx;
+    const f = Math.floor(t * 3);
+    const spots =
+      layer === 'back'
+        ? [
+            { x: 18, y: 84, k: 1, s: 2 },
+            { x: 48, y: 76, k: 0, s: 2 },
+            { x: 78, y: 88, k: 2, s: 2 },
+            { x: 108, y: 80, k: 3, s: 2 },
+            { x: 200, y: 78, k: 1, s: 2 },
+            { x: 236, y: 72, k: 0, s: 2 },
+            { x: 268, y: 84, k: 3, s: 2 },
+            { x: 296, y: 76, k: 2, s: 2 },
+          ]
+        : [
+            { x: 4, y: 132, k: 0, s: 3 },
+            { x: 28, y: 148, k: 3, s: 2 },
+            { x: 52, y: 156, k: 1, s: 2 },
+            { x: 250, y: 150, k: 2, s: 2 },
+            { x: 276, y: 140, k: 1, s: 3 },
+            { x: 302, y: 128, k: 0, s: 2 },
+          ];
     for (const s of spots) {
-      const p = themeProp(theme, s.kind, f);
-      this.wctx.drawImage(p, s.x, s.y);
+      const spr = getThemeProp(theme, s.k, f);
+      ctx.drawImage(spr, 0, 0, spr.width, spr.height, s.x, s.y, spr.width * s.s, spr.height * s.s);
     }
+  }
+
+  private monState(_t: number): MonState {
+    if (this.dying > 0.15) return 'death';
+    if (this.monsterHit > 0.35) return 'hit';
+    if (this.monsterLunge > 0.25) return 'attack';
+    return 'idle';
   }
 
   private heroArchetype(hero: HeroUnit): ActorArchetypeId {
@@ -657,54 +583,51 @@ export class DungeonRenderer {
   }
 
   private drawCombatants(theme: ThemeId, t: number): void {
+    const ctx = this.wctx;
     const run = this.run!;
     const save = this.save!;
     const atlas = this.ensureAtlas();
     const walkOff = Math.round(this.walkIn * -70);
     const monOff = Math.round(this.monsterWalk * 80);
     const lunge = Math.round(Math.sin((1 - this.partyLunge) * Math.PI) * (this.partyLunge > 0 ? 10 : 0));
-    const mhit = this.monsterHit > 0.4 ? 2 : 0;
     const mlunge = Math.round(this.monsterLunge * -8);
 
     run.partyIds.forEach((hid, i) => {
       const hero = save.heroes.find((h) => h.id === hid);
       if (!hero) return;
       const dead = hero.currentHp <= 0;
-      const x = 54 + i * 22 + walkOff + lunge;
-      const y = 112 - (i % 2) * 10 + (dead ? 6 : 0);
+      const x = 48 + i * 28 + walkOff + lunge;
+      const y = 126 - (i % 2) * 12 + (dead ? 6 : 0);
       const state = dead ? 'idle' : this.partyLunge > 0.2 ? 'work' : this.walkIn > 0 ? 'walk' : 'idle';
       const frame = Math.floor(t * (state === 'walk' ? 8 : 4)) & 3;
-      const spr = atlas.getCharacterSprite(
-        this.heroArchetype(hero),
-        state,
-        'se',
-        frame
-      );
-      if (dead) this.wctx.globalAlpha = 0.45;
-      this.wctx.drawImage(spr, x, y - spr.height + 8);
-      this.wctx.globalAlpha = 1;
+      const spr = atlas.getCharacterSprite(this.heroArchetype(hero), state, 'se', frame);
+      if (dead) ctx.globalAlpha = 0.45;
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(spr, 0, 0, spr.width, spr.height, x, y - spr.height * 2 + 10, spr.width * 2, spr.height * 2);
+      ctx.globalAlpha = 1;
     });
 
-    const mon = themeMonster(theme, run.isBoss, Math.floor(t * 4));
+    const state = this.monState(t);
+    const frame = Math.floor(t * (state === 'idle' ? 4 : 8));
+    const mon = getMonsterSprite(theme, run.isBoss, state, frame);
     const monScale = run.isBoss ? 3 : 2;
     const mw = mon.width * monScale;
     const mh = mon.height * monScale;
-    const mx = 200 + monOff + mlunge + (Math.floor(t * 2) % 2);
-    const my = 126 - mh;
-    if (mhit) this.wctx.filter = 'brightness(1.8)';
-    if (run.status === 'defeat') this.wctx.globalAlpha = 1;
-    if (run.status === 'reward_slot') this.wctx.globalAlpha = 0.2;
-    this.wctx.imageSmoothingEnabled = false;
-    this.wctx.drawImage(mon, mx, my, mw, mh);
-    this.wctx.filter = 'none';
-    this.wctx.globalAlpha = 1;
+    const mx = 200 + monOff + mlunge;
+    const my = 128 - mh;
+    if (this.monsterHit > 0.4) ctx.filter = 'brightness(1.6)';
+    if (this.dying > 0.7) ctx.globalAlpha = Math.max(0, 1.2 - this.dying);
+    if (run.status === 'reward_slot') ctx.globalAlpha = 0.25;
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(mon, mx, my, mw, mh);
+    ctx.filter = 'none';
+    ctx.globalAlpha = 1;
   }
 
   private drawBars(): void {
+    const ctx = this.wctx;
     const run = this.run!;
     const save = this.save!;
-    const ctx = this.wctx;
-    // monster HP
     const mw = 90;
     const mx = 200;
     const my = 28;
@@ -716,14 +639,13 @@ export class DungeonRenderer {
     ctx.fillStyle = run.isBoss ? '#e06c62' : '#d6ac47';
     ctx.fillRect(mx, my, Math.round(mw * pct), 5);
 
-    // party HP pips under each hero
     run.partyIds.forEach((hid, i) => {
       const hero = save.heroes.find((h) => h.id === hid);
       if (!hero) return;
       const st = getHeroCombatStats(save, hero);
       const p = Math.max(0, Math.min(1, hero.currentHp / Math.max(1, st.maxHp)));
-      const x = 54 + i * 22;
-      const y = 132;
+      const x = 48 + i * 28;
+      const y = 150;
       ctx.fillStyle = '#271c19';
       ctx.fillRect(x, y, 16, 4);
       ctx.fillStyle = '#5c1d1c';
@@ -734,52 +656,65 @@ export class DungeonRenderer {
   }
 
   private drawWavePips(): void {
-    const run = this.run!;
     const ctx = this.wctx;
-    const total = run.maxWaves;
-    const startX = WORLD_W / 2 - (total * 12) / 2;
-    for (let i = 1; i <= total; i++) {
-      const x = startX + (i - 1) * 14;
-      const y = 10;
-      const done = i < run.wave || (i === run.wave && run.status !== 'fighting');
-      const cur = i === run.wave && run.status === 'fighting';
-      const boss = i === total;
+    const run = this.run!;
+    const total = run.maxWaves || 3;
+    const cx = 160 - total * 6;
+    for (let i = 0; i < total; i++) {
       ctx.fillStyle = '#271c19';
-      ctx.fillRect(x, y, 10, 10);
-      if (boss) {
-        ctx.fillStyle = cur ? '#f2d675' : done ? '#d6ac47' : '#735114';
-        ctx.fillRect(x + 1, y + 1, 8, 8);
-        ctx.fillStyle = '#271c19';
-        ctx.fillRect(x + 4, y - 2, 2, 3);
-        ctx.fillRect(x + 2, y, 2, 2);
-        ctx.fillRect(x + 6, y, 2, 2);
-      } else {
-        ctx.fillStyle = cur ? '#f2d675' : done ? '#7a9658' : '#3a2a22';
-        ctx.fillRect(x + 2, y + 2, 6, 6);
+      ctx.fillRect(cx + i * 12, 8, 8, 8);
+      ctx.fillStyle = i + 1 < run.wave ? '#d6ac47' : i + 1 === run.wave ? '#f2d675' : '#3a2a22';
+      ctx.fillRect(cx + i * 12 + 1, 9, 6, 6);
+    }
+  }
+
+  private stepAtmos(dt: number, theme: ThemeId): void {
+    if (this.atmos.length === 0) this.seedAtmos(theme);
+    for (const p of this.atmos) {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.life += dt;
+      if (p.y < 4 || p.y > WORLD_H || p.x < 0 || p.x > WORLD_W || p.life > p.max) {
+        p.x = Math.random() * WORLD_W;
+        p.y = theme === 'dungeon_4' || theme === 'dungeon_1' ? WORLD_H - 10 : Math.random() * WORLD_H;
+        p.life = 0;
       }
     }
   }
 
-  private drawCombatReels(): void {
+  private drawAtmos(): void {
     const ctx = this.wctx;
-    const bx = WORLD_W / 2 - 42;
-    const by = 152;
-    ctx.fillStyle = '#130f1f';
-    ctx.fillRect(bx - 4, by - 4, 88, 24);
-    ctx.strokeStyle = this.reelFlash > 0 ? '#f2d675' : '#b45309';
-    ctx.strokeRect(bx - 4, by - 4, 88, 24);
-    for (let i = 0; i < 3; i++) {
-      const face = this.reelSpin > 0
-        ? (['crit', 'heal', 'chest', 'seven', 'spark', 'coin'] as ReelId[])[
-            Math.floor(this.reelOffset + i * 2) % 6
-          ]
-        : this.reelFaces[i];
-      const spr = getReelSprite(face);
-      const x = bx + i * 28;
-      ctx.fillStyle = '#efe6d4';
-      ctx.fillRect(x, by, 24, 16);
-      ctx.drawImage(spr, x + 4, by, 16, 16);
+    for (const p of this.atmos) {
+      const a = Math.min(1, p.life / 0.4, (p.max - p.life) / 0.6) * 0.85;
+      ctx.globalAlpha = a;
+      ctx.fillStyle = p.color;
+      ctx.fillRect(Math.round(p.x), Math.round(p.y), p.size, p.size);
     }
+    ctx.globalAlpha = 1;
+  }
+
+  private drawLighting(theme: ThemeId, t: number): void {
+    const ctx = this.wctx;
+    const flicker = 0.75 + Math.sin(t * 7) * 0.08;
+    const glow =
+      theme === 'dungeon_1'
+        ? `rgba(165,189,126,${0.12 * flicker})`
+        : theme === 'dungeon_2'
+          ? `rgba(217,240,245,${0.14 * flicker})`
+          : theme === 'dungeon_3'
+            ? `rgba(242,214,117,${0.16 * flicker})`
+            : `rgba(227,138,59,${0.2 * flicker})`;
+    const lg = ctx.createRadialGradient(230, 110, 10, 230, 110, 110);
+    lg.addColorStop(0, glow);
+    lg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = lg;
+    ctx.fillRect(0, 0, WORLD_W, WORLD_H);
+
+    const vig = ctx.createRadialGradient(160, 100, 60, 160, 100, 200);
+    vig.addColorStop(0, 'rgba(0,0,0,0)');
+    vig.addColorStop(1, 'rgba(12,8,10,0.45)');
+    ctx.fillStyle = vig;
+    ctx.fillRect(0, 0, WORLD_W, WORLD_H);
   }
 
   private stepFx(dt: number): void {
@@ -789,10 +724,10 @@ export class DungeonRenderer {
     }
     this.numbers = this.numbers.filter((n) => n.age < n.maxAge);
     for (const s of this.sparks) {
-      s.life -= dt;
       s.x += s.vx * dt;
       s.y += s.vy * dt;
-      s.vy += 80 * dt;
+      s.vy += 50 * dt;
+      s.life -= dt;
     }
     this.sparks = this.sparks.filter((s) => s.life > 0);
   }
@@ -805,17 +740,10 @@ export class DungeonRenderer {
       ctx.fillRect(Math.round(s.x), Math.round(s.y), 2, 2);
     }
     ctx.globalAlpha = 1;
-    ctx.font = 'bold 10px sans-serif';
-    ctx.textAlign = 'center';
     for (const n of this.numbers) {
-      ctx.globalAlpha = Math.max(0, 1 - n.age / n.maxAge);
-      ctx.strokeStyle = '#271c19';
-      ctx.lineWidth = 3;
-      const x = Math.round(n.x);
-      const y = Math.round(n.y);
-      ctx.strokeText(n.text, x, y);
-      ctx.fillStyle = n.color;
-      ctx.fillText(n.text, x, y);
+      const a = n.age / n.maxAge < 0.65 ? 1 : Math.max(0, 1 - (n.age / n.maxAge - 0.65) / 0.35);
+      ctx.globalAlpha = a;
+      drawOutlinedText(ctx, n.text, n.x - 8, n.y, n.color, 2);
     }
     ctx.globalAlpha = 1;
   }

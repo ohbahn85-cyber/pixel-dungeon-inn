@@ -1272,13 +1272,19 @@ body {
 #dungeon-stage.hidden,
 #expedition-chip.hidden,
 #dungeon-hud.hidden,
+#dungeon-reel-bar.hidden,
 #kairo-tip.hidden {
   display: none !important;
 }
 
 #dungeon-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 72px;
   width: 100%;
-  height: 100%;
+  height: auto;
   display: block;
   image-rendering: pixelated;
 }
@@ -1298,11 +1304,31 @@ body {
   cursor: pointer;
 }
 
+#dungeon-reel-bar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 72px;
+  z-index: 23;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(#2a1f18, #1a1410);
+  border-top: 3px solid #d4a36a;
+  box-shadow: inset 0 2px 0 #f2d67555;
+}
+
+#dungeon-reel-bar .combat-reels {
+  transform: scale(0.92);
+  transform-origin: center;
+}
+
 #dungeon-hud {
   position: absolute;
   left: 0;
   right: 0;
-  bottom: 8px;
+  bottom: 80px;
   z-index: 22;
   display: flex;
   justify-content: center;

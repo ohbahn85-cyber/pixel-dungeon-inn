@@ -120,7 +120,7 @@ export interface TilePaletteSpec {
   leftSlab: string;
   rightSlab: string;
   outline: string;
-  pattern: 'wood' | 'carpet' | 'forge' | 'potion' | 'trade' | 'corridor' | 'lava';
+  pattern: 'wood' | 'woodWorn' | 'carpet' | 'forge' | 'potion' | 'trade' | 'corridor' | 'lava';
 }
 
 export function bakeIsoTileSprite(
@@ -176,6 +176,11 @@ export function bakeIsoTileSprite(
         if ((x + y * 2) % 6 === 0) col = spec.topShadow;
         else if ((x + y) % 5 === 0) col = spec.topHighlight;
         else if ((x ^ y) % 3 === 0) col = spec.topAlt;
+      } else if (spec.pattern === 'woodWorn') {
+        // 발자국이 패인 어두운 마루
+        if ((x + y * 2) % 5 === 0) col = spec.topShadow;
+        else if ((x * 3 + y) % 4 === 0) col = spec.topAlt;
+        else col = spec.topMain;
       } else if (spec.pattern === 'carpet') {
         // 금실 자수 테두리가 있는 붉은 양탄자
         const distEdge = Math.min(x - xStart, xEnd - x);
@@ -1704,7 +1709,9 @@ const TINY_FONT_3X5: Record<string, string[]> = {
   '9': ['111', '101', '111', '001', '111'],
   L: ['100', '100', '100', '100', '111'],
   '+': ['000', '010', '111', '010', '000'],
+  '-': ['000', '000', '111', '000', '000'],
   G: ['111', '100', '101', '101', '111'],
+  x: ['101', '010', '101', '010', '101'],
 };
 
 export function drawTinyPixelText(
@@ -1748,6 +1755,8 @@ export interface PixelSpriteAtlas {
   tiles: {
     innLight: HTMLCanvasElement;
     innDark: HTMLCanvasElement;
+    innWornLight: HTMLCanvasElement;
+    innWornDark: HTMLCanvasElement;
     innCarpetLight: HTMLCanvasElement;
     innCarpetDark: HTMLCanvasElement;
     bsLight: HTMLCanvasElement;
@@ -1807,6 +1816,17 @@ export interface PixelSpriteAtlas {
     barCounter: HTMLCanvasElement;
     entranceDoor: HTMLCanvasElement;
     entranceLamp: HTMLCanvasElement[];
+    barStool: HTMLCanvasElement;
+    chairAngle: HTMLCanvasElement;
+    sack: HTMLCanvasElement;
+    scales: HTMLCanvasElement;
+    noticeBoard: HTMLCanvasElement;
+    hangingHerbs: HTMLCanvasElement;
+    ceilingBeam: HTMLCanvasElement;
+    balconyRail: HTMLCanvasElement;
+    mugPlate: HTMLCanvasElement;
+    anvilStump: HTMLCanvasElement;
+    fireplaceMantle: HTMLCanvasElement;
   };
   getCharacterSprite: (
     archetype: ActorArchetypeId,
@@ -1815,6 +1835,141 @@ export interface PixelSpriteAtlas {
     frameIdx: number,
     weapon?: WeaponTypeId
   ) => HTMLCanvasElement;
+}
+
+
+function buildBarStoolSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    '..OOOO..',
+    '.OWuuWO.',
+    '.OnuunO.',
+    '.OWuuWO.',
+    '..OmO...',
+    '..OmO...',
+    '.OmOOmO.',
+    '.OO..OO.',
+  ]);
+}
+
+function buildChairAngleSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    '....OOOO.',
+    '...OWuuWO',
+    '..OWuuuWO',
+    '.OnuuuunO',
+    '.OWuuuuWO',
+    '..OnnnnO.',
+    '..OmOOmO.',
+    '..OO..OO.',
+  ]);
+}
+
+function buildSackSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    '...OOOO...',
+    '..OWuuuO..',
+    '.OWuuuuuO.',
+    '.OWuuYuuO.',
+    '.OnuuuuunO',
+    '.OnnnnnnO.',
+    '..OOOOOO..',
+  ]);
+}
+
+function buildScalesSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    '....Y.....',
+    '...OYOyyyy',
+    '..OYOYOkkk',
+    'OOOYOYOOOO',
+    'OwO.O..OwO',
+    'OOO....OOO',
+    '.O......O.',
+  ]);
+}
+
+function buildNoticeBoardSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    '.OOOOOOOOOO.',
+    '.OnuuuuuuunO',
+    '.OuYYuuRRuO.',
+    '.OuYYuuRRuO.',
+    '.OuuuWWuuuO.',
+    '.OuuuWWuuuO.',
+    '.OnnnnnnnnO.',
+    '.OOOOOOOOOO.',
+    '...OmOOmO...',
+  ]);
+}
+
+function buildHangingHerbsSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    'OOOOOOOOOOOO',
+    'OnuuuuuuuunO',
+    'OOOOOOOOOOOO',
+    '.v.G.v.h.P.',
+    '.GvG.hGv.a.',
+    '.hvh.Gvh.q.',
+    '..h...h..Q.',
+    '..H...v..h.',
+  ]);
+}
+
+function buildCeilingBeamSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    'OOOOOOOOOOOOOOOOOOOOOOOO',
+    'OnuuWWWuuunnnWWWuuuunnnO',
+    'OmmmmmmmmmmmmmmmmmmmmmmO',
+    'OOOOOOOOOOOOOOOOOOOOOOOO',
+  ]);
+}
+
+function buildBalconyRailSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    'OOOOOOOOOOOOOOOOOOOO',
+    'OWWuuWWWuuWWWuuWWWuO',
+    'OmO..OmO..OmO..OmO.',
+    'OmO..OmO..OmO..OmO.',
+    'OWWWWWWWWWWWWWWWWWWO',
+    'OnnnnnnnnnnnnnnnnnnO',
+    'OOOOOOOOOOOOOOOOOOOO',
+  ]);
+}
+
+function buildMugPlateSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    '..wO.....',
+    '.OwOw.OO.',
+    '.OwwOOggO',
+    '..OOOgggO',
+    '.....OOO.',
+  ]);
+}
+
+function buildAnvilStumpSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    '..OOOOOOOO..',
+    '.OJiiiiiiJO.',
+    '.OJjjjjjjJO.',
+    '..OJiiiiJO..',
+    '...OOOOOO...',
+    '...OWuuuO...',
+    '...OnuunO...',
+    '...OWuuuO...',
+    '...OnnnnO...',
+    '....OOOO....',
+  ]);
+}
+
+function buildFireplaceMantleSprite(): HTMLCanvasElement {
+  return bakeGridSprite([
+    '.OOOOOOOOOOOOOOO.',
+    '.OWuuuuuuuuuuuuO.',
+    '.OnnnnnnnnnnnnnO.',
+    '.OOOOOOOOOOOOOOO.',
+    '..OmO.......OmO..',
+    '..OmO.......OmO..',
+  ]);
 }
 
 export function createPixelSpriteAtlas(): PixelSpriteAtlas {
@@ -1841,6 +1996,26 @@ export function createPixelSpriteAtlas(): PixelSpriteAtlas {
         rightSlab: '#523214',
         outline: '#271c19',
         pattern: 'wood',
+      }),
+      innWornLight: bakeIsoTileSprite({
+        topHighlight: '#a6763e',
+        topMain: '#875b29',
+        topAlt: '#6e461f',
+        topShadow: '#523214',
+        leftSlab: '#3d2518',
+        rightSlab: '#2a1a10',
+        outline: '#271c19',
+        pattern: 'woodWorn',
+      }),
+      innWornDark: bakeIsoTileSprite({
+        topHighlight: '#966a35',
+        topMain: '#754d28',
+        topAlt: '#5c3a20',
+        topShadow: '#3d2518',
+        leftSlab: '#322014',
+        rightSlab: '#24180e',
+        outline: '#271c19',
+        pattern: 'woodWorn',
       }),
       innCarpetLight: bakeIsoTileSprite({
         topHighlight: '#c95b58',
@@ -2012,6 +2187,17 @@ export function createPixelSpriteAtlas(): PixelSpriteAtlas {
       barCounter: buildBarCounterSprite(),
       entranceDoor: buildEntranceDoorSprite(),
       entranceLamp: buildEntranceLampFrames(),
+      barStool: buildBarStoolSprite(),
+      chairAngle: buildChairAngleSprite(),
+      sack: buildSackSprite(),
+      scales: buildScalesSprite(),
+      noticeBoard: buildNoticeBoardSprite(),
+      hangingHerbs: buildHangingHerbsSprite(),
+      ceilingBeam: buildCeilingBeamSprite(),
+      balconyRail: buildBalconyRailSprite(),
+      mugPlate: buildMugPlateSprite(),
+      anvilStump: buildAnvilStumpSprite(),
+      fireplaceMantle: buildFireplaceMantleSprite(),
     },
     getCharacterSprite(archetype, state, facing, frameIdx, weapon) {
       const f = frameIdx & 3;
