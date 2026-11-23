@@ -155,6 +155,8 @@ export interface MapActor {
   weaponIcon?: string;
   roleBadge?: string;
   bouncePhase: number;
+  archetype?: 'chef' | 'forger' | 'enhancer' | 'enchanter' | 'alchemist' | 'knight' | 'warrior' | 'archer' | 'mage' | 'rogue';
+  weaponType?: 'sword' | 'axe' | 'bow' | 'staff' | 'dagger';
 }
 
 export interface FloatingPop {

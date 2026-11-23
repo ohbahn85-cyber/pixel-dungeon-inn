@@ -32,6 +32,30 @@ export interface TierProbabilities {
   S: number;
 }
 
+let customRng: (() => number) | null = null;
+
+/**
+ * 시뮬레이션 재현성을 위한 시드 고정 PRNG(Mulberry32) 설정.
+ * 브라우저 기본 플레이 시에는 null(Math.random 사용).
+ */
+export function setSlotRngSeed(seed: number | null): void {
+  if (seed === null) {
+    customRng = null;
+    return;
+  }
+  let a = seed >>> 0;
+  customRng = () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+export function slotRandom(): number {
+  return customRng ? customRng() : Math.random();
+}
+
 /**
  * 베팅한 재료 등급 조합 + 담당 직원 보너스 + 시설 패시브 보너스를 합산해
  * C / B / A / S 당첨 확률(%)을 계산합니다.
@@ -84,7 +108,7 @@ export function rollTierFromProbs(probs: TierProbabilities): {
   isJackpot: boolean;
   reels: [string, string, string];
 } {
-  const r = Math.random() * 100;
+  const r = slotRandom() * 100;
   let tier: RankTier = 'C';
   if (r < probs.S) {
     tier = 'S';
@@ -96,7 +120,7 @@ export function rollTierFromProbs(probs: TierProbabilities): {
     tier = 'C';
   }
 
-  const isJackpot = tier === 'S' || (tier === 'A' && Math.random() < 0.35);
+  const isJackpot = tier === 'S' || (tier === 'A' && slotRandom() < 0.35);
   const symbolMap: Record<RankTier, string> = {
     C: '🍒',
     B: '🔔',
@@ -156,7 +180,7 @@ export function rollStaffHireCandidate(
   const { tier, isJackpot, reels } = rollTierFromProbs(probs);
 
   const names = STAFF_NAME_POOL[role][tier];
-  const name = names[Math.floor(Math.random() * names.length)];
+  const name = names[Math.floor(slotRandom() * names.length)];
 
   const tierBonusBase: Record<RankTier, number> = {
     C: 5,
@@ -165,7 +189,7 @@ export function rollStaffHireCandidate(
     S: 42,
   };
   const bonusProb =
-    tierBonusBase[tier] + Math.floor(Math.random() * 5) + (isJackpot ? 4 : 0);
+    tierBonusBase[tier] + Math.floor(slotRandom() * 5) + (isJackpot ? 4 : 0);
 
   // 대장간 직원은 등급이 높을수록 다룰 줄 아는 특화 무기 개수가 늘어남! (C: 1종, B: 2종, A: 3~4종, S: 5종 전체 마스터!)
   let specialties: WeaponTypeId[] = [];
@@ -174,7 +198,7 @@ export function rollStaffHireCandidate(
   if (role === 'forger' || role === 'enhancer' || role === 'enchanter') {
     const countMap: Record<RankTier, number> = { C: 1, B: 2, A: 3, S: 5 };
     const count = countMap[tier];
-    const shuffled = [...ALL_WEAPON_TYPES].sort(() => Math.random() - 0.5);
+    const shuffled = [...ALL_WEAPON_TYPES].sort(() => slotRandom() - 0.5);
     specialties = shuffled.slice(0, count);
     if (count === 5) {
       specialtyLabel = '전 무기(🗡️🪓🏹🪄🔪) 마스터 (+15% 특화)';
@@ -252,14 +276,14 @@ export function rollHeroRecruitCandidate(
   const { tier, isJackpot, reels } = rollTierFromProbs(probs);
 
   const classes: HeroClassId[] = ['knight', 'warrior', 'archer', 'mage', 'rogue'];
-  const classId = classes[Math.floor(Math.random() * classes.length)];
+  const classId = classes[Math.floor(slotRandom() * classes.length)];
   const meta = HERO_CLASS_META[classId];
   const usedNames = new Set(save.heroes.map((h) => h.name));
   const availNames = HERO_NAMES.filter((n) => !usedNames.has(n));
   const baseName =
     availNames.length > 0
-      ? availNames[Math.floor(Math.random() * availNames.length)]
-      : HERO_NAMES[Math.floor(Math.random() * HERO_NAMES.length)];
+      ? availNames[Math.floor(slotRandom() * availNames.length)]
+      : HERO_NAMES[Math.floor(slotRandom() * HERO_NAMES.length)];
 
   const mult = HERO_TIER_BASE_MULT[tier] * (isJackpot ? 1.08 : 1.0);
   const baseHp = Math.round(meta.baseHp * mult);
@@ -267,7 +291,7 @@ export function rollHeroRecruitCandidate(
   const baseDef = Math.round(meta.baseDef * mult);
 
   const hero: HeroUnit = {
-    id: `hero_${Date.now()}_${Math.floor(Math.random() * 999)}`,
+    id: `hero_${Date.now()}_${Math.floor(slotRandom() * 999)}`,
     name: baseName,
     classId,
     className: meta.name,
@@ -340,14 +364,14 @@ export function rollCookingDish(
   };
 
   const list = dishCatalog[tier];
-  const pick = list[Math.floor(Math.random() * list.length)];
+  const pick = list[Math.floor(slotRandom() * list.length)];
   const mult = isJackpot ? 1.2 : 1.0;
 
   const hpBonus = Math.round(pick.hp * mult);
   const atkBonus = Math.round(pick.atk * mult);
 
   const dish: DishItem = {
-    id: `dish_${Date.now()}_${Math.floor(Math.random() * 999)}`,
+    id: `dish_${Date.now()}_${Math.floor(slotRandom() * 999)}`,
     name: isJackpot ? `[특선] ${pick.name}` : pick.name,
     tier,
     icon: pick.icon,
@@ -411,14 +435,14 @@ export function rollAlchemyPotion(
   };
 
   const list = potCatalog[tier];
-  const pick = list[Math.floor(Math.random() * list.length)];
+  const pick = list[Math.floor(slotRandom() * list.length)];
   const mult = isJackpot ? 1.15 : 1.0;
 
   const healPct = Math.min(100, Math.round(pick.heal * mult));
   const atkBuffPct = Math.round(pick.atk * mult);
 
   const potion: PotionItem = {
-    id: `pot_${Date.now()}_${Math.floor(Math.random() * 999)}`,
+    id: `pot_${Date.now()}_${Math.floor(slotRandom() * 999)}`,
     name: isJackpot ? `[고순도] ${pick.name}` : pick.name,
     tier,
     icon: pick.icon,
@@ -488,7 +512,7 @@ export function rollWeaponForge(
   );
 
   const weapon: WeaponItem = {
-    id: `wp_${Date.now()}_${Math.floor(Math.random() * 999)}`,
+    id: `wp_${Date.now()}_${Math.floor(slotRandom() * 999)}`,
     name: `${prefixMap[tier]} ${meta.name}`,
     type: weaponType,
     tier,
@@ -544,7 +568,7 @@ export function rollWeaponEnhance(
   reels: [string, string, string];
 } {
   const rate = getEnhanceSuccessRate(save, weapon, oreTier);
-  const roll = Math.random() * 100;
+  const roll = slotRandom() * 100;
 
   if (roll <= rate) {
     const greatSuccess = roll <= rate * 0.22;
@@ -621,14 +645,14 @@ export function rollWeaponEnchant(
   scrapRefund: number;
 } {
   const info = getEnchantPreviewInfo(save, weapon, oreTier);
-  const shuffled = [...ENCHANT_OPTIONS].sort(() => Math.random() - 0.5);
+  const shuffled = [...ENCHANT_OPTIONS].sort(() => slotRandom() - 0.5);
   const picked = shuffled.slice(0, info.slotCount);
-  const isJackpot = Math.random() < 0.25;
+  const isJackpot = slotRandom() < 0.25;
 
   const enchants: WeaponEnchant[] = picked.map((opt) => {
     const minVal = Math.max(1, Math.round(opt.baseMin * info.minMult));
     const maxVal = Math.max(minVal + 1, Math.round(opt.baseMax * info.maxMult));
-    const ratio = isJackpot ? 0.78 + Math.random() * 0.22 : Math.random();
+    const ratio = isJackpot ? 0.78 + slotRandom() * 0.22 : slotRandom();
     const value = Math.round(minVal + (maxVal - minVal) * ratio);
     return {
       id: opt.id,

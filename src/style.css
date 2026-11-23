@@ -1041,3 +1041,56 @@ body {
   color: #94a3b8;
   font-size: 13px;
 }
+
+
+/* 정수배 픽셀 맵 */
+#iso-stage {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  background: #140f1c;
+  overflow: hidden;
+}
+#iso-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  image-rendering: -moz-crisp-edges;
+}
+
+/* 도크 아이콘만 */
+.dock-btn {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 6px;
+  font-size: 1.15rem;
+}
+.dock-btn .dock-icon,
+.dock-btn span:not(.dock-icon) {
+  /* 구버전 두 줄 라벨이 남아 있어도 한 줄 */
+}
+.kairo-title-banner { display: none !important; }
+.kairo-corner-btn {
+  min-height: 44px;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  font-weight: 800;
+}
+.res-pill small { display: none; }
+#kairo-top-hud { padding: 6px 10px; gap: 8px; }
+.hud-heroes-suffix { display: none; }
+
+/* 슬롯 모달은 입력·확률바·릴·버튼 위주 */
+#kairo-modal-window { max-width: 640px; }
+.modal-quick-nav { gap: 4px; }
+.modal-nav-pill { min-width: 40px; min-height: 40px; padding: 6px; font-size: 1rem; }
+.result-desc, .upgrade-desc, p.upgrade-desc { font-size: 0.78rem; color: #c4b8a5; }
+#modal-title { font-size: 1rem; }
+
+.info-callout { display: none !important; }
+.decision-buttons { display: flex; gap: 8px; }
+.decision-buttons button { flex: 1; min-height: 48px; font-size: 1rem; }
+.d-reward-box p, .d-reward-box h4 { margin: 4px 0; }
+.d-log-line { font-size: 0.78rem; }

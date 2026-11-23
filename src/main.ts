@@ -189,6 +189,7 @@ class KairoSlotInnApp {
           weaponIcon: meta.tool,
           roleBadge: `[${st.tier}]`,
           bouncePhase: Math.random() * 6,
+          archetype: role,
         }
       );
     });
@@ -201,6 +202,8 @@ class KairoSlotInnApp {
       if (prev) {
         prev.weaponIcon = wp ? wp.icon : classMeta.icon;
         prev.roleBadge = `Lv.${hero.level}`;
+        prev.archetype = hero.classId;
+        prev.weaponType = wp?.type ?? classMeta.favWeapon;
         nextActors.push(prev);
       } else {
         const startX = 3 + Math.random() * 7;
@@ -216,7 +219,7 @@ class KairoSlotInnApp {
           state: 'idle',
           stateTimer: 1 + Math.random() * 2,
           facing: 'se',
-          speechText: '여관이 아늑하군!',
+          speechText: '아늑하다!',
           speechTimer: 3.5,
           speechTone: 'happy',
           hairColor: hero.hairColor,
@@ -225,6 +228,8 @@ class KairoSlotInnApp {
           weaponIcon: wp ? wp.icon : classMeta.icon,
           roleBadge: `Lv.${hero.level}`,
           bouncePhase: Math.random() * 6,
+          archetype: hero.classId,
+          weaponType: wp?.type ?? classMeta.favWeapon,
         });
       }
     }
@@ -302,9 +307,9 @@ class KairoSlotInnApp {
   private updateActorsBehavior(dt: number): void {
     const waypoints = [
       { gx: 3.5, gy: 3.5, room: 'inn', lines: ['맛있는 냄새!', '푹 쉬었다~', '요리 슬롯 돌리자!'] },
-      { gx: 10.5, gy: 3.8, room: 'blacksmith', lines: ['새 무기가 필요해!', '강화 대박 나길!', '모루 소리 좋네!'] },
+      { gx: 10.5, gy: 3.8, room: 'blacksmith', lines: ['새 무기!', '강화 대박!', '모루 소리!'] },
       { gx: 3.5, gy: 10.5, room: 'potion', lines: ['포션 챙겨가자!', '보글보글 신기해', '회복약 필수!'] },
-      { gx: 10.5, gy: 10.5, room: 'trade', lines: ['재료 사러 왔어!', '마일리지 교환!', '오늘 시세 좋군!'] },
+      { gx: 10.5, gy: 10.5, room: 'trade', lines: ['재료 산다!', '가루 교환!', '시세 좋다!'] },
       { gx: 7.0, gy: 7.0, room: 'corridor', lines: ['던전 가고 싶다!', '컨디션 최고!', 'Ugh... 배고파'] },
     ];
 
@@ -443,7 +448,7 @@ class KairoSlotInnApp {
             hero.currentHp = Math.min(st.maxHp, hero.currentHp + healAmt);
             partyAtk = Math.round(partyAtk * (1 + pot.atkBuffPct / 100));
             run.combatLogs.unshift(
-              `🧪 ${hero.name}님이 [${pot.name}] 사용! (체력 +${healAmt}, 공격력 +${pot.atkBuffPct}%)`
+              `🧪 ${hero.name} +${healAmt}`
             );
             this.save.potions.splice(potIdx, 1);
             hero.equippedPotionId = null;
@@ -496,7 +501,7 @@ class KairoSlotInnApp {
         else run.accumulatedDrops.push({ materialId: pickedMat.id, count: 1 });
 
         run.combatLogs.unshift(
-          `⚔️ ${run.monsterName} 격파! (+${goldDrop}G, ${pickedMat.icon}${pickedMat.name} 획득)`
+          `${run.monsterName} +${goldDrop}G`
         );
 
         // 영웅 경험치 및 레벨업 처리 (여관 등급 상한선 적용!)
@@ -529,10 +534,10 @@ class KairoSlotInnApp {
       label: string;
       type: 'crit' | 'heal' | 'gold' | 'jackpot';
     }[] = [
-      { syms: ['⚔️', '⚔️', '🔥'], label: '⚔️ 연쇄 강타 발동! (즉시 추가 피해)', type: 'crit' },
-      { syms: ['🧪', '💚', '🧪'], label: '💚 치유의 바람! (파티 체력 20% 회복)', type: 'heal' },
-      { syms: ['💰', '💰', '💎'], label: '💰 숨겨진 보물상자 발견! (보상 골드 추가)', type: 'gold' },
-      { syms: ['7️⃣', '7️⃣', '7️⃣'], label: '⚡ 777 궁극기 잭팟! (적 체력 45% 즉시 삭감!)', type: 'jackpot' },
+      { syms: ['⚔️', '⚔️', '🔥'], label: '연쇄 강타', type: 'crit' },
+      { syms: ['🧪', '💚', '🧪'], label: '치유', type: 'heal' },
+      { syms: ['💰', '💰', '💎'], label: '보물', type: 'gold' },
+      { syms: ['7️⃣', '7️⃣', '7️⃣'], label: '777', type: 'jackpot' },
     ];
     const r = Math.random();
     const pick =
@@ -714,37 +719,37 @@ class KairoSlotInnApp {
     });
 
     if (tab === 'inn_cook') {
-      titleEl.textContent = '🍲 여관 주방: 1회성 출정 버프 요리 슬롯';
+      titleEl.textContent = '요리';
       bodyEl.innerHTML = this.buildInnCookHTML();
     } else if (tab === 'inn_hero') {
-      titleEl.textContent = '🦸 여관 객실: 영웅 영입 슬롯 & 영웅 관리';
+      titleEl.textContent = '영웅';
       bodyEl.innerHTML = this.buildInnHeroHTML();
     } else if (tab === 'bs_forge') {
-      titleEl.textContent = '🔨 대장간 [1/3]: 무기 제작 슬롯 (제작 장인 담당)';
+      titleEl.textContent = '제작';
       bodyEl.innerHTML = this.buildBlacksmithForgeHTML();
     } else if (tab === 'bs_enhance') {
-      titleEl.textContent = '⚒️ 대장간 [2/3]: 연속 강화 슬롯 (실패 시 그 수치로 확정 완료!)';
+      titleEl.textContent = '강화';
       bodyEl.innerHTML = this.buildBlacksmithEnhanceHTML();
     } else if (tab === 'bs_enchant') {
-      titleEl.textContent = '✨ 대장간 [3/3]: 마법 인챈트 슬롯 (+강화 비례 옵션 수 & 범위 증가)';
+      titleEl.textContent = '인챈트';
       bodyEl.innerHTML = this.buildBlacksmithEnchantHTML();
     } else if (tab === 'potion_brew') {
-      titleEl.textContent = '🧪 포션가게: 약초 조합 연금 슬롯 (연금술사 담당)';
+      titleEl.textContent = '포션';
       bodyEl.innerHTML = this.buildPotionBrewHTML();
     } else if (tab === 'trade_market') {
-      titleEl.textContent = '💎 왕국 거래처: 정가 재료 상점 & 마일리지 교환소';
+      titleEl.textContent = '거래처';
       bodyEl.innerHTML = this.buildTradeMarketHTML();
     } else if (tab === 'staff_hire') {
-      titleEl.textContent = '👨‍🍳 직원 고용 슬롯: 5대 전담 장인 스카우트';
+      titleEl.textContent = '직원';
       bodyEl.innerHTML = this.buildStaffHireHTML();
     } else if (tab === 'facility_up') {
-      titleEl.textContent = '🏰 시설 업그레이드 슬롯: 확정 레벨업 + 특수 패시브 추첨';
+      titleEl.textContent = '시설';
       bodyEl.innerHTML = this.buildFacilityUpHTML();
     } else if (tab === 'dungeon_prep') {
-      titleEl.textContent = '⚔️ 던전 원정 출발 & 전투/보상 슬롯';
+      titleEl.textContent = '던전';
       bodyEl.innerHTML = this.buildDungeonPrepHTML();
     } else if (tab === 'save_manage') {
-      titleEl.textContent = '💾 데이터 저장 관리 (IndexedDB + LocalStorage 이중 금고)';
+      titleEl.textContent = '저장';
       bodyEl.innerHTML = this.buildSaveManageHTML();
     }
 
@@ -789,7 +794,7 @@ class KairoSlotInnApp {
             ? this.buildPendingDecisionHTML(this.pendingDecision)
             : `
           <div class="slot-action-bar">
-            <div class="slot-cost-label">베팅 소모: <strong>${costDesc}</strong></div>
+            <div class="slot-cost-label">${costDesc}</div>
             <button id="btn-trigger-spin" class="kairo-btn-primary ${!canSpin ? 'disabled' : ''}" ${!canSpin ? 'disabled' : ''}>
               🎰 ${spinBtnLabel}
             </button>
@@ -829,7 +834,7 @@ class KairoSlotInnApp {
             <span class="tier-pill tier-${pd.weapon.tier}">${pd.weapon.tier}급</span>
             <strong>${pd.weapon.icon} ${pd.weapon.name}</strong>
           </div>
-          <p class="result-desc">기본 공격력 <strong>+${pd.weapon.baseAtk}</strong> (채택 후 연속 강화 & 인챈트 가능!)</p>
+          <p class="result-desc">ATK +${pd.weapon.baseAtk}</p>
         </div>
       `;
     } else if (pd.kind === 'enchant' && pd.enchants) {
@@ -853,7 +858,7 @@ class KairoSlotInnApp {
             <span class="tier-pill tier-${pd.hero.tier}">${pd.hero.tier}급</span>
             <strong>${HERO_CLASS_META[pd.hero.classId].icon} ${pd.hero.name} (${pd.hero.className} · Lv.1)</strong>
           </div>
-          <p class="result-desc">체력 ${pd.hero.baseHp} · 공격력 ${pd.hero.baseAtk} · 방어 ${pd.hero.baseDef} | 잠재 상한 Lv.${pd.hero.maxLevelCap} (현재 여관 해금 Lv.${cap})</p>
+          <p class="result-desc">HP ${pd.hero.baseHp} · ATK ${pd.hero.baseAtk} · DEF ${pd.hero.baseDef} · 상한 ${pd.hero.maxLevelCap} / 해금 ${cap}</p>
         </div>
       `;
     } else if (pd.kind === 'staff' && pd.staffCandidate) {
@@ -865,8 +870,8 @@ class KairoSlotInnApp {
             <span class="tier-pill tier-${st.tier}">${st.tier}급</span>
             <strong>${st.name} (${STAFF_ROLE_META[st.role].title})</strong>
           </div>
-          <p class="result-desc">슬롯 행운 보너스 <strong>+${st.bonusProb}%</strong> · ${st.specialtyLabel}<br/>
-          <small>(현재 담당: [${cur.tier}급] ${cur.name} +${cur.bonusProb}% · ${cur.specialtyLabel})</small></p>
+          <p class="result-desc">행운 +${st.bonusProb}% · ${st.specialtyLabel}
+          <small>현재 [${cur.tier}] ${cur.name} +${cur.bonusProb}%</small></p>
         </div>
       `;
     } else if (pd.kind === 'facility' && pd.facilityPassive && pd.facilityId) {
@@ -875,7 +880,7 @@ class KairoSlotInnApp {
         <div class="result-card tier-border-${p.tier}">
           <div class="result-title">
             <span class="tier-pill tier-${p.tier}">${p.tier}급 특성</span>
-            <strong>${pd.greatLevelUp ? '🎉 대성공 (+2레벨 상승!) & ' : '⬆️ +1레벨 상승 & '}${p.name}</strong>
+            <strong>${pd.greatLevelUp ? '+2Lv ' : '+1Lv '}${p.name}</strong>
           </div>
           <p class="result-desc">${p.desc}</p>
         </div>
@@ -884,15 +889,11 @@ class KairoSlotInnApp {
 
     return `
       <div class="decision-box">
-        ${pd.isJackpot ? `<div class="jackpot-banner">🎊 JACKPOT 777 대박 당첨! 🎊</div>` : ''}
+        ${pd.isJackpot ? `<div class="jackpot-banner">777</div>` : ''}
         ${summaryHTML}
         <div class="decision-buttons">
-          <button id="btn-decision-keep" class="kairo-btn-keep">
-            ✅ 채택 (진행하기)
-          </button>
-          <button id="btn-decision-discard" class="kairo-btn-discard">
-            🗑️ 버리기 (마일리지 가루 +${pd.scrapRefund} 획득)
-          </button>
+          <button id="btn-decision-keep" class="kairo-btn-keep">채택</button>
+          <button id="btn-decision-discard" class="kairo-btn-discard">버리기 +${pd.scrapRefund}</button>
         </div>
       </div>
     `;
@@ -925,12 +926,12 @@ class KairoSlotInnApp {
 
     return `
       <div class="bet-selector-panel">
-        <div class="bet-row-label">🎲 1번 투입 재료 선택 (등급이 높을수록 A·S급 확률 대폭 상승!)</div>
+        <div class="bet-row-label">재료 1</div>
         <div class="bet-grid">${buildRow(1, this.betTier1)}</div>
         ${
           dualSlot
             ? `
-          <div class="bet-row-label" style="margin-top:8px;">🎲 2번 조합 재료 선택 (서로 다른 등급 조합 시 추가 시너지!)</div>
+          <div class="bet-row-label" style="margin-top:8px;">재료 2</div>
           <div class="bet-grid">${buildRow(2, this.betTier2)}</div>
         `
             : ''
@@ -963,7 +964,7 @@ class KairoSlotInnApp {
 
     const dishListHTML =
       this.save.dishes.length === 0
-        ? `<div class="empty-hint">보유한 요리가 없습니다. 위 슬롯을 돌려 1회성 출정 버프 요리를 만드세요!</div>`
+        ? `<div class="empty-hint">요리 없음</div>`
         : this.save.dishes
             .map(
               (d) => `
@@ -974,8 +975,8 @@ class KairoSlotInnApp {
               <div class="sub-text">${d.desc}</div>
             </div>
             <div class="inv-actions">
-              <button class="kairo-btn-mini" data-feed-dish="${d.id}">🍽️ 영웅에게 먹이기(1회 출정버프)</button>
-              <button class="kairo-btn-mini gold" data-sell-dish="${d.id}">💰 판매 (+${d.sellGold}G)</button>
+              <button class="kairo-btn-mini" data-feed-dish="${d.id}">먹이기</button>
+              <button class="kairo-btn-mini gold" data-sell-dish="${d.id}">판매 +${d.sellGold}G</button>
             </div>
           </div>
         `
@@ -984,8 +985,8 @@ class KairoSlotInnApp {
 
     return `
       ${this.buildMaterialBetSelectorHTML('food', true)}
-      ${this.renderSlotMachineWidget(probs, chef, costDesc, canSpin, '요리 슬롯 돌리기')}
-      <div class="section-divider">🍽️ 완성된 1회성 요리 보관함 (${this.save.dishes.length}개)</div>
+      ${this.renderSlotMachineWidget(probs, chef, costDesc, canSpin, '돌리기')}
+      <div class="section-divider">요리 ${this.save.dishes.length}</div>
       <div class="inv-list">${dishListHTML}</div>
     `;
   }
@@ -1021,7 +1022,7 @@ class KairoSlotInnApp {
           : '무기 미장착';
         const mealText = h.activeMeal
           ? `🍽️ ${h.activeMeal.name} (+체력${h.activeMeal.hpBonus}/+공격${h.activeMeal.atkBonus})`
-          : '출정 요리 없음';
+          : '요리 없음';
         const pot = this.save.potions.find((p) => p.id === h.equippedPotionId);
         const potText = pot ? `${pot.icon} ${pot.name}` : '포션 없음';
 
@@ -1058,13 +1059,9 @@ class KairoSlotInnApp {
       .join('');
 
     return `
-      <div class="info-callout">
-        💡 <strong>카이로소프트식 영웅 등급 상한 & 밸런스 장치:</strong> 고등급(A·S급) 영웅도 처음엔 <strong>Lv.1</strong>로 합류하며,
-        잠재 최대 레벨(C급 Lv.10 ~ S급 Lv.40)은 <strong>현재 여관 시설 레벨(Lv.${this.save.facilities.inn.level})</strong>에 따라 단계적으로 해금됩니다!
-      </div>
       ${this.buildMaterialBetSelectorHTML('food', false)}
-      ${this.renderSlotMachineWidget(probs, chef, costDesc, canSpin, '영웅 영입 슬롯 돌리기')}
-      <div class="section-divider">🦸 여관 소속 영웅 명단 (${this.save.heroes.length}명)</div>
+      ${this.renderSlotMachineWidget(probs, chef, costDesc, canSpin, '돌리기')}
+      <div class="section-divider">영웅 ${this.save.heroes.length}</div>
       <div class="inv-list">${heroesHTML}</div>
     `;
   }
@@ -1107,14 +1104,14 @@ class KairoSlotInnApp {
 
     return `
       <div class="subtab-bar">
-        <button class="subtab-btn active" data-goto-tab="bs_forge">1️⃣ 무기 제작 슬롯 (${this.save.staff.forger.name})</button>
-        <button class="subtab-btn" data-goto-tab="bs_enhance">2️⃣ 연속 강화 슬롯 (${this.save.staff.enhancer.name})</button>
-        <button class="subtab-btn" data-goto-tab="bs_enchant">3️⃣ 마법 인챈트 슬롯 (${this.save.staff.enchanter.name})</button>
+        <button class="subtab-btn active" data-goto-tab="bs_forge">제작</button>
+        <button class="subtab-btn" data-goto-tab="bs_enhance">강화</button>
+        <button class="subtab-btn" data-goto-tab="bs_enchant">인챈트</button>
       </div>
-      <div class="bet-row-label">🗡️ 제작할 무기 종류 선택 (담당 장인의 ★특화 무기일수록 고등급 확률 추가 상승!)</div>
+      <div class="bet-row-label">무기</div>
       <div class="weapon-type-grid">${weaponTypeBtns}</div>
       ${this.buildMaterialBetSelectorHTML('ore', true)}
-      ${this.renderSlotMachineWidget(probs, forger, costDesc, canSpin, '무기 제작 슬롯 돌리기')}
+      ${this.renderSlotMachineWidget(probs, forger, costDesc, canSpin, '돌리기')}
       ${this.buildWeaponInventoryHTML()}
     `;
   }
@@ -1143,15 +1140,9 @@ class KairoSlotInnApp {
 
     return `
       <div class="subtab-bar">
-        <button class="subtab-btn" data-goto-tab="bs_forge">1️⃣ 무기 제작 슬롯 (${this.save.staff.forger.name})</button>
-        <button class="subtab-btn active" data-goto-tab="bs_enhance">2️⃣ 연속 강화 슬롯 (${this.save.staff.enhancer.name})</button>
-        <button class="subtab-btn" data-goto-tab="bs_enchant">3️⃣ 마법 인챈트 슬롯 (${this.save.staff.enchanter.name})</button>
-      </div>
-
-      <div class="info-callout">
-        ⚒️ <strong>연속 강화 규칙:</strong> 강화 슬롯이 성공할 때마다 <strong>+1강 (대성공 시 +2강!)</strong>이 계속 쌓입니다!
-        만약 <strong>실패(🔒STOP)</strong>가 뜨면 무기가 파괴되지 않고 <strong>현재 +수치에서 강화가 최종 확정 완료</strong>됩니다.
-        (+강화 횟수가 높을수록 다음 단계인 <strong>인챈트 슬롯</strong>의 옵션 줄 수와 최소~최대 수치가 폭발적으로 증가합니다!)
+        <button class="subtab-btn" data-goto-tab="bs_forge">제작</button>
+        <button class="subtab-btn active" data-goto-tab="bs_enhance">강화</button>
+        <button class="subtab-btn" data-goto-tab="bs_enchant">인챈트</button>
       </div>
 
       ${this.buildWeaponSelectorDropdown(targetWp)}
@@ -1168,7 +1159,7 @@ class KairoSlotInnApp {
               <span class="staff-bonus-tag">강화성공 +${enhancer.bonusProb}% · ${enhancer.specialtyLabel}</span>
             </div>
             <div class="prob-bar-group">
-              <span class="prob-chip tier-S">현재 +${targetWp.enhanceCount}강 → 성공 확률 ${rate}%</span>
+              <span class="prob-chip tier-S">+${targetWp.enhanceCount} · ${rate}%</span>
             </div>
           </div>
 
@@ -1188,17 +1179,19 @@ class KairoSlotInnApp {
             <div class="slot-cost-label">
               ${
                 targetWp.enhanceLocked
-                  ? `🔒 <strong>+${targetWp.enhanceCount}강에서 강화 완료(확정)된 무기입니다! 이제 [3️⃣ 마법 인챈트 슬롯]으로 가세요!</strong>`
-                  : `소모: 40G + ${MATERIAL_MAP[oreId].icon}${MATERIAL_MAP[oreId].name} 1개`
+                  ? `🔒 +${targetWp.enhanceCount} 확정`
+                  : `40G + ${MATERIAL_MAP[oreId].icon} 1`
               }
             </div>
-            <button id="btn-trigger-enhance" class="kairo-btn-primary ${!canSpin ? 'disabled' : ''}" ${!canSpin ? 'disabled' : ''}>
-              ⚒️ 연속 강화 슬롯 스핀! (+${targetWp.enhanceCount}강 도전)
-            </button>
+            ${
+              targetWp.enhanceLocked
+                ? `<button class="kairo-btn-primary" data-goto-tab="bs_enchant">인챈트</button>`
+                : `<button id="btn-trigger-enhance" class="kairo-btn-primary ${!canSpin ? 'disabled' : ''}" ${!canSpin ? 'disabled' : ''}>강화 +${targetWp.enhanceCount}</button>`
+            }
           </div>
         </div>
       `
-          : `<div class="empty-hint">강화할 무기가 없습니다. 먼저 무기를 제작하세요!</div>`
+          : `<div class="empty-hint">무기 없음</div>`
       }
       ${this.buildWeaponInventoryHTML()}
     `;
@@ -1249,9 +1242,9 @@ class KairoSlotInnApp {
 
     return `
       <div class="subtab-bar">
-        <button class="subtab-btn" data-goto-tab="bs_forge">1️⃣ 무기 제작 슬롯 (${this.save.staff.forger.name})</button>
-        <button class="subtab-btn" data-goto-tab="bs_enhance">2️⃣ 연속 강화 슬롯 (${this.save.staff.enhancer.name})</button>
-        <button class="subtab-btn active" data-goto-tab="bs_enchant">3️⃣ 마법 인챈트 슬롯 (${this.save.staff.enchanter.name})</button>
+        <button class="subtab-btn" data-goto-tab="bs_forge">제작</button>
+        <button class="subtab-btn" data-goto-tab="bs_enhance">강화</button>
+        <button class="subtab-btn active" data-goto-tab="bs_enchant">인챈트</button>
       </div>
 
       ${this.buildWeaponSelectorDropdown(targetWp)}
@@ -1268,9 +1261,9 @@ class KairoSlotInnApp {
           </div>
           <div class="range-preview-grid">${rangeBadges}</div>
         </div>
-        ${this.renderSlotMachineWidget(probs, enchanter, costDesc, canSpin, '마법 인챈트 슬롯 돌리기')}
+        ${this.renderSlotMachineWidget(probs, enchanter, costDesc, canSpin, '돌리기')}
       `
-          : `<div class="empty-hint">인챈트할 무기가 없습니다.</div>`
+          : `<div class="empty-hint">무기 없음</div>`
       }
       ${this.buildWeaponInventoryHTML()}
     `;
@@ -1290,7 +1283,7 @@ class KairoSlotInnApp {
       })
       .join('');
     return `
-      <div class="bet-row-label">🎯 대상 무기 선택</div>
+      <div class="bet-row-label">무기</div>
       <div class="weapon-pick-list">${btns}</div>
     `;
   }
@@ -1331,7 +1324,7 @@ class KairoSlotInnApp {
       .join('');
 
     return `
-      <div class="section-divider">🗡️ 보유 무기 보관함 (${this.save.weapons.length}개)</div>
+      <div class="section-divider">무기 ${this.save.weapons.length}</div>
       <div class="inv-list">${rows}</div>
     `;
   }
@@ -1360,7 +1353,7 @@ class KairoSlotInnApp {
 
     const potListHTML =
       this.save.potions.length === 0
-        ? `<div class="empty-hint">보유한 포션이 없습니다. 약초를 조합해 포션 슬롯을 돌리세요!</div>`
+        ? `<div class="empty-hint">포션 없음</div>`
         : this.save.potions
             .map(
               (p) => `
@@ -1372,7 +1365,7 @@ class KairoSlotInnApp {
             </div>
             <div class="inv-actions">
               <button class="kairo-btn-mini" data-equip-potion="${p.id}">🎒 영웅 가방에 넣기</button>
-              <button class="kairo-btn-mini gold" data-sell-potion="${p.id}">💰 판매 (+${p.sellGold}G)</button>
+              <button class="kairo-btn-mini gold" data-sell-potion="${p.id}">판매 +${p.sellGold}G</button>
             </div>
           </div>
         `
@@ -1381,8 +1374,8 @@ class KairoSlotInnApp {
 
     return `
       ${this.buildMaterialBetSelectorHTML('herb', true)}
-      ${this.renderSlotMachineWidget(probs, alch, costDesc, canSpin, '포션 연금 슬롯 돌리기')}
-      <div class="section-divider">🧪 연성된 포션 진열대 (${this.save.potions.length}개)</div>
+      ${this.renderSlotMachineWidget(probs, alch, costDesc, canSpin, '돌리기')}
+      <div class="section-divider">포션 ${this.save.potions.length}</div>
       <div class="inv-list">${potListHTML}</div>
     `;
   }
@@ -1404,26 +1397,15 @@ class KairoSlotInnApp {
             <div class="sub-text">${m.desc}</div>
           </div>
           <div class="trade-item-actions">
-            <button class="kairo-btn-mini" data-buy-mat="${m.id}" ${this.save.gold < m.buyPrice ? 'disabled' : ''}>
-              🛒 구매 (${m.buyPrice}G)
-            </button>
-            <button class="kairo-btn-mini gold" data-sell-mat="${m.id}" ${count <= 0 ? 'disabled' : ''}>
-              💰 판매 (+${m.sellPrice}G)
-            </button>
-            <button class="kairo-btn-mini purple" data-scrap-mat="${m.id}" ${this.save.scrap < scCost ? 'disabled' : ''}>
-              ♻️ 마일리지 교환 (${scCost}가루)
-            </button>
+            <button class="kairo-btn-mini" data-buy-mat="${m.id}" ${this.save.gold < m.buyPrice ? 'disabled' : ''}>사기 ${m.buyPrice}G</button>
+            <button class="kairo-btn-mini gold" data-sell-mat="${m.id}" ${count <= 0 ? 'disabled' : ''}>팔기 +${m.sellPrice}G</button>
+            <button class="kairo-btn-mini purple" data-scrap-mat="${m.id}" ${this.save.scrap < scCost ? 'disabled' : ''}>가루 ${scCost}</button>
           </div>
         </div>
       `;
     }).join('');
 
     return `
-      <div class="info-callout">
-        💎 <strong>왕국 거래처 (정가 상점 & 마일리지 교환소):</strong>
-        던전에서 얻은 남는 재료를 팔거나 부족한 재료를 정가로 구매하세요!
-        특히 슬롯에서 <strong>[🗑️ 버리기]</strong>를 선택해 모은 <strong>♻️ 마일리지 가루(보유: ${this.save.scrap}개)</strong>로 A~S급 희귀 재료를 100% 확정 교환할 수 있습니다.
-      </div>
       <div class="trade-grid">${rows}</div>
     `;
   }
@@ -1465,8 +1447,8 @@ class KairoSlotInnApp {
         (t) => `
         <button class="mat-bet-btn ${this.betTier1 === t ? 'selected' : ''} tier-border-${t}" data-bet-slot="1" data-bet-tier="${t}">
           <div class="mat-meta">
-            <strong>[${t}급 스카우트 공고]</strong>
-            <small>베팅 비용: ${hireGoldMap[t]}G</small>
+            <strong>${t}</strong>
+            <small>${hireGoldMap[t]}G</small>
           </div>
         </button>
       `
@@ -1477,14 +1459,10 @@ class KairoSlotInnApp {
     const canSpin = this.save.gold >= cost;
 
     return `
-      <div class="info-callout">
-        👨‍🍳 <strong>직원 고용 슬롯 특징:</strong> 대장간은 <strong>제작·강화·인챈트 3명의 담당 직원</strong>이 각각 따로 배치됩니다!
-        고등급 직원일수록 슬롯 대박 확률 보너스가 높고, <strong>다룰 수 있는 특화 무기 개수(C급 1종 → S급 5종 전체 마스터!)</strong>가 늘어납니다.
-      </div>
       <div class="staff-role-grid">${roleBtns}</div>
-      <div class="bet-row-label">💰 스카우트 공고 등급 베팅</div>
+      <div class="bet-row-label">등급</div>
       <div class="bet-grid">${betTierBtns}</div>
-      ${this.renderSlotMachineWidget(probs, curStaff, `${cost}G`, canSpin, '직원 스카우트 슬롯 돌리기')}
+      ${this.renderSlotMachineWidget(probs, curStaff, `${cost}G`, canSpin, '돌리기')}
     `;
   }
 
@@ -1519,7 +1497,7 @@ class KairoSlotInnApp {
 
     const passivesHTML =
       fac.passives.length === 0
-        ? `<div class="empty-hint">아직 획득한 특수 시설 특성이 없습니다. 업그레이드 슬롯을 돌려 특성을 획득하세요!</div>`
+        ? `<div class="empty-hint">특성 없음</div>`
         : fac.passives
             .map(
               (p) => `
@@ -1535,14 +1513,10 @@ class KairoSlotInnApp {
             .join('');
 
     return `
-      <div class="info-callout">
-        🏰 <strong>시설 업그레이드 슬롯:</strong> 업그레이드 슬롯을 돌리면 <strong>기본 +1레벨 상승(잭팟 시 +2레벨!)</strong>과 함께
-        시설 전용 패시브 특성이 뽑힙니다. 마음에 들면 <strong>[채택]</strong>하여 레벨업과 특성을 확정하고, 마음에 안 들면 <strong>[버리기]</strong>로 마일리지를 챙겨 다시 좋은 특성을 노릴 수 있습니다!
-      </div>
       <div class="staff-role-grid">${facBtns}</div>
       ${this.buildMaterialBetSelectorHTML('ore', false)}
-      ${this.renderSlotMachineWidget(probs, this.save.staff.forger, costDesc, canSpin, `${fac.name} 업그레이드 슬롯 돌리기`)}
-      <div class="section-divider">✨ [${fac.name}] 적용 중인 시설 특성 (${fac.passives.length}개)</div>
+      ${this.renderSlotMachineWidget(probs, this.save.staff.forger, costDesc, canSpin, '돌리기')}
+      <div class="section-divider">${fac.name} 특성 ${fac.passives.length}</div>
       <div class="inv-list">${passivesHTML}</div>
     `;
   }
@@ -1580,17 +1554,14 @@ class KairoSlotInnApp {
       .join('');
 
     return `
-      <div class="bet-row-label">🗺️ 탐험할 던전 구역 선택 (상위 던전일수록 B·A·S급 고등급 재료가 드랍됩니다!)</div>
+      <div class="bet-row-label">구역</div>
       <div class="dungeon-zone-grid">${zoneCards}</div>
 
-      <div class="section-divider">🛡️ 출정 파티 (최대 4인 자동 편성)</div>
+      <div class="section-divider">파티</div>
       <div class="party-chip-grid">${partySummary}</div>
 
       <div class="slot-action-bar" style="margin-top:14px;">
-        <div>💡 출발 전 여관에서 <strong>1회성 요리</strong>를 먹이고, 포션가게에서 <strong>포션</strong>을 챙겨주면 돌파력이 급상승합니다!</div>
-        <button id="btn-launch-dungeon" class="kairo-btn-primary">
-          ⚔️ 지금 던전 원정 출발!
-        </button>
+        <button id="btn-launch-dungeon" class="kairo-btn-primary">출정</button>
       </div>
     `;
   }
@@ -1600,22 +1571,13 @@ class KairoSlotInnApp {
    */
   private buildSaveManageHTML(): string {
     return `
-      <div class="info-callout">
-        💾 <strong>이중 금고 자동 저장 작동 중:</strong> 모든 슬롯 결과와 여관 경영 데이터는 브라우저 내장 데이터베이스인
-        <strong>IndexedDB</strong>와 <strong>LocalStorage</strong> 두 곳에 실시간으로 동시 저장됩니다.
-        다른 기기로 옮기거나 영구 백업하고 싶을 때 아래 JSON 세이브 파일 다운로드/불러오기를 이용하세요!
-      </div>
       <div class="save-actions-box">
-        <button id="btn-export-json" class="kairo-btn-keep">
-          📥 세이브 파일(.json) 내 컴퓨터로 다운로드
-        </button>
+        <button id="btn-export-json" class="kairo-btn-keep">내보내기</button>
         <label class="kairo-btn-primary" style="cursor:pointer;">
-          📤 세이브 파일(.json) 불러오기
+          불러오기
           <input type="file" id="input-import-json" accept=".json" style="display:none;" />
         </label>
-        <button id="btn-reset-save" class="kairo-btn-discard">
-          ⚠️ 처음부터 새로 시작 (초기화)
-        </button>
+        <button id="btn-reset-save" class="kairo-btn-discard">새로 시작</button>
       </div>
     `;
   }
@@ -2123,10 +2085,10 @@ class KairoSlotInnApp {
       if (res.success) {
         if (res.greatSuccess) {
           sfx.playJackpot();
-          this.enhanceResultBanner = `🎊 대성공 (+2강 상승!) → 현재 +${targetWp.enhanceCount}강! 계속 도전할 수 있습니다!`;
+          this.enhanceResultBanner = `+2 → +${targetWp.enhanceCount}`;
         } else {
           sfx.playSuccess();
-          this.enhanceResultBanner = `✨ 강화 성공 (+1강 상승!) → 현재 +${targetWp.enhanceCount}강!`;
+          this.enhanceResultBanner = `+1 → +${targetWp.enhanceCount}`;
         }
         this.triggerActorSpeech(
           this.save.staff.enhancer.id,
@@ -2135,7 +2097,7 @@ class KairoSlotInnApp {
         );
       } else {
         sfx.playFailStop();
-        this.enhanceResultBanner = `🔒 아쉽게 실패! 하지만 무기는 파괴되지 않고 [ +${targetWp.enhanceCount}강 ]으로 최종 강화 확정 완료되었습니다!`;
+        this.enhanceResultBanner = `🔒 STOP +${targetWp.enhanceCount}`;
         this.triggerActorSpeech(
           this.save.staff.enhancer.id,
           `+${targetWp.enhanceCount}강에서 확정!`,
@@ -2233,7 +2195,7 @@ class KairoSlotInnApp {
       waveTimer: 0,
       slotSpinTimer: 0,
       currentSlotSymbols: ['⚔️', '🛡️', '🧪'],
-      lastSlotEffect: '던전 입장! 전투 슬롯이 자동으로 회전합니다!',
+      lastSlotEffect: '전투',
       monsterHp: baseHp,
       monsterMaxHp: baseHp,
       monsterName: zone.monsterNames[0],
@@ -2243,7 +2205,7 @@ class KairoSlotInnApp {
       status: 'fighting',
       rewardMultiplier: 1,
       rewardSpun: false,
-      combatLogs: [`🚩 [${zone.name}] 원정대가 출발했습니다!`],
+      combatLogs: [zone.name],
     };
 
     sfx.playSuccess();
@@ -2291,7 +2253,7 @@ class KairoSlotInnApp {
             <strong>${run.monsterName}</strong>
           </div>
           <div class="d-mini-slot">
-            <span class="d-slot-label">🎰 던전 전투 슬롯:</span>
+            <span class="d-slot-label">전투</span>
             <span class="d-slot-reel">${run.currentSlotSymbols[0]}</span>
             <span class="d-slot-reel">${run.currentSlotSymbols[1]}</span>
             <span class="d-slot-reel">${run.currentSlotSymbols[2]}</span>
@@ -2315,17 +2277,16 @@ class KairoSlotInnApp {
 
       banner.innerHTML = `
         <div class="d-reward-box">
-          <h4>🎉 [${zone.name}] 토벌 성공! 클리어 보상 배율 슬롯!</h4>
-          <p>기본 전리품 100% 보장! 슬롯을 돌려 <strong>전리품 배율(x1.5 ~ x3 대박!)</strong>과 보너스 재료를 뽑으세요!</p>
+          <h4>${zone.name} 클리어</h4>
           <div class="d-reward-preview">
-            획득 예정: <strong>💰 ${Math.round(run.accumulatedGold * run.rewardMultiplier)}G</strong> |
-            재료: <strong>${dropsText || '기본 재료'}</strong>
+            <strong>${Math.round(run.accumulatedGold * run.rewardMultiplier)}G</strong>
+            · ${dropsText || '-'}
           </div>
           <div class="d-reward-actions">
             ${
               !run.rewardSpun
-                ? `<button id="btn-spin-dungeon-reward" class="kairo-btn-primary">🎰 클리어 보상 슬롯 돌리기!</button>`
-                : `<button id="btn-claim-dungeon-reward" class="kairo-btn-keep">✅ 보상 수령하고 여관으로 귀환 (${run.rewardMultiplier}배 당첨!)</button>`
+                ? `<button id="btn-spin-dungeon-reward" class="kairo-btn-primary">배율 슬롯</button>`
+                : `<button id="btn-claim-dungeon-reward" class="kairo-btn-keep">수령 x${run.rewardMultiplier}</button>`
             }
           </div>
         </div>
@@ -2351,7 +2312,7 @@ class KairoSlotInnApp {
         }
         this.save.clearedDungeons[run.zoneId] =
           (this.save.clearedDungeons[run.zoneId] || 0) + 1;
-        this.spawnPop(7, 2, `+${finalGold}G 원정 대성공!`, '#fde047');
+        this.spawnPop(7, 2, `+${finalGold}G`, '#fde047');
         this.activeDungeon = null;
         sfx.playCoin();
         this.updateTopHud();
@@ -2361,9 +2322,9 @@ class KairoSlotInnApp {
     } else if (run.status === 'defeat') {
       banner.innerHTML = `
         <div class="d-reward-box">
-          <h4>💦 원정대가 지쳐 여관으로 후퇴했습니다...</h4>
-          <p>도중에 획득한 골드의 절반(${Math.round(run.accumulatedGold * 0.5)}G)을 챙겨 귀환합니다. 여관에서 요리를 먹이고 무기를 강화해 다시 도전하세요!</p>
-          <button id="btn-close-defeat" class="kairo-btn-discard">🏠 여관으로 귀환</button>
+          <h4>후퇴</h4>
+          <p>${Math.round(run.accumulatedGold * 0.5)}G</p>
+          <button id="btn-close-defeat" class="kairo-btn-discard">귀환</button>
         </div>
       `;
       document.getElementById('btn-close-defeat')?.addEventListener('click', () => {
