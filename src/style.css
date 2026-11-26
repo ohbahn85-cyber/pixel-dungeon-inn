@@ -1,15 +1,5 @@
 :root {
   --font-main: 'Pretendard', 'Noto Sans KR', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  --wood-dark: #451a03;
-  --wood-mid: #78350f;
-  --wood-light: #b45309;
-  --gold-bright: #fbbf24;
-  --gold-deep: #d97706;
-  --kairo-blue: #4f638c;
-  --kairo-blue-dark: #33415c;
-  --cream-bg: #fffbeb;
-  --panel-bg: #1e1b2e;
-  --card-bg: #2a243d;
 }
 
 * {
@@ -21,1023 +11,263 @@
 html,
 body {
   width: 100%;
-  height: 100%;
-  overflow: hidden;
+  min-height: 100vh;
   font-family: var(--font-main);
-  background: #231c30;
+  background: #1c1629;
   color: #f8fafc;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
 }
 
-#app-shell {
+#studio-shell {
   display: flex;
   flex-direction: column;
-  width: 100vw;
-  height: 100vh;
+  min-height: 100vh;
 }
 
-/* 1. 상단 카이로소프트풍 HUD 바 */
-#kairo-top-hud {
+#studio-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 16px;
-  background: linear-gradient(180deg, #3b2d52 0%, #271e38 100%);
-  border-bottom: 3px solid #150f21;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 20px;
+  background: linear-gradient(180deg, #3b2d54 0%, #261d38 100%);
+  border-bottom: 3px solid #fbbf24;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
-  z-index: 20;
 }
 
-.kairo-calendar-plaque {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: linear-gradient(180deg, #a16207 0%, #713f12 100%);
-  border: 2.5px solid #451a03;
-  border-radius: 8px;
-  padding: 6px 14px;
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.25), 0 3px 6px rgba(0, 0, 0, 0.4);
-  font-size: 16px;
-  color: #fef08a;
-  letter-spacing: 0.5px;
-  text-shadow: 1px 2px 0 #451a03;
-}
-
-.week-gauge {
-  width: 6px;
-  height: 20px;
-  background: #1e293b;
-  border: 1px solid #0f172a;
-  border-radius: 3px;
-  overflow: hidden;
-}
-
-.week-gauge-fill {
-  width: 100%;
-  height: 75%;
-  background: #4ade80;
-}
-
-.kairo-title-banner h1 {
-  font-size: 17px;
-  font-weight: 900;
-  color: #fef08a;
-  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
-  letter-spacing: -0.3px;
-}
-
-.kairo-resource-cluster {
+.header-left {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.res-pill {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: linear-gradient(180deg, #e2e8f0 0%, #cbd5e1 100%);
-  border: 2.5px solid #334155;
-  border-radius: 8px;
-  padding: 5px 12px;
-  color: #0f172a;
-  font-size: 15px;
-  font-weight: 800;
-  box-shadow: inset 0 2px 0 #ffffff, 0 3px 6px rgba(0, 0, 0, 0.35);
+.step-badge {
+  background: #fbbf24;
+  color: #451a03;
+  font-weight: 900;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
 }
 
-.res-pill.gold-pill strong {
-  color: #b45309;
-  font-size: 16px;
+#studio-header h1 {
+  font-size: 17px;
+  font-weight: 900;
+  color: #fef08a;
 }
 
-.res-pill.scrap-pill strong {
-  color: #7e22ce;
+.header-right {
+  font-size: 13px;
+  color: #cbd5e1;
+  font-weight: 700;
 }
 
-/* 2. 메인 아이소메트릭 쿼터뷰 스테이지 */
-#iso-stage {
-  position: relative;
-  flex: 1;
+#studio-grid {
+  display: grid;
+  grid-template-columns: 340px 1fr 440px;
+  gap: 16px;
+  padding: 16px 20px;
+  max-width: 1440px;
+  margin: 0 auto;
   width: 100%;
-  overflow: hidden;
 }
 
-#iso-canvas {
-  width: 100%;
-  height: 100%;
-  display: block;
-  cursor: pointer;
+@media (max-width: 1180px) {
+  #studio-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
-/* 실시간 던전 전투 슬롯 오버레이 패널 */
-#dungeon-live-panel {
-  position: absolute;
-  top: 12px;
-  right: 16px;
-  width: min(460px, calc(100vw - 32px));
-  background: rgba(24, 20, 38, 0.95);
-  border: 3px solid #fbbf24;
-  border-radius: 14px;
-  padding: 12px 16px;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.65);
-  z-index: 15;
-}
-
-.d-live-header {
+.studio-sidebar,
+.studio-center,
+.studio-right {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-bottom: 8px;
+  gap: 14px;
 }
 
-.d-wave-pill {
-  display: inline-block;
-  background: #dc2626;
-  color: #ffffff;
-  font-size: 12px;
-  font-weight: 800;
-  padding: 2px 8px;
-  border-radius: 6px;
-  margin-right: 6px;
+.panel-card {
+  background: #271f3b;
+  border: 2.5px solid #4c3d69;
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
 }
 
-.d-mini-slot {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  background: #2e2546;
-  border: 1.5px solid #eab308;
-  border-radius: 8px;
-  padding: 6px 10px;
-}
-
-.d-slot-reel {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  background: #ffffff;
-  color: #0f172a;
-  border-radius: 6px;
-  font-size: 16px;
+.panel-card h3 {
+  font-size: 14px;
   font-weight: 900;
-  border: 1.5px solid #94a3b8;
-}
-
-.d-slot-effect {
   color: #fde047;
-  font-weight: 700;
-  font-size: 12.5px;
-}
-
-.d-monster-bar-wrap {
-  position: relative;
-  width: 100%;
-  height: 20px;
-  background: #0f172a;
-  border: 2px solid #475569;
-  border-radius: 10px;
-  overflow: hidden;
-  margin-bottom: 8px;
-}
-
-.d-monster-bar {
-  height: 100%;
-  background: linear-gradient(90deg, #ef4444, #f97316);
-  transition: width 0.25s ease;
-}
-
-.d-monster-hp-text {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11.5px;
-  font-weight: 800;
-  color: #ffffff;
-  text-shadow: 0 1px 2px #000000;
-}
-
-.d-party-row {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
-  margin-bottom: 6px;
-}
-
-.d-hero-mini {
-  background: #1e293b;
-  padding: 4px 6px;
-  border-radius: 6px;
-  font-size: 11.5px;
-  font-weight: 700;
-}
-
-.mini-hp-bar {
-  width: 100%;
-  height: 5px;
-  background: #0f172a;
-  border-radius: 3px;
-  margin-top: 3px;
-  overflow: hidden;
-}
-
-.mini-hp-fill {
-  height: 100%;
-  background: #22c55e;
-}
-
-.d-log-line {
-  font-size: 12px;
-  color: #cbd5e1;
-  font-weight: 600;
-}
-
-.d-reward-box h4 {
-  color: #fde047;
-  font-size: 15px;
-  margin-bottom: 6px;
-}
-
-.d-reward-box p {
-  font-size: 13px;
-  color: #e2e8f0;
-  margin-bottom: 8px;
-}
-
-.d-reward-preview {
-  background: #2a213d;
-  padding: 8px 10px;
-  border-radius: 8px;
-  font-size: 13px;
   margin-bottom: 10px;
 }
 
-/* 3. 하단 카이로소프트풍 도크 바 (첨부 이미지의 Save / Menu 베벨 버튼 스타일!) */
-#kairo-bottom-dock {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 16px;
-  background: linear-gradient(180deg, #332747 0%, #1f172e 100%);
-  border-top: 3px solid #4c3d63;
-  z-index: 20;
+.sub-hint {
+  font-size: 12px;
+  color: #cbd5e1;
+  margin-bottom: 8px;
 }
 
-.kairo-corner-btn {
-  background: linear-gradient(180deg, #6274a3 0%, #44537a 100%);
-  color: #ffffff;
-  border: 2.5px solid #232c45;
-  border-radius: 10px;
-  padding: 10px 18px;
-  font-family: var(--font-main);
-  font-size: 14.5px;
-  font-weight: 800;
-  cursor: pointer;
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 4px 0 #1e2538;
-  transition: transform 0.1s ease;
-  white-space: nowrap;
+.arch-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
 }
 
-.kairo-corner-btn:hover {
-  filter: brightness(1.08);
-}
-
-.kairo-corner-btn:active {
-  transform: translateY(2px);
-}
-
-.kairo-corner-btn.dungeon-go-btn {
-  background: linear-gradient(180deg, #ef4444 0%, #b91c1c 100%);
-  border-color: #450a0a;
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.35), 0 4px 0 #450a0a;
-}
-
-.kairo-dock-center {
+.arch-card {
   display: flex;
   align-items: center;
   gap: 8px;
-  overflow-x: auto;
-  padding-bottom: 2px;
-}
-
-.dock-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: linear-gradient(180deg, #fffbeb 0%, #fde68a 100%);
-  color: #451a03;
-  border: 2.5px solid #78350f;
+  background: #1c162b;
+  color: #f8fafc;
+  border: 2px solid #3f3259;
   border-radius: 10px;
-  padding: 8px 13px;
+  padding: 8px 9px;
   font-family: var(--font-main);
-  font-size: 13.5px;
-  font-weight: 800;
+  text-align: left;
   cursor: pointer;
-  box-shadow: inset 0 2px 0 #ffffff, 0 3px 0 #451a03;
-  white-space: nowrap;
-  transition: transform 0.1s ease, filter 0.1s ease;
+  transition: transform 0.1s ease, border-color 0.1s ease;
 }
 
-.dock-btn:hover {
-  filter: brightness(1.05);
-  transform: translateY(-1px);
+.arch-card:hover {
+  border-color: #94a3b8;
 }
 
-.dock-btn:active {
-  transform: translateY(2px);
+.arch-card.active {
+  background: #3d2e5e;
+  border-color: #fbbf24;
+  box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.35);
 }
 
-.dock-icon {
-  font-size: 17px;
+.arch-icon {
+  font-size: 20px;
 }
 
-/* 4. 슬롯머신 & 시설 운영 모달 창 */
-.hidden {
-  display: none !important;
-}
-
-#modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(10, 8, 18, 0.72);
-  backdrop-filter: blur(3px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
-  z-index: 50;
-}
-
-#kairo-modal-window {
-  width: min(880px, 96vw);
-  max-height: 88vh;
+.arch-info {
   display: flex;
   flex-direction: column;
-  background: #231d33;
-  border: 3.5px solid #fbbf24;
-  border-radius: 16px;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.75);
-  overflow: hidden;
 }
 
-.modal-top-bar {
+.arch-info strong {
+  font-size: 12.5px;
+}
+
+.arch-info small {
+  font-size: 11px;
+  color: #cbd5e1;
+}
+
+.action-btn-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.act-btn {
+  background: #1c162b;
+  color: #e2e8f0;
+  border: 2px solid #3f3259;
+  border-radius: 9px;
+  padding: 8px 10px;
+  font-family: var(--font-main);
+  font-size: 12.5px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.act-btn.active {
+  background: #fbbf24;
+  color: #451a03;
+  border-color: #78350f;
+}
+
+.ctrl-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 10px;
+  font-size: 12.5px;
+}
+
+.ctrl-row label {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 18px;
-  background: linear-gradient(180deg, #b45309 0%, #78350f 100%);
-  border-bottom: 2.5px solid #451a03;
 }
 
-.modal-top-bar h2 {
+.inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+input[type='range'] {
+  width: 100%;
+  accent-color: #fbbf24;
+}
+
+.center-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.char-meta-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.char-meta-banner h2 {
   font-size: 18px;
   font-weight: 900;
   color: #fef08a;
-  text-shadow: 0 2px 3px rgba(0, 0, 0, 0.6);
 }
 
-#modal-close-btn {
-  background: #dc2626;
-  color: #ffffff;
-  border: 2px solid #450a0a;
-  border-radius: 8px;
-  padding: 5px 12px;
-  font-family: var(--font-main);
-  font-size: 13.5px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.modal-quick-nav {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 14px;
-  background: #191426;
-  border-bottom: 1.5px solid #352c4d;
-  overflow-x: auto;
-}
-
-.modal-nav-pill {
-  background: #2d2542;
-  color: #cbd5e1;
-  border: 1.5px solid #473b66;
-  border-radius: 8px;
-  padding: 5px 10px;
-  font-family: var(--font-main);
-  font-size: 12.5px;
-  font-weight: 700;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.modal-nav-pill.active,
-.modal-nav-pill:hover {
-  background: #fbbf24;
-  color: #451a03;
-  border-color: #78350f;
-}
-
-#modal-body {
-  padding: 16px 18px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-/* 슬롯머신 위젯 스타일 */
-.kairo-slot-machine {
-  background: linear-gradient(180deg, #32284a 0%, #241c38 100%);
-  border: 3px solid #eab308;
-  border-radius: 14px;
-  padding: 14px 16px;
-  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.45);
-}
-
-.kairo-slot-machine.jackpot-glow {
-  border-color: #f43f5e;
-  box-shadow: 0 0 22px rgba(251, 191, 36, 0.65);
-}
-
-.slot-header-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-
-.staff-badge-card {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: #1b152b;
-  padding: 6px 12px;
-  border-radius: 8px;
-  border: 1.5px solid #4c3d63;
-  font-size: 13.5px;
-}
-
-.staff-bonus-tag {
-  color: #fde047;
-  font-weight: 700;
-  font-size: 12.5px;
-}
-
-.prob-bar-group {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.prob-chip {
-  padding: 4px 9px;
-  border-radius: 6px;
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.tier-pill {
-  display: inline-block;
-  padding: 2px 7px;
-  border-radius: 5px;
-  font-size: 11.5px;
-  font-weight: 900;
-  margin-right: 4px;
-}
-
-.tier-C {
-  background: #475569;
-  color: #f8fafc;
-}
-.tier-B {
-  background: #0284c7;
-  color: #ffffff;
-}
-.tier-A {
-  background: #9333ea;
-  color: #ffffff;
-}
-.tier-S {
-  background: #eab308;
-  color: #451a03;
-}
-
-.tier-border-C {
-  border-color: #64748b !important;
-}
-.tier-border-B {
-  border-color: #38bdf8 !important;
-}
-.tier-border-A {
-  border-color: #c084fc !important;
-}
-.tier-border-S {
-  border-color: #fbbf24 !important;
-}
-
-.slot-reels-frame {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  background: #130f1f;
-  border: 3px solid #b45309;
-  border-radius: 12px;
-  padding: 14px;
-  margin-bottom: 12px;
-}
-
-.slot-reel-cell {
-  width: 74px;
-  height: 74px;
-  background: linear-gradient(180deg, #ffffff 0%, #f1f5f9 100%);
-  border: 3px solid #64748b;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 38px;
-  box-shadow: inset 0 3px 6px rgba(0, 0, 0, 0.2);
-}
-
-.slot-reel-cell.spinning {
-  transform: scale(1.06);
-  border-color: #eab308;
-}
-
-.slot-action-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-
-.slot-cost-label {
-  font-size: 13.5px;
-  color: #e2e8f0;
-}
-
-.slot-cost-label strong {
-  color: #fde047;
-}
-
-/* 버튼 스타일 */
-.kairo-btn-primary {
-  background: linear-gradient(180deg, #fbbf24 0%, #d97706 100%);
-  color: #451a03;
-  border: 2.5px solid #451a03;
-  border-radius: 10px;
-  padding: 10px 20px;
-  font-family: var(--font-main);
-  font-size: 15px;
-  font-weight: 900;
-  cursor: pointer;
-  box-shadow: inset 0 2px 0 #fef08a, 0 4px 0 #451a03;
-}
-
-.kairo-btn-primary.disabled,
-.kairo-btn-primary:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.kairo-btn-keep {
-  background: linear-gradient(180deg, #22c55e 0%, #15803d 100%);
-  color: #ffffff;
-  border: 2.5px solid #052e16;
-  border-radius: 10px;
-  padding: 10px 20px;
-  font-family: var(--font-main);
-  font-size: 14.5px;
-  font-weight: 900;
-  cursor: pointer;
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.3), 0 3px 0 #052e16;
-}
-
-.kairo-btn-discard {
-  background: linear-gradient(180deg, #64748b 0%, #334155 100%);
-  color: #f8fafc;
-  border: 2.5px solid #0f172a;
-  border-radius: 10px;
-  padding: 10px 18px;
-  font-family: var(--font-main);
-  font-size: 14px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.kairo-btn-mini {
-  background: #3b82f6;
-  color: #ffffff;
-  border: 1.5px solid #1e3a8a;
-  border-radius: 7px;
-  padding: 6px 11px;
-  font-family: var(--font-main);
-  font-size: 12.5px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.kairo-btn-mini.gold {
-  background: #d97706;
-  border-color: #78350f;
-}
-
-.kairo-btn-mini.purple {
-  background: #9333ea;
-  border-color: #581c87;
-}
-
-.kairo-btn-mini.danger {
-  background: #dc2626;
-  border-color: #7f1d1d;
-}
-
-.kairo-btn-mini:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-/* 베팅 그리드 및 선택 카드 */
-.bet-selector-panel {
-  background: #1b1629;
-  border: 1.5px solid #3c3157;
-  border-radius: 11px;
-  padding: 10px 12px;
-}
-
-.bet-row-label {
-  font-size: 13px;
-  font-weight: 800;
-  color: #fde047;
-  margin-bottom: 6px;
-}
-
-.bet-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 8px;
-}
-
-.mat-bet-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  background: #2b2340;
-  color: #f8fafc;
-  border: 2px solid #4c3d63;
-  border-radius: 9px;
-  padding: 8px 10px;
-  font-family: var(--font-main);
-  text-align: left;
-  cursor: pointer;
-}
-
-.mat-bet-btn.selected {
-  background: #423363;
-  box-shadow: 0 0 0 2px #fbbf24;
-}
-
-.mat-icon {
-  font-size: 22px;
-}
-
-.mat-meta {
-  display: flex;
-  flex-direction: column;
-  font-size: 12.5px;
-}
-
-.mat-meta small {
-  color: #cbd5e1;
-  font-size: 11.5px;
-}
-
-/* 채택 / 버리기 결과 카드 */
-.decision-box {
-  background: #191326;
-  border: 2px solid #fbbf24;
-  border-radius: 12px;
-  padding: 12px;
-}
-
-.jackpot-banner {
-  background: linear-gradient(90deg, #f43f5e, #eab308, #f43f5e);
-  color: #ffffff;
-  font-weight: 900;
-  text-align: center;
-  padding: 5px;
-  border-radius: 7px;
-  margin-bottom: 8px;
-  font-size: 14px;
-}
-
-.result-card {
-  background: #28203b;
-  border: 2px solid #64748b;
-  border-radius: 9px;
-  padding: 10px 12px;
-  margin-bottom: 10px;
-}
-
-.result-title {
-  font-size: 15px;
-  margin-bottom: 4px;
-}
-
-.result-desc {
-  font-size: 13px;
-  color: #cbd5e1;
-}
-
-.decision-buttons {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-}
-
-/* 대장간 3서브탭 & 특화 무기 & 인챈트 범위 표시 */
-.subtab-bar {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-}
-
-.subtab-btn {
-  background: #2b2340;
-  color: #cbd5e1;
-  border: 2px solid #4c3d63;
-  border-radius: 9px;
-  padding: 9px 10px;
-  font-family: var(--font-main);
-  font-size: 13px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.subtab-btn.active {
-  background: #fbbf24;
-  color: #451a03;
-  border-color: #78350f;
-}
-
-.weapon-type-grid {
-  display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 8px;
-}
-
-.weapon-type-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  background: #2b2340;
-  color: #f8fafc;
-  border: 2px solid #4c3d63;
-  border-radius: 9px;
-  padding: 8px;
-  font-family: var(--font-main);
-  font-size: 13px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.weapon-type-btn.selected {
-  background: #423363;
-  border-color: #fbbf24;
-}
-
-.spec-star {
-  color: #fde047;
-  font-size: 11px;
-}
-
-.weapon-pick-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.weapon-pick-chip {
-  display: flex;
-  flex-direction: column;
-  background: #2b2340;
-  color: #f8fafc;
-  border: 2px solid #4c3d63;
-  border-radius: 8px;
-  padding: 7px 11px;
-  font-family: var(--font-main);
-  font-size: 12.5px;
-  cursor: pointer;
-  text-align: left;
-}
-
-.weapon-pick-chip.selected {
-  background: #433266;
-  box-shadow: 0 0 0 2px #fbbf24;
-}
-
-.enhance-banner {
-  background: #1e293b;
-  border: 2px solid #38bdf8;
-  color: #fef08a;
-  font-weight: 800;
-  padding: 9px 12px;
-  border-radius: 8px;
-  margin-bottom: 10px;
-  text-align: center;
-  font-size: 13.5px;
-}
-
-.enchant-preview-box {
-  background: #1b152b;
-  border: 2px solid #a855f7;
-  border-radius: 11px;
-  padding: 10px 12px;
-}
-
-.enchant-preview-header {
-  font-size: 13.5px;
-  margin-bottom: 8px;
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.highlight-badge {
-  background: #9333ea;
-  color: #ffffff;
-  padding: 2px 8px;
-  border-radius: 6px;
-}
-
-.range-preview-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 6px;
-}
-
-.range-preview-chip {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: #29213d;
-  padding: 5px 10px;
-  border-radius: 6px;
-  font-size: 12px;
-}
-
-.range-preview-chip b {
-  color: #fde047;
-}
-
-.enchant-tag-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
-}
-
-.enchant-tag {
-  background: #1e1b2e;
-  border: 1.5px solid #c084fc;
-  padding: 4px 9px;
-  border-radius: 6px;
-  font-size: 12.5px;
-}
-
-/* 보관함 및 리스트 공통 */
-.section-divider {
-  font-size: 14px;
-  font-weight: 900;
-  color: #fde047;
-  border-bottom: 1.5px solid #3c3157;
-  padding-bottom: 4px;
-  margin-top: 4px;
-}
-
-.inv-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.inv-item-card,
-.hero-roster-card,
-.trade-item-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 10px;
-  background: #2a223d;
-  border: 2px solid #4c3d63;
-  border-radius: 10px;
-  padding: 10px 14px;
-}
-
-.sub-text {
-  font-size: 12.5px;
-  color: #cbd5e1;
-  margin-top: 3px;
-}
-
-.inv-actions,
-.trade-item-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.kairo-select {
-  background: #191426;
-  color: #f8fafc;
+.tool-pill {
+  background: #3b2d54;
   border: 1.5px solid #fbbf24;
-  border-radius: 7px;
-  padding: 6px 10px;
-  font-family: var(--font-main);
-  font-size: 12.5px;
-  font-weight: 700;
+  color: #fde047;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 3px 10px;
+  border-radius: 999px;
 }
 
-.info-callout {
-  background: #1b162b;
-  border-left: 4px solid #fbbf24;
-  padding: 9px 12px;
-  border-radius: 7px;
+.char-desc {
   font-size: 13px;
-  line-height: 1.45;
   color: #e2e8f0;
+  margin-bottom: 12px;
+  line-height: 1.45;
 }
 
-.staff-role-grid,
-.dungeon-zone-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 8px;
+.canvas-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 60%, #35294f 0%, #191326 100%);
+  border: 2.5px solid #fbbf24;
+  border-radius: 12px;
+  overflow: hidden;
 }
 
-.staff-role-tab,
-.dungeon-zone-card {
-  background: #2b2340;
-  color: #f8fafc;
-  border: 2px solid #4c3d63;
+canvas {
+  max-width: 100%;
+  display: block;
+  background: #191326;
   border-radius: 10px;
-  padding: 10px 12px;
-  font-family: var(--font-main);
-  text-align: left;
-  cursor: pointer;
 }
 
-.staff-role-tab.selected,
-.dungeon-zone-card.selected {
-  background: #433266;
-  border-color: #fbbf24;
-  box-shadow: 0 0 0 2px #fbbf24;
+#studio-main-canvas {
+  background: transparent;
+  cursor: grab;
 }
 
-.party-chip-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 8px;
-}
-
-.party-member-chip {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  background: #29213d;
-  border: 2px solid #4c3d63;
-  border-radius: 9px;
-  padding: 8px 10px;
-  font-size: 12.5px;
-}
-
-.save-actions-box {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding: 12px 0;
-}
-
-.empty-hint {
-  text-align: center;
-  padding: 16px;
-  color: #94a3b8;
-  font-size: 13px;
+#studio-main-canvas:active {
+  cursor: grabbing;
 }
