@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Step 1: 카이로소프트풍 Sprite-Stacking 캐릭터 빌드 스튜디오</title>
+    <title>대표 캐릭터 1종: 앞 · 뒤 · 좌 · 우 4방향 디자인 시트</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -12,99 +12,39 @@
     />
   </head>
   <body>
-    <div id="studio-shell">
-      <header id="studio-header">
-        <div class="header-left">
-          <span class="step-badge">STEP 1 · 캐릭터 빌드</span>
-          <h1>🧱 카이로소프트풍 Sprite-Stacking (22층 복셀 슬라이스 적층) 스튜디오</h1>
+    <div id="sheet-shell">
+      <header id="sheet-header">
+        <div>
+          <span class="badge-pill">대표 캐릭터 1종 · 4방향 디자인 검수</span>
+          <h1>🔨 대장장이 명장 (발칸) — 앞(Front) · 뒤(Back) · 좌(Left) · 우(Right)</h1>
         </div>
-        <div class="header-right">
-          <span>360° 회전 · 팔다리 관절 교차 · 카이로 다크브라운 외곽선</span>
+        <div class="action-bar">
+          <button class="anim-btn active" data-state="idle">😌 기본 서있기 (Idle)</button>
+          <button class="anim-btn" data-state="walk">🏃 걷기 모션 (Walk)</button>
+          <button class="anim-btn" data-state="work">🔨 망치질 작업 (Work)</button>
         </div>
       </header>
 
-      <main id="studio-grid">
-        <!-- 좌측: 8종 캐릭터 선택 & 애니메이션/슬라이스 컨트롤 -->
-        <aside class="studio-sidebar">
-          <div class="panel-card">
-            <h3>🦸 1. 캐릭터 아키타입 (영웅 5종 · 장인 직원 3종)</h3>
-            <div id="archetype-list" class="arch-grid"></div>
-          </div>
+      <main id="four-way-grid">
+        <div class="view-card">
+          <div class="view-label">1. 정면 (FRONT · 앞모습)</div>
+          <canvas id="canvas-front" width="280" height="300"></canvas>
+        </div>
 
-          <div class="panel-card">
-            <h3>🎬 2. 행동 애니메이션 테스트</h3>
-            <div class="action-btn-grid">
-              <button class="act-btn" data-action-id="idle">😌 기본 호흡 (Idle)</button>
-              <button class="act-btn active" data-action-id="walk">🏃 걷기 (Walk)</button>
-              <button class="act-btn" data-action-id="work">🔨 작업/망치질 (Work)</button>
-              <button class="act-btn" data-action-id="attack">⚔️ 무기 공격 (Attack)</button>
-              <button class="act-btn" data-action-id="cheer">🎊 잭팟 환호 (Cheer)</button>
-            </div>
-          </div>
+        <div class="view-card">
+          <div class="view-label">2. 후면 (BACK · 뒷모습)</div>
+          <canvas id="canvas-back" width="280" height="300"></canvas>
+        </div>
 
-          <div class="panel-card">
-            <h3>⚙️ 3. Sprite-Stacking 층 & 각도 제어</h3>
-            <div class="ctrl-row">
-              <label>
-                <span>🔄 360° 회전 각도: <strong id="label-angle-val">25°</strong></span>
-                <label class="inline-check">
-                  <input type="checkbox" id="check-autorotate" checked /> 자동 회전
-                </label>
-              </label>
-              <input type="range" id="slider-angle" min="0" max="360" value="25" />
-            </div>
+        <div class="view-card">
+          <div class="view-label">3. 좌측면 (LEFT · 왼쪽 모습)</div>
+          <canvas id="canvas-left" width="280" height="300"></canvas>
+        </div>
 
-            <div class="ctrl-row">
-              <label>
-                <span>🥞 Z-슬라이스 층 간격 분해 (Explode): <strong id="label-explode-val">1.0x</strong></span>
-              </label>
-              <input type="range" id="slider-explode" min="0.8" max="2.4" step="0.1" value="1.0" />
-            </div>
-
-            <div class="ctrl-row">
-              <label>
-                <span>🔍 도트 픽셀 크기 (Scale): <strong id="label-scale-val">5px</strong></span>
-              </label>
-              <input type="range" id="slider-scale" min="3" max="7" step="1" value="5" />
-            </div>
-
-            <div class="ctrl-row">
-              <label class="inline-check">
-                <input type="checkbox" id="check-outline" checked />
-                <span>카이로소프트풍 에스프레소 다크브라운(#231714) 외곽선 적용</span>
-              </label>
-            </div>
-          </div>
-        </aside>
-
-        <!-- 중앙: 360도 턴테이블 메인 프리뷰 -->
-        <section class="studio-center">
-          <div class="panel-card center-card">
-            <div class="char-meta-banner">
-              <h2 id="char-detail-title">🛡️ 왕국 기사 (아서)</h2>
-              <span id="char-detail-tool" class="tool-pill">장착 무기/도구: 강철 장검 & 문장 방패</span>
-            </div>
-            <p id="char-detail-desc" class="char-desc"></p>
-            <div class="canvas-wrap">
-              <canvas id="studio-main-canvas" width="420" height="360"></canvas>
-            </div>
-          </div>
-        </section>
-
-        <!-- 우측: 21개 Z-슬라이스 단면도 & 쿼터뷰 타일 위 실시간 주행 샌드박스 -->
-        <section class="studio-right">
-          <div class="panel-card">
-            <h3>🥞 Z-슬라이스 층별 단면도 (Z0 발끝 → Z20 모자 끝)</h3>
-            <p class="sub-hint">아래 21장의 2D 도트 단면이 차곡차곡 위로 쌓여(Stacking) 중앙의 3D 도트 캐릭터가 됩니다.</p>
-            <canvas id="studio-slice-canvas" width="420" height="175"></canvas>
-          </div>
-
-          <div class="panel-card">
-            <h3>🗺️ 쿼터뷰(Isometric) 여관 바닥 실시간 주행 테스트</h3>
-            <p class="sub-hint">이동 방향에 맞춰 캐릭터가 360도 자연스럽게 회전하며 걷고 작업합니다.</p>
-            <canvas id="studio-sandbox-canvas" width="420" height="235"></canvas>
-          </div>
-        </section>
+        <div class="view-card">
+          <div class="view-label">4. 우측면 (RIGHT · 오른쪽 모습)</div>
+          <canvas id="canvas-right" width="280" height="300"></canvas>
+        </div>
       </main>
     </div>
 
