@@ -1,12 +1,11 @@
 import {
   AnimState,
-  drawBlacksmithCharacter,
   FacingDir,
-  getBlacksmithPose,
+  renderPixelArtCharacter,
 } from './spriteStack';
 import './style.css';
 
-class FourWayCharacterSheet {
+class FourWayPixelArtSheet {
   private state: AnimState = 'idle';
   private canvases: Record<FacingDir, HTMLCanvasElement> = {} as Record<
     FacingDir,
@@ -34,8 +33,8 @@ class FourWayCharacterSheet {
   }
 
   private loop(now: number): void {
-    const t = now / 1000;
-    const pose = getBlacksmithPose(this.state, t);
+    const fps = this.state === 'idle' ? 3.2 : this.state === 'walk' ? 6.5 : 5.5;
+    const frameIdx = Math.floor((now / 1000) * fps) % 4;
 
     const dirs: FacingDir[] = ['front', 'back', 'left', 'right'];
     for (const dir of dirs) {
@@ -45,52 +44,47 @@ class FourWayCharacterSheet {
 
       const w = canvas.width;
       const h = canvas.height;
+      ctx.imageSmoothingEnabled = false;
       ctx.clearRect(0, 0, w, h);
 
-      const cx = Math.floor(w * 0.5);
-      const groundY = Math.floor(h * 0.78);
+      // 1. 확대 검수용 (6배 정수 픽셀 스케일)
+      renderPixelArtCharacter(
+        ctx,
+        dir,
+        this.state,
+        frameIdx,
+        Math.floor(w * 0.5),
+        Math.floor(h * 0.72),
+        6
+      );
 
-      // 발판 타일
-      this.drawPedestal(ctx, cx, groundY + 6);
+      // 2. 하단 우측에 실제 인게임 크기(2배 픽셀 스케일) 비교 미니 프리뷰 표시
+      ctx.fillStyle = 'rgba(20, 15, 32, 0.72)';
+      ctx.fillRect(w - 76, h - 76, 68, 68);
+      ctx.strokeStyle = '#64748b';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(w - 76, h - 76, 68, 68);
+      renderPixelArtCharacter(
+        ctx,
+        dir,
+        this.state,
+        frameIdx,
+        w - 42,
+        h - 14,
+        2
+      );
 
-      // 캐릭터 4방향 렌더링
-      drawBlacksmithCharacter(ctx, dir, pose, cx, groundY, 1.55);
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = 'bold 11px "Pretendard", "Noto Sans KR", sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText('24×28 도트 (6x 확대)', 12, h - 14);
     }
 
     requestAnimationFrame((n) => this.loop(n));
   }
-
-  private drawPedestal(
-    ctx: CanvasRenderingContext2D,
-    cx: number,
-    cy: number
-  ): void {
-    ctx.save();
-    ctx.beginPath();
-    ctx.ellipse(cx, cy + 7, 74, 28, 0, 0, Math.PI * 2);
-    ctx.fillStyle = '#451a03';
-    ctx.fill();
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = '#231512';
-    ctx.stroke();
-
-    const grad = ctx.createRadialGradient(cx - 15, cy - 8, 5, cx, cy, 74);
-    grad.addColorStop(0, '#fef08a');
-    grad.addColorStop(0.7, '#f59e0b');
-    grad.addColorStop(1, '#b45309');
-
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, 74, 28, 0, 0, Math.PI * 2);
-    ctx.fillStyle = grad;
-    ctx.fill();
-    ctx.lineWidth = 2.5;
-    ctx.strokeStyle = '#231512';
-    ctx.stroke();
-    ctx.restore();
-  }
 }
 
 window.addEventListener('DOMContentLoaded', () => {
-  const sheet = new FourWayCharacterSheet();
+  const sheet = new FourWayPixelArtSheet();
   sheet.init();
 });
