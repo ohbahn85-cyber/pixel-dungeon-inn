@@ -3,12 +3,13 @@
 
 local Starter = require("starter_character")
 local Targeting = require("combat_targeting")
+local Progress = require("run_progress")
 local CharacterPreview = require("character_preview")
 
 local atlasImg
 local quads = {}
 
-local mode = "preview" -- "preview" | "camp" | "battle" | "victory" | "gameover"
+local mode = "preview" -- "preview" | "camp" | "battle" | "levelup" | "victory" | "gameover"
 local dungeonStage = 1
 local timeAcc = 0
 local shakeTimer, shakeMag = 0, 0
@@ -89,17 +90,22 @@ local TIER_COLORS = {
     S = {1.00, 0.84, 0.20},
 }
 
-local TREE_LABELS = {
-    warrior = "WARRIOR TREE",
-    archer  = "RANGED TREE",
-    mage    = "OCCULT TREE",
-    mutant  = "S-MUTANT TREE",
-}
+local function summonTag(meta)
+    if meta.role == "melee" then return "melee" end
+    return meta.tree == "mage" and "magic" or "ranged"
+end
 
 local legion = {}
 local selectedUnitIdx = 1
 local fusionMateIdx = nil
 local rosterScroll = 0
+local maxEquippedRings = 10
+local upgradeCards = { x = 136, y = 222, width = 220, height = 132, gap = 14 }
+local run = Progress.new()
+local runSynergies = {}
+local xpColor = { 0.40, 0.83, 1.0 }
+local markColor = { 0.97, 0.74, 0.39 }
+local burstColor = { 0.73, 0.48, 1.0 }
 
 local bannerMsg = "0x72 Official Pixel Art Loaded! Pull Summons, Upgrade Trees, Fuse Mutants & Raid Dungeon!"
 local bannerCol = {0.55, 1.0, 0.72}
@@ -191,9 +197,9 @@ function love.load()
     }
 
     -- 시작 군단 3기 지급
-    table.insert(legion, { id = 1, enhance = 0 })
-    table.insert(legion, { id = 4, enhance = 0 })
-    table.insert(legion, { id = 7, enhance = 0 })
+    table.insert(legion, { id = 1, enhance = 0, equipped = true })
+    table.insert(legion, { id = 4, enhance = 0, equipped = true })
+    table.insert(legion, { id = 7, enhance = 0, equipped = true })
 end
 
 local function addShake(dur, mag)
@@ -259,6 +265,37 @@ end
 -- 캠프 준비: 가챠 / 상향 트리 / 확률 변이 합성 / 근접 무기 제작 & 확률 강화
 -- ==============================================================================
 
+local function equippedRings()
+    local equipped = {}
+    for _, ring in ipairs(legion) do
+        if ring.equipped then equipped[#equipped + 1] = ring end
+    end
+    return equipped
+end
+
+local function getSynergies(equipped)
+    local melee, archer, mage = false, false, false
+    for _, ring in ipairs(equipped) do
+        local tag = summonTag(UNIT_DB[ring.id])
+        melee = melee or tag == "melee"
+        archer = archer or tag == "ranged"
+        mage = mage or tag == "magic"
+    end
+    return { markedShot = melee and archer, graveBurst = melee and mage }
+end
+
+local function toggleSelectedRing()
+    local ring = legion[selectedUnitIdx]
+    if not ring then return end
+    if not ring.equipped and #equippedRings() >= maxEquippedRings then
+        setBanner("All ten finger slots are full.", {1, 0.76, 0.45})
+        return
+    end
+    ring.equipped = not ring.equipped
+    local action = ring.equipped and " equipped." or " unequipped."
+    setBanner(UNIT_DB[ring.id].name .. " ring" .. action, {0.56, 0.9, 0.78})
+end
+
 local function rollSummonGacha(count)
     local cost = (count == 5) and 120 or 28
     if res.souls < cost then
@@ -294,7 +331,7 @@ local function rollSummonGacha(count)
 
     selectedUnitIdx = #legion
     fusionMateIdx = nil
-    setBanner("GACHA (" .. count .. "x): " .. table.concat(pulledNames, ", ") .. " (Total Army: " .. #legion .. ")", TIER_COLORS[bestTier])
+    setBanner("GACHA (" .. count .. "x): " .. table.concat(pulledNames, ", ") .. " (Select a ring to equip)", TIER_COLORS[bestTier])
     addShake(bestTier == "S" and 0.35 or 0.12, bestTier == "S" and 8 or 3)
     spawnParticles(160, 250, TIER_COLORS[bestTier], count * 8, 140)
 end
@@ -361,6 +398,7 @@ local function executeMutantFusion(idx1, idx2)
     end
 
     local keptEnhance = math.max(u1.enhance, u2.enhance)
+    local keepEquipped = u1.equipped or u2.equipped
     table.remove(legion, math.max(idx1, idx2))
     table.remove(legion, math.min(idx1, idx2))
 
@@ -381,7 +419,7 @@ local function executeMutantFusion(idx1, idx2)
         end
         resultId = candidates[math.random(1, #candidates)]
         local resMeta = UNIT_DB[resultId]
-        table.insert(legion, { id = resultId, enhance = keptEnhance })
+        table.insert(legion, { id = resultId, enhance = keptEnhance, equipped = keepEquipped })
         selectedUnitIdx = #legion
         setBanner("MUTANT FUSION SUCCESS (65%)! Cross-Tree Evolved into [" .. resMeta.tier .. "] " .. resMeta.name .. "!", TIER_COLORS[resMeta.tier])
         addShake(0.35, 8)
@@ -393,7 +431,7 @@ local function executeMutantFusion(idx1, idx2)
         end
         resultId = samePool[math.random(1, #samePool)]
         local resMeta = UNIT_DB[resultId]
-        table.insert(legion, { id = resultId, enhance = keptEnhance })
+        table.insert(legion, { id = resultId, enhance = keptEnhance, equipped = keepEquipped })
         selectedUnitIdx = #legion
         setBanner("FUSION FAILED (35%)... Mutated into random same-tier [" .. resMeta.tier .. "] " .. resMeta.name .. "!", {1.0, 0.65, 0.30})
         addShake(0.18, 4)
@@ -484,6 +522,9 @@ end
 -- ==============================================================================
 
 local function startDungeonRun()
+    local deployed = equippedRings()
+    run = Progress.new()
+    runSynergies = getSynergies(deployed)
     mode = "battle"
     local maxHp = getNecroCombatStats()
     necro.maxHp = maxHp; necro.hp = maxHp
@@ -496,7 +537,7 @@ local function startDungeonRun()
     dungeonLootEarned = { souls = 0, bones = 0, herbs = 0, iron = 0 }
 
     activeSummons = {}
-    for i, u in ipairs(legion) do
+    for i, u in ipairs(deployed) do
         local hp, atk, meta = getUnitCombatStats(u)
         local ring = 45 + math.floor((i - 1) / 8) * 28
         local ang = ((i - 1) % 8) * (math.pi * 2 / 8)
@@ -570,13 +611,18 @@ local function usesStarterSwing()
     return necro.stage == 1 and necro.weaponIdx == 1
 end
 
+local function meleeReach(weapon)
+    return weapon.arcRadius + 12 * (run.ranks.range or 0)
+end
+
 local function applyNecroMeleeSwing()
     local _, atk, wp = getNecroCombatStats()
+    atk = math.floor(atk * (1 + 0.25 * (run.ranks.weapon or 0)))
     local hitCount = 0
     for _, e in ipairs(enemies) do
         local dx = e.x - necro.x
         local dy = e.y - necro.y
-        local reach = wp.arcRadius + e.radius
+        local reach = meleeReach(wp) + e.radius
         if e.hp > 0 and dx * dx + dy * dy <= reach * reach then
             local angToEnemy = math.atan2(dy, dx)
             local diff = math.atan2(math.sin(angToEnemy - necro.swingAngle), math.cos(angToEnemy - necro.swingAngle))
@@ -632,20 +678,66 @@ local function useBattlePotion(kind)
     end
 end
 
+local function isMarked(enemy)
+    return (enemy.markTimer or 0) > 0
+end
+
+local function applySummonProjectile(projectile, enemy)
+    local damage = projectile.dmg
+    local tint = projectile.col
+    if projectile.tag == "ranged" and runSynergies.markedShot and isMarked(enemy) then
+        damage = damage + math.floor(damage * (0.5 + 0.25 * (run.ranks.shot or 0)))
+        tint = markColor
+        spawnParticles(enemy.x, enemy.y - 10, tint, 5, 100)
+    end
+    enemy.hp = enemy.hp - damage
+    enemy.hitFlash = 0.10
+    spawnPop(enemy.x, enemy.y - 24, tostring(damage), tint)
+
+    if projectile.tag == "magic" and runSynergies.graveBurst and isMarked(enemy) and enemy.burstReady then
+        enemy.burstReady = false
+        local rank = run.ranks.burst or 0
+        local radius = 70 + rank * 8
+        local splash = math.max(1, math.floor(projectile.dmg * (0.5 + rank * 0.25)))
+        spawnParticles(enemy.x, enemy.y - 12, burstColor, 13, 145)
+        for _, other in ipairs(enemies) do
+            local dx, dy = other.x - enemy.x, other.y - enemy.y
+            if other ~= enemy and other.hp > 0 and dx * dx + dy * dy <= radius * radius then
+                other.hp = other.hp - splash
+                other.hitFlash = 0.10
+                spawnPop(other.x, other.y - 24, tostring(splash), burstColor)
+            end
+        end
+    end
+end
+
+local function offerRunUpgrade()
+    Progress.offer(run, runSynergies)
+    mode = run.choices and "levelup" or "battle"
+end
+
+local function chooseRunUpgrade(index)
+    if Progress.pick(run, index) then offerRunUpgrade() end
+end
+
 local function updateBattle(dt)
     necro.swingTimer = math.max(0, necro.swingTimer - dt)
     necro.swingCooldown = math.max(0, necro.swingCooldown - dt)
     necro.invulnTimer = math.max(0, necro.invulnTimer - dt)
     necro.frenzyTimer = math.max(0, necro.frenzyTimer - dt)
     necro.soulBoostTimer = math.max(0, necro.soulBoostTimer - dt)
+    for _, enemy in ipairs(enemies) do
+        if enemy.markTimer then enemy.markTimer = math.max(0, enemy.markTimer - dt) end
+    end
 
     local dx, dy = Starter.movementInput()
     necro.moving = dx ~= 0 or dy ~= 0
     if dx ~= 0 then necro.facing = dx > 0 and 1 or -1 end
     local oldX, oldY = necro.x, necro.y
     necro.direction = Starter.facing(dx, dy, necro.direction)
-    necro.x = math.max(54, math.min(906, necro.x + dx * 190 * dt))
-    necro.y = math.max(84, math.min(495, necro.y + dy * 190 * dt))
+    local speed = 190 * (1 + 0.10 * (run.ranks.speed or 0))
+    necro.x = math.max(54, math.min(906, necro.x + dx * speed * dt))
+    necro.y = math.max(84, math.min(495, necro.y + dy * speed * dt))
     local movedX, movedY = necro.x - oldX, necro.y - oldY
     local distance = math.sqrt(movedX * movedX + movedY * movedY)
     if distance > 0 then
@@ -656,8 +748,12 @@ local function updateBattle(dt)
     end
 
     if necro.hp <= necro.maxHp * 0.5 then useBattlePotion("heal") end
-    if #lootDrops >= 4 and #enemies > 0 and necro.soulBoostTimer <= 0 then
-        useBattlePotion("soul")
+    if #lootDrops >= 4 and #enemies > 0 and necro.soulBoostTimer <= 0 and potions.soul > 0 then
+        local resourcesOnGround = 0
+        for _, drop in ipairs(lootDrops) do
+            if drop.kind ~= "xp" then resourcesOnGround = resourcesOnGround + 1 end
+        end
+        if resourcesOnGround >= 4 then useBattlePotion("soul") end
     end
 
     if necro.swingPending and necro.swingDuration - necro.swingTimer >= Starter.attackWindup then
@@ -666,7 +762,7 @@ local function updateBattle(dt)
     end
     if necro.swingCooldown <= 0 then
         local weapon = WEAPONS[necro.weaponIdx]
-        local target = Targeting.nearest(enemies, necro.x, necro.y, weapon.arcRadius)
+        local target = Targeting.nearest(enemies, necro.x, necro.y, meleeReach(weapon))
         if target then
             if #activeSummons > 0 and necro.frenzyTimer <= 0 then useBattlePotion("frenzy") end
             startNecroMeleeSwing(target, weapon)
@@ -679,10 +775,15 @@ local function updateBattle(dt)
         s.cdTimer = math.max(0, s.cdTimer - dt * spdMult)
         s.hitFlash = math.max(0, s.hitFlash - dt)
 
-        local nearest, bestDist = Targeting.nearest(enemies, s.x, s.y)
+        local nearest, bestDist
+        local tag = summonTag(s.meta)
+        if (tag == "ranged" and runSynergies.markedShot) or (tag == "magic" and runSynergies.graveBurst) then
+            nearest, bestDist = Targeting.nearest(enemies, s.x, s.y, s.meta.range, isMarked)
+        end
+        if not nearest then nearest, bestDist = Targeting.nearest(enemies, s.x, s.y) end
 
         local mvx, mvy = 0, 0
-        if nearest then
+        if nearest and s.hp > 0 then
             local ang = math.atan2(nearest.y - s.y, nearest.x - s.x)
             s.facing = (nearest.x >= s.x) and 1 or -1
             if bestDist > s.meta.range then
@@ -695,17 +796,23 @@ local function updateBattle(dt)
 
             if bestDist <= s.meta.range + nearest.radius and s.cdTimer <= 0 then
                 s.cdTimer = s.meta.cd
+                local damage = math.floor(s.atk * (1 + 0.20 * (run.ranks.summon or 0)))
                 if s.meta.role == "melee" then
-                    nearest.hp = nearest.hp - s.atk
+                    nearest.hp = nearest.hp - damage
                     nearest.hitFlash = 0.10
-                    spawnPop(nearest.x, nearest.y - 24, tostring(s.atk), TIER_COLORS[s.meta.tier])
+                    if runSynergies.markedShot or runSynergies.graveBurst then
+                        nearest.markTimer = 3
+                        nearest.burstReady = runSynergies.graveBurst
+                    end
+                    spawnPop(nearest.x, nearest.y - 24, tostring(damage), TIER_COLORS[s.meta.tier])
                     spawnParticles(nearest.x, nearest.y - 12, TIER_COLORS[s.meta.tier], 4, 80)
                 else
                     table.insert(projectiles, {
                         x = s.x, y = s.y - 14,
                         vx = math.cos(ang) * 380,
                         vy = math.sin(ang) * 380,
-                        dmg = s.atk,
+                        dmg = damage,
+                        tag = tag,
                         life = 1.1,
                         col = TIER_COLORS[s.meta.tier],
                     })
@@ -741,9 +848,7 @@ local function updateBattle(dt)
         local hit = false
         for _, e in ipairs(enemies) do
             if e.hp > 0 and math.sqrt((e.x - p.x)^2 + ((e.y - 14) - p.y)^2) < e.radius + 5 then
-                e.hp = e.hp - p.dmg
-                e.hitFlash = 0.10
-                spawnPop(e.x, e.y - 24, tostring(p.dmg), p.col)
+                applySummonProjectile(p, e)
                 hit = true
                 break
             end
@@ -757,6 +862,7 @@ local function updateBattle(dt)
         e.hitFlash = math.max(0, e.hitFlash - dt)
 
         if e.hp <= 0 then
+            table.insert(lootDrops, { x = e.x, y = e.y + 7, kind = "xp", amount = e.isBoss and 8 or 2, col = xpColor })
             local mult = (necro.soulBoostTimer > 0) and 2 or 1
             local sDrop = (e.isBoss and (80 + dungeonStage * 25) or (12 + dungeonStage * 3)) * mult
             table.insert(lootDrops, { x = e.x, y = e.y, kind = "souls", amount = sDrop, col = {0.35, 1.0, 0.65} })
@@ -834,14 +940,20 @@ local function updateBattle(dt)
     for i = #lootDrops, 1, -1 do
         local l = lootDrops[i]
         local d = math.sqrt((necro.x - l.x)^2 + (necro.y - l.y)^2)
-        if d < magnetRange then
-            local ang = math.atan2(necro.y - l.y, necro.x - l.x)
-            l.x = l.x + math.cos(ang) * 360 * dt
-            l.y = l.y + math.sin(ang) * 360 * dt
+        local pickupRange = l.kind == "xp" and #enemies > 0 and 66 or magnetRange
+        if d >= 24 and d < pickupRange then
+            local travel = math.min(d, 360 * dt)
+            l.x = l.x + (necro.x - l.x) * travel / d
+            l.y = l.y + (necro.y - l.y) * travel / d
+            d = d - travel
         end
         if d < 24 then
-            res[l.kind] = res[l.kind] + l.amount
-            dungeonLootEarned[l.kind] = dungeonLootEarned[l.kind] + l.amount
+            if l.kind == "xp" then
+                run.xp = run.xp + l.amount
+            else
+                res[l.kind] = res[l.kind] + l.amount
+                dungeonLootEarned[l.kind] = dungeonLootEarned[l.kind] + l.amount
+            end
             spawnPop(necro.x, necro.y - 48, "+" .. l.amount .. " " .. string.upper(l.kind), l.col)
             table.remove(lootDrops, i)
         end
@@ -849,13 +961,18 @@ local function updateBattle(dt)
 
     if necro.hp <= 0 then
         mode = "gameover"
-    elseif #enemies == 0 and #lootDrops == 0 then
-        dungeonStage = dungeonStage + 1
-        mode = "victory"
+    elseif #enemies == 0 then
+        if #lootDrops == 0 then
+            dungeonStage = dungeonStage + 1
+            mode = "victory"
+        end
+    elseif run.xp >= run.threshold then
+        offerRunUpgrade()
     end
 end
 
 function love.update(dt)
+    if mode == "levelup" then return end
     timeAcc = timeAcc + dt
     if shakeTimer > 0 then shakeTimer = math.max(0, shakeTimer - dt) end
     if mode == "preview" then
@@ -877,7 +994,10 @@ function love.update(dt)
 end
 
 function love.keypressed(key)
-    if mode == "preview" then
+    if mode == "levelup" then
+        local index = tonumber(key)
+        if index then chooseRunUpgrade(index) end
+    elseif mode == "preview" then
         CharacterPreview.keypressed(key)
     elseif mode == "camp" and key == "c" then
         CharacterPreview.open()
@@ -932,6 +1052,7 @@ function love.mousepressed(x, y, button)
             return
         end
 
+        if inRect(x, y, 730, 212, 106, 22) then toggleSelectedRing(); return end
         if inRect(x, y, 845, 212, 42, 22) then rosterScroll = math.max(0, rosterScroll - 1); return end
         if inRect(x, y, 894, 212, 42, 22) then rosterScroll = rosterScroll + 1; return end
 
@@ -951,6 +1072,14 @@ function love.mousepressed(x, y, button)
                     end
                     return
                 end
+            end
+        end
+    elseif mode == "levelup" then
+        for index = 1, #run.choices do
+            local left = upgradeCards.x + (index - 1) * (upgradeCards.width + upgradeCards.gap)
+            if inRect(x, y, left, upgradeCards.y, upgradeCards.width, upgradeCards.height) then
+                chooseRunUpgrade(index)
+                return
             end
         end
     elseif mode == "victory" or mode == "gameover" then
@@ -991,7 +1120,16 @@ local function draw0x72MeleeWeapon(cx, cy, scale, swingRatio)
     love.graphics.pop()
 end
 
+local function synergyText(synergies)
+    if synergies.markedShot and synergies.graveBurst then return "Marked Shot + Grave Burst" end
+    if synergies.markedShot then return "Marked Shot" end
+    if synergies.graveBurst then return "Grave Burst" end
+    return "No synergy"
+end
+
 local function drawCamp()
+    local deployed = equippedRings()
+    local synergies = getSynergies(deployed)
     -- 상단 전리품 HUD
     love.graphics.setColor(0.12, 0.10, 0.18, 1)
     love.graphics.rectangle("fill", 0, 0, 960, 50)
@@ -1006,7 +1144,7 @@ local function drawCamp()
     love.graphics.setColor(0.55, 0.78, 1.0, 1)
     love.graphics.print("DARK IRON: " .. res.iron, 665, 16)
     love.graphics.setColor(1.0, 0.85, 0.25, 1)
-    love.graphics.print("LEGION: " .. #legion, 825, 16)
+    love.graphics.print("RINGS: " .. #deployed .. "/" .. maxEquippedRings, 825, 16)
 
     -- 좌측 패널: 0x72 네크로맨서 & 근접 무기 & 확률 강화
     love.graphics.setColor(0.13, 0.11, 0.20, 1)
@@ -1056,11 +1194,11 @@ local function drawCamp()
     drawBtn(32, 386, 122, 46, "WEAPON +" .. (necro.weaponEnhance + 1), wpRate .. "% Chance", {0.28, 0.18, 0.16}, {1.0, 0.78, 0.25})
     drawBtn(160, 386, 122, 46, "ARMOR +" .. (necro.armorEnhance + 1), arRate .. "% Chance", {0.16, 0.24, 0.36}, {0.35, 0.80, 1.0})
 
-    drawBtn(32, 444, 250, 62, "RAID DUNGEON STAGE " .. dungeonStage, "Deploy All " .. #legion .. " Summons!", {0.12, 0.50, 0.28}, {0.35, 1.0, 0.60})
+    drawBtn(32, 444, 250, 62, "RAID DUNGEON STAGE " .. dungeonStage, "Deploy " .. #deployed .. " ring summons", {0.12, 0.50, 0.28}, {0.35, 1.0, 0.60})
 
     -- 우측 상단: 소환 가챠 & 포션 연금
-    drawBtn(306, 68, 165, 52, "SUMMON 1x", "28 Souls (Gacha)", {0.20, 0.14, 0.34}, {0.35, 0.95, 0.65})
-    drawBtn(478, 68, 175, 52, "SUMMON 5x SWARM", "120 Souls (Bonus!)", {0.28, 0.15, 0.42}, {1.0, 0.84, 0.25})
+    drawBtn(306, 68, 165, 52, "RING PULL 1x", "28 Souls (Gacha)", {0.20, 0.14, 0.34}, {0.35, 0.95, 0.65})
+    drawBtn(478, 68, 175, 52, "RING PULL 5x", "120 Souls (Bonus!)", {0.28, 0.15, 0.42}, {1.0, 0.84, 0.25})
 
     drawBtn(668, 68, 86, 52, "+1 HEAL", "2 Herbs", {0.26, 0.14, 0.20}, {1.0, 0.40, 0.50})
     drawBtn(760, 68, 86, 52, "+1 FRENZY", "2 Herbs", {0.28, 0.18, 0.12}, {1.0, 0.65, 0.25})
@@ -1090,13 +1228,15 @@ local function drawCamp()
     drawBtn(
         734, 154, 204, 48,
         fusionMateIdx and "SELECT 2ND UNIT..." or "MUTANT FUSION (65%)",
-        "2 Same-Tier -> Higher Other Tree!",
+        "Fuse two same-tier rings",
         fusionMateIdx and {0.45, 0.28, 0.12} or {0.32, 0.16, 0.38},
         {1.0, 0.82, 0.25}
     )
 
     love.graphics.setColor(0.85, 0.88, 0.95, 1)
-    love.graphics.print("UNDEAD LEGION (" .. #legion .. " Active — Animated 0x72 Pixel Sprites):", 308, 215)
+    love.graphics.print(#legion .. " rings owned   |   " .. synergyText(synergies), 308, 215)
+    drawBtn(730, 212, 106, 22, selU and selU.equipped and "UNEQUIP" or "EQUIP RING", nil,
+        {0.16, 0.26, 0.25}, {0.49, 0.81, 0.70})
     drawBtn(845, 212, 42, 22, "UP", nil, {0.2, 0.2, 0.3}, {0.5, 0.5, 0.7})
     drawBtn(894, 212, 42, 22, "DN", nil, {0.2, 0.2, 0.3}, {0.5, 0.5, 0.7})
 
@@ -1128,17 +1268,20 @@ local function drawCamp()
             love.graphics.draw(atlasImg, anim.idle[uf], cx + 24, cy + 62, 0, iconScale, iconScale, anim.w / 2, anim.h)
 
             love.graphics.setColor(tc[1], tc[2], tc[3], 1)
-            love.graphics.print("[" .. meta.tier .. "] " .. meta.name, cx + 46, cy + 7)
+            local name = "[" .. meta.tier .. "] " .. meta.name
+            local stats = "+" .. u.enhance .. "  ATK " .. uAtk .. "  HP " .. hp
+            local font = love.graphics.getFont()
+            love.graphics.print(name, cx + 46, cy + 7, 0, math.min(1, 101 / font:getWidth(name)), 1)
             love.graphics.setColor(0.75, 0.82, 0.95, 1)
-            love.graphics.print(TREE_LABELS[meta.tree], cx + 46, cy + 25)
+            love.graphics.print("#" .. string.upper(summonTag(meta)), cx + 46, cy + 25)
             love.graphics.setColor(0.92, 0.95, 0.98, 1)
-            love.graphics.print("+" .. u.enhance .. "  ATK:" .. uAtk .. " HP:" .. hp, cx + 46, cy + 44)
-            if meta.nextId then
+            love.graphics.print(stats, cx + 46, cy + 44, 0, math.min(1, 101 / font:getWidth(stats)), 1)
+            if u.equipped then
                 love.graphics.setColor(0.45, 1.0, 0.68, 1)
-                love.graphics.print("-> " .. UNIT_DB[meta.nextId].name, cx + 46, cy + 61)
+                love.graphics.print("EQUIPPED", cx + 46, cy + 61)
             else
-                love.graphics.setColor(1.0, 0.84, 0.25, 1)
-                love.graphics.print("* PEAK / FUSE READY", cx + 46, cy + 61)
+                love.graphics.setColor(0.62, 0.65, 0.72, 1)
+                love.graphics.print("IN INVENTORY", cx + 46, cy + 61)
             end
         else
             love.graphics.setColor(0.26, 0.22, 0.36, 0.5)
@@ -1164,7 +1307,15 @@ local function drawBattle()
     -- 전리품 드랍 (0x72 해골 / 플라스크 / 코인 도트 아이콘)
     for _, l in ipairs(lootDrops) do
         love.graphics.setColor(1, 1, 1, 1)
-        if l.kind == "bones" then
+        if l.kind == "xp" then
+            local x, y = math.floor(l.x), math.floor(l.y)
+            love.graphics.setColor(0.12, 0.28, 0.40)
+            love.graphics.polygon("fill", x, y - 8, x + 6, y, x, y + 8, x - 6, y)
+            love.graphics.setColor(xpColor)
+            love.graphics.polygon("fill", x, y - 6, x + 4, y, x, y + 6, x - 4, y)
+            love.graphics.setColor(0.77, 0.96, 1.0)
+            love.graphics.rectangle("fill", x - 1, y - 3, 2, 4)
+        elseif l.kind == "bones" then
             love.graphics.draw(atlasImg, quads.skull, l.x, l.y, 0, 1.6, 1.6, 8, 8)
         elseif l.kind == "herbs" then
             love.graphics.draw(atlasImg, quads.flask_red, l.x, l.y, 0, 1.5, 1.5, 8, 8)
@@ -1183,10 +1334,10 @@ local function drawBattle()
         local _, _, wp = getNecroCombatStats()
         local ratio = necro.swingTimer / (necro.swingDuration - swingWindup)
         love.graphics.setColor(wp.col[1], wp.col[2], wp.col[3], ratio * 0.55)
-        love.graphics.arc("fill", necro.x, necro.y - 18, wp.arcRadius, necro.swingAngle - 1.25, necro.swingAngle + 1.25)
+        love.graphics.arc("fill", necro.x, necro.y - 18, meleeReach(wp), necro.swingAngle - 1.25, necro.swingAngle + 1.25)
         love.graphics.setColor(1, 1, 1, ratio * 0.9)
         love.graphics.setLineWidth(4)
-        love.graphics.arc("line", "open", necro.x, necro.y - 18, wp.arcRadius, necro.swingAngle - 1.25, necro.swingAngle + 1.25)
+        love.graphics.arc("line", "open", necro.x, necro.y - 18, meleeReach(wp), necro.swingAngle - 1.25, necro.swingAngle + 1.25)
     end
 
     local stAnim = quads.necro_stages[necro.stage]
@@ -1238,6 +1389,11 @@ local function drawBattle()
             love.graphics.rectangle("fill", e.x - bw / 2, e.y - e.scale * anim.h - 6, bw, 5)
             love.graphics.setColor(0.95, 0.28, 0.35, 1)
             love.graphics.rectangle("fill", e.x - bw / 2, e.y - e.scale * anim.h - 6, bw * math.max(0, e.hp / e.maxHp), 5)
+            if isMarked(e) then
+                local x, y = math.floor(e.x), math.floor(e.y - e.scale * anim.h - 14)
+                love.graphics.setColor(markColor)
+                love.graphics.polygon("fill", x, y - 5, x + 5, y, x, y + 5, x - 5, y)
+            end
         end
     end
 
@@ -1261,9 +1417,43 @@ local function drawBattle()
 
     love.graphics.setColor(1.0, 0.85, 0.25, 1)
     love.graphics.print("STAGE " .. dungeonStage .. " | ENEMIES: " .. #enemies .. " | ARMY: " .. #activeSummons, 205, 17)
-    love.graphics.setColor(0.45, 1.0, 0.72, 1)
-    love.graphics.print("WASD / Arrows: Move    |    Auto attack    |    Auto flasks: "
-        .. potions.heal .. " / " .. potions.frenzy .. " / " .. potions.soul, 510, 17)
+    love.graphics.setColor(0.94, 0.94, 0.99)
+    love.graphics.print("Run Lv. " .. run.level, 505, 9)
+    love.graphics.print(run.xp .. " / " .. run.threshold .. " XP", 706, 9)
+    love.graphics.setColor(0.17, 0.27, 0.39)
+    love.graphics.rectangle("fill", 568, 16, 128, 8, 3, 3)
+    love.graphics.setColor(xpColor)
+    love.graphics.rectangle("fill", 568, 16, 128 * math.min(1, run.xp / run.threshold), 8, 3, 3)
+    love.graphics.setColor(0.68, 0.80, 0.87)
+    love.graphics.print("WASD / Arrows", 800, 9)
+    love.graphics.print("Auto flasks " .. potions.heal .. "/" .. potions.frenzy .. "/" .. potions.soul, 800, 28)
+    love.graphics.setColor(markColor)
+    love.graphics.print(synergyText(runSynergies), 505, 28)
+end
+
+local function drawLevelUp()
+    love.graphics.setColor(0.045, 0.040, 0.075, 0.88)
+    love.graphics.rectangle("fill", 0, 0, 960, 540)
+    love.graphics.setColor(xpColor)
+    love.graphics.printf("RUN LEVEL " .. run.level, 0, 139, 960 / 1.8, "center", 0, 1.8, 1.8)
+    love.graphics.setColor(0.91, 0.92, 0.98)
+    love.graphics.printf("Choose a boon for this raid", 0, 185, 960, "center")
+    local cards = upgradeCards
+    for index, choice in ipairs(run.choices) do
+        local x = cards.x + (index - 1) * (cards.width + cards.gap)
+        local y = cards.y
+        love.graphics.setColor(0.14, 0.11, 0.21)
+        love.graphics.rectangle("fill", x, y, cards.width, cards.height, 9, 9)
+        love.graphics.setLineWidth(2)
+        love.graphics.setColor(choice.requires and markColor or xpColor)
+        love.graphics.rectangle("line", x, y, cards.width, cards.height, 9, 9)
+        love.graphics.print(tostring(index), x + 15, y + 12)
+        love.graphics.printf(choice.name, x + 17, y + 32, cards.width - 34, "center")
+        love.graphics.setColor(0.89, 0.90, 0.96)
+        love.graphics.printf(choice.description, x + 20, y + 66, cards.width - 40, "center")
+    end
+    love.graphics.setColor(0.71, 0.76, 0.85)
+    love.graphics.printf("Click a card or press 1, 2, or 3", 0, 382, 960, "center")
 end
 
 function love.draw()
@@ -1272,13 +1462,13 @@ function love.draw()
         return
     end
     love.graphics.push()
-    if shakeTimer > 0 then
+    if shakeTimer > 0 and mode ~= "levelup" then
         love.graphics.translate((math.random() - 0.5) * shakeMag, (math.random() - 0.5) * shakeMag)
     end
 
     if mode == "camp" then
         drawCamp()
-    elseif mode == "battle" then
+    elseif mode == "battle" or mode == "levelup" then
         drawBattle()
     elseif mode == "victory" then
         drawBattle()
@@ -1315,5 +1505,6 @@ function love.draw()
         love.graphics.print(pt.text, pt.x - 16, pt.y)
     end
 
+    if mode == "levelup" then drawLevelUp() end
     love.graphics.pop()
 end
