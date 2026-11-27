@@ -10,10 +10,13 @@
 --    - Crafting (Potions from Herbs, Melee Weapons from Dark Iron)
 --    - Probability Enhancement (+1, +2... with decreasing success chance!)
 
+local Starter = require("starter_character")
+local CharacterPreview = require("character_preview")
+
 local necroImg, summonsImg, enemiesImg
 local necroQuads, summonQuads, enemyQuads = {}, {}, {}
 
-local mode = "camp" -- "camp" | "battle" | "victory" | "gameover"
+local mode = "preview" -- "preview" | "camp" | "battle" | "victory" | "gameover"
 local dungeonStage = 1
 local timeAcc = 0
 local shakeTimer, shakeMag = 0, 0
@@ -52,6 +55,9 @@ local necro = {
     weaponEnhance = 0, -- 확률 강화 수치 (+0, +1, +2 ...)
     armorEnhance = 0,  -- 갑옷 확률 강화 수치
     facing = 1,
+    direction = "down",
+    walkDistance = 0,
+    walkFrame = 0,
     swingTimer = 0,
     swingDuration = 0.20,
     swingAngle = 0,
@@ -184,6 +190,9 @@ function love.load()
     math.randomseed(os.time())
     love.graphics.setDefaultFilter("nearest", "nearest")
     love.graphics.setBackgroundColor(0.07, 0.06, 0.11)
+
+    Starter.load()
+    CharacterPreview.load()
 
     necroImg = love.graphics.newImage("assets/necromancer_stages.png")
     local nw, nh = necroImg:getDimensions()
@@ -462,6 +471,7 @@ local function startDungeonRun()
     necro.maxHp = maxHp
     necro.hp = maxHp
     necro.x, necro.y = 480, 290
+    necro.direction, necro.walkFrame, necro.walkDistance = "down", 0, 0
     necro.swingTimer = 0
     necro.swingCooldown = 0
     necro.dashTimer = 0
@@ -602,29 +612,33 @@ local function updateBattle(dt)
     necro.frenzyTimer = math.max(0, necro.frenzyTimer - dt)
     necro.soulBoostTimer = math.max(0, necro.soulBoostTimer - dt)
 
-    local dx, dy = 0, 0
-    if love.keyboard.isDown("w", "up") then dy = dy - 1 end
-    if love.keyboard.isDown("s", "down") then dy = dy + 1 end
-    if love.keyboard.isDown("a", "left") then dx = dx - 1 end
-    if love.keyboard.isDown("d", "right") then dx = dx + 1 end
-    if dx ~= 0 or dy ~= 0 then
-        local len = math.sqrt(dx * dx + dy * dy)
-        dx, dy = dx / len, dy / len
-        if dx ~= 0 then necro.facing = (dx > 0) and 1 or -1 end
-    end
+    local dx, dy = Starter.movementInput()
+    if dx ~= 0 then necro.facing = dx > 0 and 1 or -1 end
+    local oldX, oldY = necro.x, necro.y
+    local dashing = necro.dashTimer > 0
 
-    if necro.dashTimer > 0 then
+    if dashing then
         necro.dashTimer = necro.dashTimer - dt
+        necro.direction = Starter.facing(necro.dashDx, necro.dashDy, necro.direction)
         necro.x = necro.x + necro.dashDx * 540 * dt
         necro.y = necro.y + necro.dashDy * 540 * dt
-        table.insert(necro.afterimages, { x = necro.x, y = necro.y, life = 0.20 })
+        table.insert(necro.afterimages, { x = necro.x, y = necro.y, direction = necro.direction, life = 0.20 })
     else
+        necro.direction = Starter.facing(dx, dy, necro.direction)
         necro.x = necro.x + dx * 190 * dt
         necro.y = necro.y + dy * 190 * dt
     end
 
     necro.x = math.max(54, math.min(906, necro.x))
     necro.y = math.max(84, math.min(495, necro.y))
+    local movedX, movedY = necro.x - oldX, necro.y - oldY
+    local distance = math.sqrt(movedX * movedX + movedY * movedY)
+    if distance > 0 and not dashing then
+        necro.walkDistance = necro.walkDistance + distance / 2
+        necro.walkFrame = Starter.walkFrame(necro.walkDistance)
+    else
+        necro.walkDistance, necro.walkFrame = 0, 0
+    end
 
     for i = #necro.afterimages, 1, -1 do
         necro.afterimages[i].life = necro.afterimages[i].life - dt
@@ -836,6 +850,10 @@ end
 function love.update(dt)
     timeAcc = timeAcc + dt
     if shakeTimer > 0 then shakeTimer = math.max(0, shakeTimer - dt) end
+    if mode == "preview" then
+        CharacterPreview.update(dt)
+        return
+    end
     if mode == "battle" then updateBattle(dt) end
 
     for i = #particles, 1, -1 do
@@ -851,21 +869,19 @@ function love.update(dt)
 end
 
 function love.keypressed(key)
-    if mode == "battle" then
+    if mode == "preview" then
+        CharacterPreview.keypressed(key)
+    elseif mode == "camp" and key == "c" then
+        CharacterPreview.open()
+        mode = "preview"
+    elseif mode == "battle" then
         if key == "space" or key == "lshift" then
             if necro.dashCooldown <= 0 then
-                local dx, dy = 0, 0
-                if love.keyboard.isDown("w", "up") then dy = dy - 1 end
-                if love.keyboard.isDown("s", "down") then dy = dy + 1 end
-                if love.keyboard.isDown("a", "left") then dx = dx - 1 end
-                if love.keyboard.isDown("d", "right") then dx = dx + 1 end
+                local dx, dy = Starter.movementInput()
                 if dx == 0 and dy == 0 then
                     local mx, my = love.mouse.getPosition()
                     local ang = math.atan2(my - necro.y, mx - necro.x)
                     dx, dy = math.cos(ang), math.sin(ang)
-                else
-                    local len = math.sqrt(dx * dx + dy * dy)
-                    dx, dy = dx / len, dy / len
                 end
                 necro.dashDx, necro.dashDy = dx, dy
                 necro.dashTimer = 0.14
@@ -892,7 +908,14 @@ end
 function love.mousepressed(x, y, button)
     if button ~= 1 then return end
 
-    if mode == "camp" then
+    if mode == "preview" then
+        if CharacterPreview.mousepressed(x, y) == "camp" then mode = "camp" end
+    elseif mode == "camp" then
+        if inRect(x, y, 50, 270, 214, 22) then
+            CharacterPreview.open()
+            mode = "preview"
+            return
+        end
         -- 좌측: 네크로맨서 근접 무기 제작 / 무기 확률강화 / 갑옷 확률강화 / 던전 출정
         if inRect(x, y, 32, 338, 250, 42) then craftNextMeleeWeapon(); return end
         if inRect(x, y, 32, 386, 122, 46) then enhanceNecroWeapon(); return end
@@ -1026,8 +1049,13 @@ local function drawCamp()
     love.graphics.setColor(0.25, 0.95, 0.55, 0.20)
     love.graphics.ellipse("fill", 157, 265, 62, 16)
     love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.draw(necroImg, necroQuads[necro.stage], 157, math.floor(265 + bob), 0, 5, 5, 12, 28)
-    drawNecroMeleeWeapon(157, 265 + bob, 3.8, 0)
+    if necro.stage == 1 then
+        Starter.drawPortrait("down", 157, math.floor(263 + bob), 3)
+    else
+        love.graphics.draw(necroImg, necroQuads[necro.stage], 157, math.floor(265 + bob), 0, 5, 5, 12, 28)
+        drawNecroMeleeWeapon(157, 265 + bob, 3.8, 0)
+    end
+    drawBtn(50, 270, 214, 22, "CHARACTER / WALK TEST [C]", nil, {0.16, 0.15, 0.23}, {0.52, 0.47, 0.64})
 
     love.graphics.setColor(0.90, 0.94, 0.98, 1)
     love.graphics.printf("HP: " .. maxHp .. " (Armor +" .. necro.armorEnhance .. ")  |  CLEAVE ATK: " .. atk, 20, 292, 274, "center")
@@ -1170,7 +1198,11 @@ local function drawBattle()
     -- 대시 잔상
     for _, af in ipairs(necro.afterimages) do
         love.graphics.setColor(0.35, 1.0, 0.65, af.life * 2.2)
-        love.graphics.draw(necroImg, necroQuads[necro.stage], af.x, af.y, 0, 2.8 * necro.facing, 2.8, 12, 28)
+        if necro.stage == 1 then
+            Starter.drawWalk(af.direction, 0, af.x, af.y, 2)
+        else
+            love.graphics.draw(necroImg, necroQuads[necro.stage], af.x, af.y, 0, 2.8 * necro.facing, 2.8, 12, 28)
+        end
     end
 
     -- 깊이 정렬 렌더링
@@ -1184,7 +1216,12 @@ local function drawBattle()
             love.graphics.setColor(0.04, 0.03, 0.08, 0.5)
             love.graphics.ellipse("fill", necro.x, necro.y + 2, 20, 7)
             love.graphics.setColor(1, 1, 1, 1)
-            love.graphics.draw(necroImg, necroQuads[necro.stage], math.floor(necro.x), math.floor(necro.y), 0, 2.8 * necro.facing, 2.8, 12, 28)
+            local x, y = math.floor(necro.x), math.floor(necro.y)
+            if necro.stage == 1 then
+                Starter.drawWalk(necro.direction, necro.walkFrame, x, y, 2)
+            else
+                love.graphics.draw(necroImg, necroQuads[necro.stage], x, y, 0, 2.8 * necro.facing, 2.8, 12, 28)
+            end
             drawNecroMeleeWeapon(necro.x, necro.y, 2.6, necro.swingTimer / necro.swingDuration)
         elseif item.kind == "summon" then
             local s = item.ref
@@ -1231,6 +1268,10 @@ local function drawBattle()
 end
 
 function love.draw()
+    if mode == "preview" then
+        CharacterPreview.draw(timeAcc)
+        return
+    end
     love.graphics.push()
     if shakeTimer > 0 then
         love.graphics.translate((math.random() - 0.5) * shakeMag, (math.random() - 0.5) * shakeMag)

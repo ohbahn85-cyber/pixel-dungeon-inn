@@ -8,7 +8,7 @@ const distDir = path.join(root, 'dist');
 
 fs.rmSync(distDir, { recursive: true, force: true });
 execSync(
-  `npx love.js -c -t "Necromancer Gacha Roguelike (Love2D + Lua)" -m 33554432 "${gameDir}" "${distDir}"`,
+  `npx love.js -c -t "Pixel Dungeon Inn" -m 33554432 "${gameDir}" "${distDir}"`,
   { stdio: 'inherit' }
 );
 
@@ -27,11 +27,11 @@ const html = `<!doctype html>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>네크로맨서 가챠 로그라이크 — Step 1: 4단계 진화 도트 디자인</title>
+    <title>Pixel Dungeon Inn</title>
     <style>
       * { box-sizing: border-box; margin: 0; padding: 0; }
       body {
-        background: #0f0b1a;
+        background: #0c0d11;
         color: #f8fafc;
         font-family: -apple-system, BlinkMacSystemFont, "Noto Sans KR", sans-serif;
         display: flex;
@@ -49,23 +49,13 @@ const html = `<!doctype html>
         gap: 10px;
         margin-bottom: 12px;
       }
-      .title-wrap { display: flex; align-items: center; gap: 10px; }
-      .badge {
-        background: #22c55e;
-        color: #052e16;
-        font-weight: 900;
-        font-size: 12px;
-        padding: 4px 10px;
-        border-radius: 999px;
-      }
-      h1 { font-size: 18px; color: #bbf7d0; }
+      h1 { font-size: 18px; color: #f0e8db; }
       .stage {
         width: min(960px, 100%);
-        border: 3px solid #22c55e;
-        border-radius: 12px;
+        border: 1px solid #383b43;
+        border-radius: 10px;
         overflow: hidden;
-        background: #171226;
-        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+        background: #111216;
       }
       canvas {
         display: block;
@@ -77,46 +67,42 @@ const html = `<!doctype html>
       .guide {
         width: min(960px, 100%);
         margin-top: 12px;
-        background: #1c152e;
-        border: 1.5px solid #3f2f63;
+        background: #15161c;
+        border: 1px solid #383b43;
         border-radius: 10px;
         padding: 10px 14px;
         font-size: 13px;
         color: #cbd5e1;
         line-height: 1.55;
       }
-      .guide strong { color: #86efac; }
+      .guide strong { color: #e0b57a; }
     </style>
   </head>
   <body>
     <header>
-      <div class="title-wrap">
-        <span class="badge">Love2D + Lua 프로토타입</span>
-        <h1>💀 네크로맨서 가챠 로그라이크 (하데스식 탑다운 액션 + 캠프 가챠 준비)</h1>
-      </div>
+      <h1>Pixel Dungeon Inn</h1>
     </header>
 
     <div class="stage">
       <canvas id="loadingCanvas" oncontextmenu="event.preventDefault()" width="960" height="540"></canvas>
-      <canvas id="canvas" oncontextmenu="event.preventDefault()"></canvas>
+      <canvas id="canvas" width="960" height="540" tabindex="0" aria-label="Pixel Dungeon Inn 게임 화면" oncontextmenu="event.preventDefault()"></canvas>
     </div>
 
     <div class="guide">
-      <strong>💡 핵심 시스템:</strong>
-      <strong>1) 근접 전용 네크로맨서:</strong> 던전 전리품(암흑철·뼈조각)으로 <strong>근접 무기(뼈몽둥이→해골대검→저주할버드→사신의 대낫)</strong>를 제작하고 <strong>확률 강화(+1, +2...)</strong>하세요! 좌클릭으로 시원하게 전방 광역 베기(Cleave)를 날립니다.<br/>
-      <strong>2) 물량 제한 없는 소환수 가챠 & 상향 트리:</strong> 소환수는 많을수록 좋습니다! 각 소환수는 고유 <strong>상향 트리(TREE UP: C→B→A)</strong>와 <strong>확률 강화</strong>가 가능하며, <strong>[MUTANT FUSION(65%)]</strong>으로 같은 등급 2마리를 합치면 <strong>65% 확률로 더 높은 등급의 다른 트리(최종 S급 사신·아크리치·본드래곤)</strong>가 나오고, 실패(35%) 시 같은 등급 랜덤 소환수로 변이합니다!<br/>
-      <strong>3) 전리품 포션 연금:</strong> 던전에서 모은 피약초(Herbs)로 포션을 만들어 전투 중 <strong>[1]군단회복 / [2]광란가속 / [3]전리품2배</strong>를 발동하세요!
+      <strong>Character</strong>에서 방향 카드를 눌러 외형을 확인하세요.
+      <strong>Dungeon</strong>에서는 WASD 또는 방향키로 걷고, Esc로 돌아올 수 있어요.
+      기존 전투 던전은 <strong>Camp</strong>에서 입장할 수 있어요.
     </div>
 
     <script type="text/javascript">
       var loadingContext = document.getElementById('loadingCanvas').getContext('2d');
       function drawLoadingText(text) {
         var c = loadingContext.canvas;
-        loadingContext.fillStyle = '#171226';
+        loadingContext.fillStyle = '#111216';
         loadingContext.fillRect(0, 0, c.width, c.height);
         loadingContext.font = 'bold 20px sans-serif';
         loadingContext.textAlign = 'center';
-        loadingContext.fillStyle = '#bbf7d0';
+        loadingContext.fillStyle = '#e0b57a';
         loadingContext.fillText(text, c.width / 2, c.height / 2);
       }
 
