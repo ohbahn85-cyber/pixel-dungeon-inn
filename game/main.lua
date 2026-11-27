@@ -1,17 +1,8 @@
--- NECROMANCER DUNGEON & LEGION — Complete Prep & Melee/Swarm Combat Loop (Love2D + Lua)
--- Features:
--- 1) Sleek 3.5-head Dark-Fantasy Pixel Art (24x32 Necromancer 4-Stage Evolution + 20x24 12-Unit Summon Trees)
--- 2) Necromancer is MELEE ONLY (Cleaving Scythe/Blade arc that buffs nearby summons & harvests loot!)
--- 3) Dungeon Loot: Souls, Bone Shards, Blood Herbs, Dark Iron
--- 4) Camp Prep:
---    - Summon Gacha (No small cap! Swarm the screen with 20~40+ undead!)
---    - Individual Summon Upgrade Tree (C -> B -> A inside Warrior / Archer / Mage branches)
---    - Mutant Fusion (Combine 2 same-tier summons -> 65% Higher Tier in a DIFFERENT Tree / 35% Fail -> Random Same-Tier Summon!)
---    - Crafting (Potions from Herbs, Melee Weapons from Dark Iron)
---    - Probability Enhancement (+1, +2... with decreasing success chance!)
+-- NECROMANCER DUNGEON & LEGION — Powered by 0x72 DungeonTileset II v1.7 (CC0 Official Pixel Art Atlas)
+-- Love2D + Lua
 
-local necroImg, summonsImg, enemiesImg
-local necroQuads, summonQuads, enemyQuads = {}, {}, {}
+local atlasImg
+local quads = {}
 
 local mode = "camp" -- "camp" | "battle" | "victory" | "gameover"
 local dungeonStage = 1
@@ -28,30 +19,31 @@ local res = {
 
 -- 포션 인벤토리 (전투 중 [1], [2], [3] 키로 즉시 사용)
 local potions = {
-    heal = 2,   -- [1] Blood Vial: 네크로맨서 & 전체 소환수 체력 45% 회복
-    frenzy = 1, -- [2] Frenzy Elixir: 10초간 전체 소환수 공격/이동속도 +65%
-    soul = 1,   -- [3] Soul Magnet: 주변 전리품 즉시 흡수 & 8초간 전리품 드랍 2배
+    heal = 2,   -- [1] Red Flask: 군단 전체 45% 회복
+    frenzy = 1, -- [2] Green Flask: 10초간 군단 공격/이동속도 +65%
+    soul = 1,   -- [3] Yellow Flask: 전리품 2배 자석
 }
 
--- 근접 무기 카탈로그 (네크로맨서는 근접 무기만 장착 가능!)
+-- 0x72 에셋 기반 네크로맨서 근접 무기 5단계 (네크로맨서는 근접 무기만 가능!)
 local WEAPONS = {
-    { id = 1, name = "Bone Club",       baseAtk = 18, arcRadius = 62,  cd = 0.40, costIron = 0,  costBones = 0,  col = {0.90, 0.88, 0.80} },
-    { id = 2, name = "Skull Cleaver",   baseAtk = 32, arcRadius = 74,  cd = 0.36, costIron = 4,  costBones = 4,  col = {0.75, 0.85, 0.98} },
-    { id = 3, name = "Cursed Halberd",  baseAtk = 54, arcRadius = 90,  cd = 0.34, costIron = 8,  costBones = 8,  col = {0.78, 0.45, 1.00} },
-    { id = 4, name = "Reaper's Scythe", baseAtk = 88, arcRadius = 112, cd = 0.30, costIron = 14, costBones = 14, col = {0.25, 1.00, 0.65} },
+    { id = 1, name = "Spiked Club",     quadKey = "wp_club",    w = 10, h = 24, baseAtk = 18, arcRadius = 62,  cd = 0.38, costIron = 0,  costBones = 0,  col = {0.90, 0.85, 0.72} },
+    { id = 2, name = "Butcher Cleaver", quadKey = "wp_cleaver", w = 8,  h = 19, baseAtk = 32, arcRadius = 74,  cd = 0.35, costIron = 4,  costBones = 4,  col = {0.82, 0.90, 1.00} },
+    { id = 3, name = "Sawtooth Blade",  quadKey = "wp_saw",     w = 10, h = 25, baseAtk = 52, arcRadius = 88,  cd = 0.33, costIron = 7,  costBones = 7,  col = {0.75, 0.50, 1.00} },
+    { id = 4, name = "Executioner Axe", quadKey = "wp_waraxe",  w = 12, h = 23, baseAtk = 78, arcRadius = 102, cd = 0.31, costIron = 11, costBones = 11, col = {1.00, 0.45, 0.45} },
+    { id = 5, name = "Golden Greatsword",quadKey= "wp_gold",    w = 10, h = 30, baseAtk = 115,arcRadius = 118, cd = 0.28, costIron = 16, costBones = 16, col = {1.00, 0.86, 0.25} },
 }
 
--- 주인공 네크로맨서 상태
+-- 주인공 네크로맨서 상태 (4단계 외형 진화: 0x72 에셋 내 거지 소년 -> 마도사 -> 붉은 후드 네크로맨서 -> 데몬 로드)
 local necro = {
     x = 480, y = 290,
-    hp = 160, maxHp = 160,
+    hp = 165, maxHp = 165,
     level = 1,
-    stage = 1, -- 1: 하트팬티+거적대기, 2: 다크코트, 3: 데스나이트, 4: 각성 사령군주
+    stage = 1,
     weaponIdx = 1,
-    unlockedWeapons = { true, false, false, false },
-    weaponEnhance = 0, -- 확률 강화 수치 (+0, +1, +2 ...)
-    armorEnhance = 0,  -- 갑옷 확률 강화 수치
+    weaponEnhance = 0,
+    armorEnhance = 0,
     facing = 1,
+    moving = false,
     swingTimer = 0,
     swingDuration = 0.20,
     swingAngle = 0,
@@ -65,50 +57,51 @@ local necro = {
     afterimages = {},
 }
 
--- 12종 소환수 상향 트리 카탈로그
--- tree: "warrior" (1->2->3), "archer" (4->5->6), "mage" (7->8->9), "mutant" (10, 11, 12)
+-- 0x72 에셋 기반 12종 소환수 상향 트리 (4계보 x 3단계)
 local UNIT_DB = {
-    [1]  = { id = 1,  name = "Skeleton Pawn",   tree = "warrior", tier = "C", nextId = 2,   role = "melee",  hp = 75,  atk = 12, spd = 125, range = 26,  cd = 0.80 },
-    [2]  = { id = 2,  name = "Bone Gladiator",  tree = "warrior", tier = "B", nextId = 3,   role = "melee",  hp = 155, atk = 24, spd = 135, range = 30,  cd = 0.75 },
-    [3]  = { id = 3,  name = "Death Knight",    tree = "warrior", tier = "A", nextId = nil, role = "melee",  hp = 310, atk = 46, spd = 145, range = 34,  cd = 0.70 },
+    -- 1. 해골 전사 트리 (C -> B -> A)
+    [1]  = { id = 1,  name = "Tiny Skeleton",   animKey = "tiny_zombie", tree = "warrior", tier = "C", nextId = 2,   role = "melee",  hp = 75,  atk = 12, spd = 130, range = 26,  cd = 0.78, scale = 2.6, oy = 16 },
+    [2]  = { id = 2,  name = "Bone Warrior",    animKey = "skelet",      tree = "warrior", tier = "B", nextId = 3,   role = "melee",  hp = 160, atk = 25, spd = 138, range = 30,  cd = 0.72, scale = 2.8, oy = 16 },
+    [3]  = { id = 3,  name = "Masked Boneknight",animKey= "masked_orc",  tree = "warrior", tier = "A", nextId = nil, role = "melee",  hp = 320, atk = 48, spd = 145, range = 34,  cd = 0.68, scale = 2.8, oy = 23 },
 
-    [4]  = { id = 4,  name = "Bone Archer",     tree = "archer",  tier = "C", nextId = 5,   role = "ranged", hp = 55,  atk = 14, spd = 115, range = 195, cd = 0.95 },
-    [5]  = { id = 5,  name = "Skull Crossbow",  tree = "archer",  tier = "B", nextId = 6,   role = "ranged", hp = 115, atk = 28, spd = 120, range = 225, cd = 0.85 },
-    [6]  = { id = 6,  name = "Wraith Sniper",   tree = "archer",  tier = "A", nextId = nil, role = "ranged", hp = 210, atk = 54, spd = 130, range = 265, cd = 0.75 },
+    -- 2. 언데드 원거리/암살 트리 (C -> B -> A)
+    [4]  = { id = 4,  name = "Ghoul Slinger",   animKey = "goblin",      tree = "archer",  tier = "C", nextId = 5,   role = "ranged", hp = 58,  atk = 14, spd = 120, range = 195, cd = 0.92, scale = 2.6, oy = 16 },
+    [5]  = { id = 5,  name = "Frost Zombie",    animKey = "ice_zombie",  tree = "archer",  tier = "B", nextId = 6,   role = "ranged", hp = 120, atk = 29, spd = 125, range = 225, cd = 0.84, scale = 2.8, oy = 16 },
+    [6]  = { id = 6,  name = "Plague Doctor",   animKey = "doc",         tree = "archer",  tier = "A", nextId = nil, role = "ranged", hp = 225, atk = 56, spd = 135, range = 265, cd = 0.74, scale = 2.8, oy = 23 },
 
-    [7]  = { id = 7,  name = "Soul Wisp",       tree = "mage",    tier = "C", nextId = 8,   role = "ranged", hp = 50,  atk = 16, spd = 125, range = 175, cd = 0.90 },
-    [8]  = { id = 8,  name = "Bone Warlock",    tree = "mage",    tier = "B", nextId = 9,   role = "ranged", hp = 110, atk = 32, spd = 120, range = 210, cd = 0.85 },
-    [9]  = { id = 9,  name = "High Lich",       tree = "mage",    tier = "A", nextId = nil, role = "ranged", hp = 220, atk = 60, spd = 125, range = 245, cd = 0.78 },
+    -- 3. 저주 마법/주술 트리 (C -> B -> A)
+    [7]  = { id = 7,  name = "Swamp Ectoplasm", animKey = "swampy",      tree = "mage",    tier = "C", nextId = 8,   role = "ranged", hp = 55,  atk = 16, spd = 125, range = 180, cd = 0.88, scale = 2.6, oy = 16 },
+    [8]  = { id = 8,  name = "Bone Shaman",     animKey = "orc_shaman",  tree = "mage",    tier = "B", nextId = 9,   role = "ranged", hp = 115, atk = 33, spd = 125, range = 215, cd = 0.82, scale = 2.8, oy = 23 },
+    [9]  = { id = 9,  name = "Crimson Lich",    animKey = "necro",       tree = "mage",    tier = "A", nextId = nil, role = "ranged", hp = 230, atk = 62, spd = 130, range = 250, cd = 0.75, scale = 2.8, oy = 23 },
 
-    [10] = { id = 10, name = "Reaper Lord",     tree = "mutant",  tier = "S", nextId = nil, role = "melee",  hp = 520, atk = 95, spd = 165, range = 42,  cd = 0.55 },
-    [11] = { id = 11, name = "Arch-Lich King",  tree = "mutant",  tier = "S", nextId = nil, role = "ranged", hp = 420, atk = 110,spd = 135, range = 280, cd = 0.65 },
-    [12] = { id = 12, name = "Bone Dragon",     tree = "mutant",  tier = "S", nextId = nil, role = "melee",  hp = 680, atk = 105,spd = 155, range = 46,  cd = 0.60 },
+    -- 4. S급 초월 돌연변이 트리 (합성 대성공 또는 5% 극악 가챠!)
+    [10] = { id = 10, name = "Abomination Tank",animKey = "big_zombie",  tree = "mutant",  tier = "S", nextId = nil, role = "melee",  hp = 680, atk = 96, spd = 145, range = 44,  cd = 0.58, scale = 2.5, oy = 36 },
+    [11] = { id = 11, name = "Pumpkin Reaper",  animKey = "pumpkin",     tree = "mutant",  tier = "S", nextId = nil, role = "ranged", hp = 440, atk = 115,spd = 145, range = 280, cd = 0.62, scale = 3.0, oy = 23 },
+    [12] = { id = 12, name = "Abyss Demon Lord",animKey = "big_demon",   tree = "mutant",  tier = "S", nextId = nil, role = "melee",  hp = 580, atk = 112,spd = 160, range = 46,  cd = 0.55, scale = 2.5, oy = 36 },
 }
 
 local TIER_COLORS = {
-    C = {0.72, 0.78, 0.86},
+    C = {0.74, 0.80, 0.88},
     B = {0.25, 0.80, 1.00},
-    A = {0.80, 0.45, 1.00},
+    A = {0.82, 0.45, 1.00},
     S = {1.00, 0.84, 0.20},
 }
 
 local TREE_LABELS = {
     warrior = "WARRIOR TREE",
-    archer  = "ARCHER TREE",
-    mage    = "MAGE TREE",
+    archer  = "RANGED TREE",
+    mage    = "OCCULT TREE",
     mutant  = "S-MUTANT TREE",
 }
 
--- 내 언데드 군단 리스트 (제한 없이 많을수록 좋음!)
 local legion = {}
 local selectedUnitIdx = 1
 local fusionMateIdx = nil
 local rosterScroll = 0
 
-local bannerMsg = "Welcome! Pull Summons, Upgrade Trees, Fuse Mutants, Enhance Melee Weapon & Conquer the Dungeon!"
+local bannerMsg = "0x72 Official Pixel Art Loaded! Pull Summons, Upgrade Trees, Fuse Mutants & Raid Dungeon!"
 local bannerCol = {0.55, 1.0, 0.72}
 
--- 전투 중 객체들
 local activeSummons = {}
 local enemies = {}
 local projectiles = {}
@@ -117,6 +110,86 @@ local lootDrops = {}
 local particles = {}
 local popTexts = {}
 local dungeonLootEarned = { souls = 0, bones = 0, herbs = 0, iron = 0 }
+
+local function makeAnimQuads(x, y, w, h, count)
+    local aw, ah = atlasImg:getDimensions()
+    local list = {}
+    for i = 0, count - 1 do
+        list[i + 1] = love.graphics.newQuad(x + i * w, y, w, h, aw, ah)
+    end
+    return list
+end
+
+function love.load()
+    math.randomseed(os.time())
+    love.graphics.setDefaultFilter("nearest", "nearest")
+    love.graphics.setBackgroundColor(0.08, 0.07, 0.11)
+
+    atlasImg = love.graphics.newImage("assets/0x72_dungeon.png")
+    local aw, ah = atlasImg:getDimensions()
+
+    -- 1. 던전 바닥 & 벽 타일 & 보물상자 & 포션 플라스크 Quad 등록
+    quads.floors = makeAnimQuads(16, 64, 16, 16, 3)
+    quads.floors2 = makeAnimQuads(16, 80, 16, 16, 3)
+    quads.wall_mid = love.graphics.newQuad(32, 16, 16, 16, aw, ah)
+    quads.wall_banner_red = love.graphics.newQuad(16, 32, 16, 16, aw, ah)
+    quads.wall_banner_green = love.graphics.newQuad(16, 48, 16, 16, aw, ah)
+    quads.skull = love.graphics.newQuad(288, 432, 16, 16, aw, ah)
+    quads.chest = love.graphics.newQuad(304, 416, 16, 16, aw, ah)
+    quads.heart_full = love.graphics.newQuad(289, 370, 13, 12, aw, ah)
+    quads.coin = makeAnimQuads(289, 385, 8, 7, 4)
+
+    -- 포션 플라스크 아이콘 (0x72 정품 도트)
+    quads.flask_red = love.graphics.newQuad(288, 336, 16, 16, aw, ah)
+    quads.flask_green = love.graphics.newQuad(320, 336, 16, 16, aw, ah)
+    quads.flask_yellow = love.graphics.newQuad(336, 336, 16, 16, aw, ah)
+    quads.flask_blue = love.graphics.newQuad(304, 336, 16, 16, aw, ah)
+
+    -- 근접 무기 5종 (0x72 정품 도트)
+    quads.wp_club    = love.graphics.newQuad(339, 39, 10, 24, aw, ah)
+    quads.wp_cleaver = love.graphics.newQuad(294, 105, 5, 22, aw, ah)
+    quads.wp_saw     = love.graphics.newQuad(307, 70, 10, 25, aw, ah)
+    quads.wp_waraxe  = love.graphics.newQuad(324, 168, 12, 23, aw, ah)
+    quads.wp_gold    = love.graphics.newQuad(307, 129, 10, 30, aw, ah)
+
+    -- 네크로맨서 4단계 진화 애니메이션 (Idle 4프레임 + Run 4프레임)
+    quads.necro_stages = {
+        -- Stage 1: 거지 초보 (elf_m)
+        { idle = makeAnimQuads(128, 36, 16, 28, 4), run = makeAnimQuads(192, 36, 16, 28, 4), w = 16, h = 28 },
+        -- Stage 2: 마도사 (wizzard_m)
+        { idle = makeAnimQuads(128, 164, 16, 28, 4), run = makeAnimQuads(192, 164, 16, 28, 4), w = 16, h = 28 },
+        -- Stage 3: 정통 후드 네크로맨서 (necromancer)
+        { idle = makeAnimQuads(368, 225, 16, 23, 4), run = makeAnimQuads(368, 225, 16, 23, 4), w = 16, h = 23 },
+        -- Stage 4: 각성 사령군주 (chort + golden crown aura)
+        { idle = makeAnimQuads(368, 273, 16, 23, 4), run = makeAnimQuads(432, 273, 16, 23, 4), w = 16, h = 23 },
+    }
+
+    -- 12종 소환수 & 적군 4프레임 애니메이션 등록
+    quads.anims = {
+        tiny_zombie = { idle = makeAnimQuads(368, 16, 16, 16, 4),  run = makeAnimQuads(432, 16, 16, 16, 4),  w = 16, h = 16 },
+        skelet      = { idle = makeAnimQuads(368, 88, 16, 16, 4),  run = makeAnimQuads(432, 88, 16, 16, 4),  w = 16, h = 16 },
+        masked_orc  = { idle = makeAnimQuads(368, 153, 16, 23, 4), run = makeAnimQuads(432, 153, 16, 23, 4), w = 16, h = 23 },
+        goblin      = { idle = makeAnimQuads(368, 40, 16, 16, 4),  run = makeAnimQuads(432, 40, 16, 16, 4),  w = 16, h = 16 },
+        ice_zombie  = { idle = makeAnimQuads(432, 136, 16, 16, 4), run = makeAnimQuads(432, 136, 16, 16, 4), w = 16, h = 16 },
+        doc         = { idle = makeAnimQuads(368, 345, 16, 23, 4), run = makeAnimQuads(432, 345, 16, 23, 4), w = 16, h = 23 },
+        swampy      = { idle = makeAnimQuads(432, 112, 16, 16, 4), run = makeAnimQuads(432, 112, 16, 16, 4), w = 16, h = 16 },
+        orc_shaman  = { idle = makeAnimQuads(368, 201, 16, 23, 4), run = makeAnimQuads(432, 201, 16, 23, 4), w = 16, h = 23 },
+        necro       = { idle = makeAnimQuads(368, 225, 16, 23, 4), run = makeAnimQuads(368, 225, 16, 23, 4), w = 16, h = 23 },
+        big_zombie  = { idle = makeAnimQuads(16, 332, 32, 36, 4),  run = makeAnimQuads(144, 332, 32, 36, 4), w = 32, h = 36 },
+        pumpkin     = { idle = makeAnimQuads(368, 321, 16, 23, 4), run = makeAnimQuads(432, 321, 16, 23, 4), w = 16, h = 23 },
+        big_demon   = { idle = makeAnimQuads(16, 428, 32, 36, 4),  run = makeAnimQuads(144, 428, 32, 36, 4), w = 32, h = 36 },
+
+        -- 적군 (성기사 보병 / 엘프 마법사 / 거대 오우거 보스)
+        enemy_knight = { idle = makeAnimQuads(128, 100, 16, 28, 4), run = makeAnimQuads(192, 100, 16, 28, 4), w = 16, h = 28 },
+        enemy_mage   = { idle = makeAnimQuads(128, 132, 16, 28, 4), run = makeAnimQuads(192, 132, 16, 28, 4), w = 16, h = 28 },
+        enemy_boss   = { idle = makeAnimQuads(16, 380, 32, 36, 4),  run = makeAnimQuads(144, 380, 32, 36, 4), w = 32, h = 36 },
+    }
+
+    -- 시작 군단 3기 지급
+    table.insert(legion, { id = 1, enhance = 0 })
+    table.insert(legion, { id = 4, enhance = 0 })
+    table.insert(legion, { id = 7, enhance = 0 })
+end
 
 local function addShake(dur, mag)
     shakeTimer = math.max(shakeTimer, dur)
@@ -148,13 +221,6 @@ local function spawnParticles(x, y, col, count, spd)
     end
 end
 
-local function createLegionUnit(unitId, enhanceLv)
-    return {
-        id = unitId,
-        enhance = enhanceLv or 0,
-    }
-end
-
 local function getUnitCombatStats(u)
     local meta = UNIT_DB[u.id]
     local mult = 1 + u.enhance * 0.22
@@ -164,7 +230,7 @@ end
 local function getNecroCombatStats()
     local wp = WEAPONS[necro.weaponIdx]
     local atk = math.floor((wp.baseAtk + (necro.level - 1) * 7) * (1 + necro.weaponEnhance * 0.22))
-    local maxHp = math.floor((160 + (necro.level - 1) * 35) * (1 + necro.armorEnhance * 0.20))
+    local maxHp = math.floor((165 + (necro.level - 1) * 35) * (1 + necro.armorEnhance * 0.20))
     return maxHp, atk, wp
 end
 
@@ -180,37 +246,12 @@ local function getEnhanceSuccessRate(curLv)
     return math.max(20, 90 - curLv * 12)
 end
 
-function love.load()
-    math.randomseed(os.time())
-    love.graphics.setDefaultFilter("nearest", "nearest")
-    love.graphics.setBackgroundColor(0.07, 0.06, 0.11)
-
-    necroImg = love.graphics.newImage("assets/necromancer_stages.png")
-    local nw, nh = necroImg:getDimensions()
-    for i = 0, 3 do
-        necroQuads[i + 1] = love.graphics.newQuad(i * 24, 0, 24, 32, nw, nh)
-    end
-
-    summonsImg = love.graphics.newImage("assets/summons.png")
-    local sw, sh = summonsImg:getDimensions()
-    for i = 0, 11 do
-        summonQuads[i + 1] = love.graphics.newQuad(i * 20, 0, 20, 24, sw, sh)
-    end
-
-    enemiesImg = love.graphics.newImage("assets/enemies.png")
-    local ew, eh = enemiesImg:getDimensions()
-    for i = 0, 2 do
-        enemyQuads[i + 1] = love.graphics.newQuad(i * 20, 0, 20, 24, ew, eh)
-    end
-
-    -- 시작 군단: 3대 기본 트리(전사/궁수/위습) 1기씩 지급!
-    table.insert(legion, createLegionUnit(1, 0))
-    table.insert(legion, createLegionUnit(4, 0))
-    table.insert(legion, createLegionUnit(7, 0))
+local function getAnimFrame(offset)
+    return (math.floor((timeAcc + (offset or 0)) * 8) % 4) + 1
 end
 
 -- ==============================================================================
--- 캠프 준비 기능: 1) 소환 가챠 / 2) 상향 트리 진화 / 3) 확률 변이 합성 / 4) 제작 & 확률 강화
+-- 캠프 준비: 가챠 / 상향 트리 / 확률 변이 합성 / 근접 무기 제작 & 확률 강화
 -- ==============================================================================
 
 local function rollSummonGacha(count)
@@ -227,26 +268,22 @@ local function rollSummonGacha(count)
         local r = math.random()
         local uid
         if r < 0.05 then
-            -- 5% 확률로 S급 초월 변이 직통 당첨!
             local sPool = {10, 11, 12}
             uid = sPool[math.random(1, #sPool)]
             bestTier = "S"
         elseif r < 0.18 then
-            -- 13% 확률로 A급 상향 트리 유닛
             local aPool = {3, 6, 9}
             uid = aPool[math.random(1, #aPool)]
             if bestTier ~= "S" then bestTier = "A" end
         elseif r < 0.48 then
-            -- 30% 확률로 B급 중급 트리 유닛
             local bPool = {2, 5, 8}
             uid = bPool[math.random(1, #bPool)]
             if bestTier == "C" then bestTier = "B" end
         else
-            -- 52% 확률로 C급 기본 트리 유닛
             local cPool = {1, 4, 7}
             uid = cPool[math.random(1, #cPool)]
         end
-        table.insert(legion, createLegionUnit(uid, 0))
+        table.insert(legion, { id = uid, enhance = 0 })
         table.insert(pulledNames, "[" .. UNIT_DB[uid].tier .. "]" .. UNIT_DB[uid].name)
     end
 
@@ -257,13 +294,12 @@ local function rollSummonGacha(count)
     spawnParticles(160, 250, TIER_COLORS[bestTier], count * 8, 140)
 end
 
--- 같은 트리 내 정통 상향 트리 승급 (예: 해골 졸병(C) -> 해골 검투사(B) -> 칠흑의 사령기사(A))
 local function promoteUnitTree()
     local u = legion[selectedUnitIdx]
     if not u then return end
     local meta = UNIT_DB[u.id]
     if not meta.nextId then
-        setBanner(meta.name .. " is at the peak of its Tree! Try MUTANT FUSION to reach S-Tier!", {1, 0.82, 0.25})
+        setBanner(meta.name .. " reached max Tree! Use MUTANT FUSION (65%) to reach S-Tier!", {1, 0.82, 0.25})
         return
     end
     local soulCost = (meta.tier == "C") and 35 or 75
@@ -281,7 +317,6 @@ local function promoteUnitTree()
     spawnParticles(520, 240, TIER_COLORS[nextMeta.tier], 20, 130)
 end
 
--- 소환수 확률 강화 (+1, +2 ... 확률 게임!)
 local function enhanceSelectedSummon()
     local u = legion[selectedUnitIdx]
     if not u then return end
@@ -304,8 +339,6 @@ local function enhanceSelectedSummon()
     end
 end
 
--- ★ 핵심 요구사항: 두 소환수를 합치면 확률(65%)적으로 [더 높은 등급의 다른 트리 소환수]가 나오고,
--- 실패(35%)하면 [같은 등급의 아무 소환수]가 나오는 돌연변이 합성!
 local function executeMutantFusion(idx1, idx2)
     if idx1 == idx2 then return end
     local u1, u2 = legion[idx1], legion[idx2]
@@ -323,17 +356,12 @@ local function executeMutantFusion(idx1, idx2)
     end
 
     local keptEnhance = math.max(u1.enhance, u2.enhance)
-    local higherIdx = math.max(idx1, idx2)
-    local lowerIdx = math.min(idx1, idx2)
-    table.remove(legion, higherIdx)
-    table.remove(legion, lowerIdx)
+    table.remove(legion, math.max(idx1, idx2))
+    table.remove(legion, math.min(idx1, idx2))
 
-    local successChance = 65
     local roll = math.random(1, 100)
     local resultId
-
-    if roll <= successChance then
-        -- 대성공! 더 높은 등급의 [다른 트리] 소환수 출현!
+    if roll <= 65 then
         local nextTier = (m1.tier == "C") and "B" or (m1.tier == "B" and "A" or "S")
         local candidates = {}
         for id, info in ipairs(UNIT_DB) do
@@ -348,20 +376,19 @@ local function executeMutantFusion(idx1, idx2)
         end
         resultId = candidates[math.random(1, #candidates)]
         local resMeta = UNIT_DB[resultId]
-        table.insert(legion, createLegionUnit(resultId, keptEnhance))
+        table.insert(legion, { id = resultId, enhance = keptEnhance })
         selectedUnitIdx = #legion
-        setBanner("MUTANT FUSION SUCCESS (65%)! Cross-Tree Evolved into [" .. resMeta.tier .. "] " .. resMeta.name .. " (" .. TREE_LABELS[resMeta.tree] .. ")!", TIER_COLORS[resMeta.tier])
+        setBanner("MUTANT FUSION SUCCESS (65%)! Cross-Tree Evolved into [" .. resMeta.tier .. "] " .. resMeta.name .. "!", TIER_COLORS[resMeta.tier])
         addShake(0.35, 8)
         spawnParticles(520, 240, TIER_COLORS[resMeta.tier], 32, 160)
     else
-        -- 실패(35%): 같은 등급의 아무 소환수로 변이!
         local samePool = {}
         for id, info in ipairs(UNIT_DB) do
             if info.tier == m1.tier then table.insert(samePool, id) end
         end
         resultId = samePool[math.random(1, #samePool)]
         local resMeta = UNIT_DB[resultId]
-        table.insert(legion, createLegionUnit(resultId, keptEnhance))
+        table.insert(legion, { id = resultId, enhance = keptEnhance })
         selectedUnitIdx = #legion
         setBanner("FUSION FAILED (35%)... Mutated into random same-tier [" .. resMeta.tier .. "] " .. resMeta.name .. "!", {1.0, 0.65, 0.30})
         addShake(0.18, 4)
@@ -369,11 +396,10 @@ local function executeMutantFusion(idx1, idx2)
     fusionMateIdx = nil
 end
 
--- 네크로맨서 근접 무기 제작 & 해금
 local function craftNextMeleeWeapon()
     local nextIdx = necro.weaponIdx + 1
     if nextIdx > #WEAPONS then
-        setBanner("Already wielding the ultimate Reaper's Scythe! Enhance it with probability!", {1, 0.85, 0.25})
+        setBanner("Already wielding the Golden Greatsword! Enhance it with probability!", {1, 0.85, 0.25})
         return
     end
     local wp = WEAPONS[nextIdx]
@@ -384,16 +410,14 @@ local function craftNextMeleeWeapon()
     res.iron = res.iron - wp.costIron
     res.bones = res.bones - wp.costBones
     necro.weaponIdx = nextIdx
-    necro.unlockedWeapons[nextIdx] = true
     updateNecroAppearanceStage()
     local maxHp = getNecroCombatStats()
     necro.maxHp = maxHp; necro.hp = maxHp
-    setBanner("FORGED MELEE WEAPON: [" .. wp.name .. "]! Wider cleave & Stage " .. necro.stage .. " look!", {0.35, 1.0, 0.65})
+    setBanner("FORGED 0x72 MELEE WEAPON: [" .. wp.name .. "]! Wider cleave & Stage " .. necro.stage .. " form!", {0.35, 1.0, 0.65})
     addShake(0.25, 6)
     spawnParticles(160, 250, {0.35, 1.0, 0.65}, 24, 140)
 end
 
--- 네크로맨서 근접 무기 확률 강화!
 local function enhanceNecroWeapon()
     local costIron = 2 + math.floor(necro.weaponEnhance / 2)
     local costSouls = 30 + necro.weaponEnhance * 18
@@ -416,7 +440,6 @@ local function enhanceNecroWeapon()
     end
 end
 
--- 네크로맨서 갑옷/육체 확률 강화!
 local function enhanceNecroArmor()
     local costBones = 2 + math.floor(necro.armorEnhance / 2)
     local costSouls = 25 + necro.armorEnhance * 15
@@ -441,7 +464,6 @@ local function enhanceNecroArmor()
     end
 end
 
--- 던전 전리품(약초/뼈)으로 포션 연금 제작!
 local function brewPotion(pType)
     if res.herbs < 2 then
         setBanner("Need 2 Blood Herbs from Dungeon Loot to brew a Potion!", {1, 0.4, 0.4})
@@ -449,29 +471,24 @@ local function brewPotion(pType)
     end
     res.herbs = res.herbs - 2
     potions[pType] = potions[pType] + 1
-    setBanner("BREWED POTION! +1 " .. string.upper(pType) .. " POTION ready for Dungeon keys [1/2/3]!", {0.45, 1.0, 0.65})
+    setBanner("BREWED POTION! +1 " .. string.upper(pType) .. " FLASK ready for Dungeon keys [1/2/3]!", {0.45, 1.0, 0.65})
 end
 
 -- ==============================================================================
--- 던전 전투 시작 & 근접 베기(Melee Cleave) + 대규모 소환수 군단 스웜 전투
+-- 던전 전투 루프
 -- ==============================================================================
 
 local function startDungeonRun()
     mode = "battle"
     local maxHp = getNecroCombatStats()
-    necro.maxHp = maxHp
-    necro.hp = maxHp
+    necro.maxHp = maxHp; necro.hp = maxHp
     necro.x, necro.y = 480, 290
-    necro.swingTimer = 0
-    necro.swingCooldown = 0
-    necro.dashTimer = 0
-    necro.invulnTimer = 0.6
-    necro.frenzyTimer = 0
-    necro.soulBoostTimer = 0
+    necro.swingTimer = 0; necro.swingCooldown = 0
+    necro.dashTimer = 0; necro.invulnTimer = 0.6
+    necro.frenzyTimer = 0; necro.soulBoostTimer = 0
     necro.afterimages = {}
     dungeonLootEarned = { souls = 0, bones = 0, herbs = 0, iron = 0 }
 
-    -- 보유한 모든 소환수 군단 출격! (많을수록 화면을 가득 채우며 적을 포위!)
     activeSummons = {}
     for i, u in ipairs(legion) do
         local hp, atk, meta = getUnitCombatStats(u)
@@ -487,6 +504,8 @@ local function startDungeonRun()
             cdTimer = math.random() * 0.4,
             hitFlash = 0,
             facing = 1,
+            moving = false,
+            animOffset = math.random() * 5,
         })
     end
 
@@ -499,40 +518,45 @@ local function startDungeonRun()
     for _ = 1, totalEnemies do
         local side = math.random(1, 4)
         local ex, ey
-        if side == 1 then ex, ey = 60, math.random(85, 485)
-        elseif side == 2 then ex, ey = 900, math.random(85, 485)
-        elseif side == 3 then ex, ey = math.random(80, 880), 82
-        else ex, ey = math.random(80, 880), 488 end
+        if side == 1 then ex, ey = 64, math.random(90, 480)
+        elseif side == 2 then ex, ey = 896, math.random(90, 480)
+        elseif side == 3 then ex, ey = math.random(80, 880), 88
+        else ex, ey = math.random(80, 880), 485 end
 
-        local isPriest = (dungeonStage >= 2 and math.random() < 0.35)
-        local eHp = math.floor((55 + dungeonStage * 28) * (isPriest and 0.85 or 1.0))
+        local isMage = (dungeonStage >= 2 and math.random() < 0.35)
+        local eHp = math.floor((55 + dungeonStage * 28) * (isMage and 0.85 or 1.0))
         table.insert(enemies, {
-            kind = isPriest and 2 or 1,
+            animKey = isMage and "enemy_mage" or "enemy_knight",
+            isRanged = isMage,
             x = ex, y = ey,
             hp = eHp, maxHp = eHp,
             atk = 10 + dungeonStage * 4,
-            spd = isPriest and 68 or (82 + dungeonStage * 3),
+            spd = isMage and 68 or (82 + dungeonStage * 3),
             cdTimer = 0.7 + math.random() * 0.7,
             hitFlash = 0,
             isBoss = false,
-            scale = 2.5,
+            scale = 2.6,
             radius = 16,
+            facing = 1,
+            animOffset = math.random() * 5,
         })
     end
 
-    -- 매 던전마다 수문장 보스 등장!
-    local bHp = 380 + dungeonStage * 180
+    local bHp = 400 + dungeonStage * 190
     table.insert(enemies, {
-        kind = 3,
+        animKey = "enemy_boss",
+        isRanged = false,
         x = 840, y = 280,
         hp = bHp, maxHp = bHp,
-        atk = 22 + dungeonStage * 6,
+        atk = 24 + dungeonStage * 6,
         spd = 66,
         cdTimer = 1.0,
         hitFlash = 0,
         isBoss = true,
-        scale = 4.0,
-        radius = 28,
+        scale = 3.0,
+        radius = 30,
+        facing = -1,
+        animOffset = 0,
     })
 end
 
@@ -544,7 +568,6 @@ local function performNecroMeleeSwing()
     necro.swingTimer = necro.swingDuration
     necro.swingCooldown = wp.cd
 
-    -- 180도 근접 광역 베기(Melee Cleave) 판정!
     local hitCount = 0
     for _, e in ipairs(enemies) do
         local dx = e.x - necro.x
@@ -556,7 +579,6 @@ local function performNecroMeleeSwing()
             if math.abs(diff) <= 1.45 then
                 e.hp = e.hp - atk
                 e.hitFlash = 0.14
-                -- 묵직한 근접 넉백!
                 local push = e.isBoss and 6 or 18
                 e.x = e.x + math.cos(angToEnemy) * push
                 e.y = e.y + math.sin(angToEnemy) * push
@@ -566,10 +588,7 @@ local function performNecroMeleeSwing()
             end
         end
     end
-
-    if hitCount > 0 then
-        addShake(0.10, math.min(7, 2 + hitCount))
-    end
+    if hitCount > 0 then addShake(0.10, math.min(7, 2 + hitCount)) end
 end
 
 local function useBattlePotion(slot)
@@ -607,7 +626,8 @@ local function updateBattle(dt)
     if love.keyboard.isDown("s", "down") then dy = dy + 1 end
     if love.keyboard.isDown("a", "left") then dx = dx - 1 end
     if love.keyboard.isDown("d", "right") then dx = dx + 1 end
-    if dx ~= 0 or dy ~= 0 then
+    necro.moving = (dx ~= 0 or dy ~= 0)
+    if necro.moving then
         local len = math.sqrt(dx * dx + dy * dy)
         dx, dy = dx / len, dy / len
         if dx ~= 0 then necro.facing = (dx > 0) and 1 or -1 end
@@ -631,12 +651,10 @@ local function updateBattle(dt)
         if necro.afterimages[i].life <= 0 then table.remove(necro.afterimages, i) end
     end
 
-    -- 마우스 좌클릭(또는 홀드) -> 네크로맨서 근접 무기 휘두르기!
     if love.mouse.isDown(1) and necro.swingCooldown <= 0 then
         performNecroMeleeSwing()
     end
 
-    -- 소환수 군단 AI (광란 포션 적용 시 속도 1.65배!)
     local spdMult = (necro.frenzyTimer > 0) and 1.65 or 1.0
     for i = #activeSummons, 1, -1 do
         local s = activeSummons[i]
@@ -681,7 +699,6 @@ local function updateBattle(dt)
             end
         end
 
-        -- 군단 개체 수가 많아도 자연스럽게 에워싸도록 부드러운 분리력(Separation) 적용
         for j, other in ipairs(activeSummons) do
             if i ~= j then
                 local ox, oy = s.x - other.x, s.y - other.y
@@ -694,6 +711,7 @@ local function updateBattle(dt)
             end
         end
 
+        s.moving = (math.abs(mvx) > 5 or math.abs(mvy) > 5)
         s.x = math.max(50, math.min(910, s.x + mvx * dt))
         s.y = math.max(82, math.min(495, s.y + mvy * dt))
 
@@ -703,12 +721,9 @@ local function updateBattle(dt)
         end
     end
 
-    -- 아군 원거리 소환수 투사체
     for i = #projectiles, 1, -1 do
         local p = projectiles[i]
-        p.x = p.x + p.vx * dt
-        p.y = p.y + p.vy * dt
-        p.life = p.life - dt
+        p.x = p.x + p.vx * dt; p.y = p.y + p.vy * dt; p.life = p.life - dt
         local hit = false
         for _, e in ipairs(enemies) do
             if math.sqrt((e.x - p.x)^2 + ((e.y - 14) - p.y)^2) < e.radius + 5 then
@@ -722,7 +737,6 @@ local function updateBattle(dt)
         if hit or p.life <= 0 then table.remove(projectiles, i) end
     end
 
-    -- 적 AI 및 던전 전리품(영혼 / 뼈조각 / 피약초 / 암흑철) 드랍!
     for i = #enemies, 1, -1 do
         local e = enemies[i]
         e.cdTimer = math.max(0, e.cdTimer - dt)
@@ -732,8 +746,6 @@ local function updateBattle(dt)
             local mult = (necro.soulBoostTimer > 0) and 2 or 1
             local sDrop = (e.isBoss and (80 + dungeonStage * 25) or (12 + dungeonStage * 3)) * mult
             table.insert(lootDrops, { x = e.x, y = e.y, kind = "souls", amount = sDrop, col = {0.35, 1.0, 0.65} })
-
-            -- 확률적 재료 전리품 드랍 (보스는 무조건 대량 드랍!)
             if e.isBoss or math.random() < 0.55 then
                 table.insert(lootDrops, { x = e.x + 12, y = e.y - 6, kind = "bones", amount = (e.isBoss and 4 or 1) * mult, col = {0.95, 0.92, 0.82} })
             end
@@ -743,7 +755,6 @@ local function updateBattle(dt)
             if e.isBoss or math.random() < 0.45 then
                 table.insert(lootDrops, { x = e.x + 8, y = e.y + 10, kind = "iron", amount = (e.isBoss and 4 or 1) * mult, col = {0.55, 0.75, 1.0} })
             end
-
             spawnParticles(e.x, e.y - 14, {1.0, 0.4, 0.4}, e.isBoss and 28 or 10, 130)
             addShake(e.isBoss and 0.35 or 0.08, e.isBoss and 8 or 2.5)
             table.remove(enemies, i)
@@ -756,7 +767,8 @@ local function updateBattle(dt)
             end
 
             local ang = math.atan2(target.y - e.y, target.x - e.x)
-            if e.kind == 2 and bestD < 210 then
+            e.facing = (target.x >= e.x) and 1 or -1
+            if e.isRanged and bestD < 210 then
                 if e.cdTimer <= 0 then
                     e.cdTimer = 1.65
                     table.insert(enemyProjectiles, {
@@ -788,12 +800,9 @@ local function updateBattle(dt)
         end
     end
 
-    -- 적 투사체
     for i = #enemyProjectiles, 1, -1 do
         local ep = enemyProjectiles[i]
-        ep.x = ep.x + ep.vx * dt
-        ep.y = ep.y + ep.vy * dt
-        ep.life = ep.life - dt
+        ep.x = ep.x + ep.vx * dt; ep.y = ep.y + ep.vy * dt; ep.life = ep.life - dt
         local hit = false
         if math.sqrt((necro.x - ep.x)^2 + ((necro.y - 18) - ep.y)^2) < 17 then
             if necro.invulnTimer <= 0 then
@@ -807,7 +816,6 @@ local function updateBattle(dt)
         if hit or ep.life <= 0 then table.remove(enemyProjectiles, i) end
     end
 
-    -- 전리품 흡수
     local magnetRange = (necro.soulBoostTimer > 0 or #enemies == 0) and 999 or 175
     for i = #lootDrops, 1, -1 do
         local l = lootDrops[i]
@@ -893,22 +901,18 @@ function love.mousepressed(x, y, button)
     if button ~= 1 then return end
 
     if mode == "camp" then
-        -- 좌측: 네크로맨서 근접 무기 제작 / 무기 확률강화 / 갑옷 확률강화 / 던전 출정
         if inRect(x, y, 32, 338, 250, 42) then craftNextMeleeWeapon(); return end
         if inRect(x, y, 32, 386, 122, 46) then enhanceNecroWeapon(); return end
         if inRect(x, y, 160, 386, 122, 46) then enhanceNecroArmor(); return end
         if inRect(x, y, 32, 444, 250, 62) then startDungeonRun(); return end
 
-        -- 중앙 상단: 소환 가챠 1회 / 5연차
         if inRect(x, y, 306, 68, 165, 52) then rollSummonGacha(1); return end
         if inRect(x, y, 478, 68, 175, 52) then rollSummonGacha(5); return end
 
-        -- 우측 상단: 포션 연금 3종
         if inRect(x, y, 668, 68, 86, 52) then brewPotion("heal"); return end
         if inRect(x, y, 760, 68, 86, 52) then brewPotion("frenzy"); return end
         if inRect(x, y, 852, 68, 86, 52) then brewPotion("soul"); return end
 
-        -- 선택된 소환수 액션: [상향 트리 승급] / [확률 강화] / [돌연변이 합성 모드]
         if inRect(x, y, 306, 154, 205, 48) then promoteUnitTree(); return end
         if inRect(x, y, 520, 154, 205, 48) then enhanceSelectedSummon(); return end
         if inRect(x, y, 734, 154, 204, 48) then
@@ -924,11 +928,9 @@ function love.mousepressed(x, y, button)
             return
         end
 
-        -- 군단 스크롤 버튼
         if inRect(x, y, 845, 212, 42, 22) then rosterScroll = math.max(0, rosterScroll - 1); return end
         if inRect(x, y, 894, 212, 42, 22) then rosterScroll = rosterScroll + 1; return end
 
-        -- 소환수 군단 그리드 클릭 (4열 x 3행 = 페이지당 12칸 표시, 스크롤로 무제한!)
         for slot = 1, 12 do
             local idx = rosterScroll * 4 + slot
             local u = legion[idx]
@@ -966,73 +968,74 @@ local function drawBtn(x, y, w, h, title, sub, bg, border)
     end
 end
 
--- 네크로맨서 손에 들린 근접 무기 도트/블레이드 렌더링
-local function drawNecroMeleeWeapon(cx, cy, scale, swingRatio)
+-- 0x72 정품 도트 근접 무기를 네크로맨서 손에 렌더링!
+local function draw0x72MeleeWeapon(cx, cy, scale, swingRatio)
     local _, _, wp = getNecroCombatStats()
-    love.graphics.push()
-    love.graphics.translate(cx + 8 * scale * necro.facing, cy - 14 * scale)
-    local baseAng = (necro.facing == 1) and 0.35 or (math.pi - 0.35)
-    if swingRatio > 0 then
-        baseAng = necro.swingAngle - 1.2 + (1 - swingRatio) * 2.4
-    end
-    love.graphics.rotate(baseAng)
+    local q = quads[wp.quadKey]
+    if not q then return end
 
-    -- 무기 자루
-    love.graphics.setColor(0.45, 0.28, 0.14, 1)
-    love.graphics.rectangle("fill", 0, -2, 11 * scale, 4)
-    -- 무기 칼날 / 낫 날
-    love.graphics.setColor(wp.col[1], wp.col[2], wp.col[3], 1)
-    if necro.weaponIdx == 4 then
-        -- 사신의 대낫 초승달 칼날
-        love.graphics.polygon("fill", 9 * scale, -2, 14 * scale, -9 * scale, 11 * scale, 5 * scale)
-    else
-        love.graphics.rectangle("fill", 7 * scale, -4, (3 + necro.weaponIdx * 1.5) * scale, 8)
+    love.graphics.push()
+    love.graphics.translate(cx + 7 * scale * necro.facing, cy - 8 * scale)
+    local ang = (necro.facing == 1) and 0.45 or -0.45
+    if swingRatio > 0 then
+        ang = necro.swingAngle + math.pi * 0.5 - 1.2 + (1 - swingRatio) * 2.4
     end
+    love.graphics.rotate(ang)
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.draw(atlasImg, q, 0, 0, 0, scale * 0.85, scale * 0.85, wp.w / 2, wp.h - 3)
     love.graphics.pop()
 end
 
 local function drawCamp()
-    -- 상단 전리품 HUD 바
-    love.graphics.setColor(0.12, 0.10, 0.19, 1)
+    -- 상단 전리품 HUD
+    love.graphics.setColor(0.12, 0.10, 0.18, 1)
     love.graphics.rectangle("fill", 0, 0, 960, 50)
     love.graphics.setColor(0.35, 1.0, 0.65, 1)
-    love.graphics.print("DUNGEON STAGE " .. dungeonStage .. " PREP", 22, 16)
+    love.graphics.print("DUNGEON STAGE " .. dungeonStage .. " PREP (0x72 ASSET PACK)", 22, 16)
     love.graphics.setColor(0.45, 1.0, 0.72, 1)
-    love.graphics.print("SOULS: " .. res.souls, 240, 16)
+    love.graphics.print("SOULS: " .. res.souls, 310, 16)
     love.graphics.setColor(0.95, 0.92, 0.82, 1)
-    love.graphics.print("BONES: " .. res.bones, 375, 16)
+    love.graphics.print("BONES: " .. res.bones, 435, 16)
     love.graphics.setColor(1.0, 0.45, 0.55, 1)
-    love.graphics.print("HERBS: " .. res.herbs, 495, 16)
+    love.graphics.print("HERBS: " .. res.herbs, 550, 16)
     love.graphics.setColor(0.55, 0.78, 1.0, 1)
-    love.graphics.print("DARK IRON: " .. res.iron, 610, 16)
+    love.graphics.print("DARK IRON: " .. res.iron, 665, 16)
     love.graphics.setColor(1.0, 0.85, 0.25, 1)
-    love.graphics.print("LEGION SIZE: " .. #legion .. " UNDEAD", 775, 16)
+    love.graphics.print("LEGION: " .. #legion, 825, 16)
 
-    -- 좌측 패널: 네크로맨서 (근접 전용) & 외형 진화 & 확률 강화
-    love.graphics.setColor(0.13, 0.10, 0.20, 1)
+    -- 좌측 패널: 0x72 네크로맨서 & 근접 무기 & 확률 강화
+    love.graphics.setColor(0.13, 0.11, 0.20, 1)
     love.graphics.rectangle("fill", 20, 62, 274, 458, 10, 10)
     love.graphics.setColor(0.42, 0.32, 0.62, 1)
     love.graphics.rectangle("line", 20, 62, 274, 458, 10, 10)
 
     local maxHp, atk, wp = getNecroCombatStats()
-    local stageNames = { "STAGE 1: HEART BOXERS", "STAGE 2: DARK COAT", "STAGE 3: DEATHLORD", "STAGE 4: LICH KING" }
+    local stageNames = { "STAGE 1: BROKE NOVICE", "STAGE 2: DARK WIZARD", "STAGE 3: NECROMANCER", "STAGE 4: DEMON OVERLORD" }
     love.graphics.setColor(1.0, 0.86, 0.28, 1)
     love.graphics.printf(stageNames[necro.stage], 20, 74, 274, "center")
     love.graphics.setColor(0.75, 0.82, 0.95, 1)
     love.graphics.printf("MELEE: " .. wp.name .. " +" .. necro.weaponEnhance, 20, 96, 274, "center")
 
-    -- 네크로맨서 5x 도트 프리뷰 + 손에 든 근접 무기
-    local bob = (necro.stage == 4) and (math.sin(timeAcc * 4) * 5 - 6) or (math.sin(timeAcc * 4) > 0 and 0 or 2)
-    love.graphics.setColor(0.25, 0.95, 0.55, 0.20)
-    love.graphics.ellipse("fill", 157, 265, 62, 16)
+    -- 0x72 네크로맨서 4프레임 살아 숨쉬는 아이들 애니메이션 (5배 확대)
+    local stAnim = quads.necro_stages[necro.stage]
+    local fIdx = getAnimFrame(0)
+    love.graphics.setColor(0.25, 0.95, 0.55, 0.22)
+    love.graphics.ellipse("fill", 157, 260, 58, 16)
     love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.draw(necroImg, necroQuads[necro.stage], 157, math.floor(265 + bob), 0, 5, 5, 12, 28)
-    drawNecroMeleeWeapon(157, 265 + bob, 3.8, 0)
+    love.graphics.draw(atlasImg, stAnim.idle[fIdx], 157, 260, 0, 5, 5, stAnim.w / 2, stAnim.h)
+    draw0x72MeleeWeapon(157, 260, 4.5, 0)
 
     love.graphics.setColor(0.90, 0.94, 0.98, 1)
-    love.graphics.printf("HP: " .. maxHp .. " (Armor +" .. necro.armorEnhance .. ")  |  CLEAVE ATK: " .. atk, 20, 292, 274, "center")
-    love.graphics.setColor(0.60, 0.95, 0.72, 1)
-    love.graphics.printf("Potions: [1]Heal:" .. potions.heal .. " [2]Frenzy:" .. potions.frenzy .. " [3]Loot:" .. potions.soul, 20, 314, 274, "center")
+    love.graphics.printf("HP: " .. maxHp .. " (Armor +" .. necro.armorEnhance .. ")  |  CLEAVE: " .. atk, 20, 286, 274, "center")
+
+    -- 0x72 정품 포션 플라스크 아이콘 표시
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.draw(atlasImg, quads.flask_red, 45, 308, 0, 1.5, 1.5)
+    love.graphics.print("[1]x" .. potions.heal, 70, 314)
+    love.graphics.draw(atlasImg, quads.flask_green, 125, 308, 0, 1.5, 1.5)
+    love.graphics.print("[2]x" .. potions.frenzy, 150, 314)
+    love.graphics.draw(atlasImg, quads.flask_yellow, 205, 308, 0, 1.5, 1.5)
+    love.graphics.print("[3]x" .. potions.soul, 230, 314)
 
     local nextWp = WEAPONS[necro.weaponIdx + 1]
     local forgeSub = nextWp and ("Need " .. nextWp.costIron .. " Iron, " .. nextWp.costBones .. " Bones") or "MAX WEAPON TIER"
@@ -1045,7 +1048,7 @@ local function drawCamp()
 
     drawBtn(32, 444, 250, 62, "RAID DUNGEON STAGE " .. dungeonStage, "Deploy All " .. #legion .. " Summons!", {0.12, 0.50, 0.28}, {0.35, 1.0, 0.60})
 
-    -- 우측 상단: 소환수 가챠 (1회 / 5연차) & 포션 연금(약초 2개)
+    -- 우측 상단: 소환 가챠 & 포션 연금
     drawBtn(306, 68, 165, 52, "SUMMON 1x", "28 Souls (Gacha)", {0.20, 0.14, 0.34}, {0.35, 0.95, 0.65})
     drawBtn(478, 68, 175, 52, "SUMMON 5x SWARM", "120 Souls (Bonus!)", {0.28, 0.15, 0.42}, {1.0, 0.84, 0.25})
 
@@ -1053,11 +1056,9 @@ local function drawCamp()
     drawBtn(760, 68, 86, 52, "+1 FRENZY", "2 Herbs", {0.28, 0.18, 0.12}, {1.0, 0.65, 0.25})
     drawBtn(852, 68, 86, 52, "+1 LOOT", "2 Herbs", {0.16, 0.24, 0.22}, {0.40, 1.0, 0.70})
 
-    -- 안내 배너
     love.graphics.setColor(bannerCol[1], bannerCol[2], bannerCol[3], 1)
     love.graphics.print(bannerMsg, 308, 130)
 
-    -- 선택된 소환수 상향 트리 진화 / 확률 강화 / 이종 트리 돌연변이 합성 바
     local selU = legion[selectedUnitIdx]
     local selMeta = selU and UNIT_DB[selU.id] or nil
     local nextMeta = (selMeta and selMeta.nextId) and UNIT_DB[selMeta.nextId] or nil
@@ -1084,13 +1085,11 @@ local function drawCamp()
         {1.0, 0.82, 0.25}
     )
 
-    -- 군단 헤더 & 스크롤
     love.graphics.setColor(0.85, 0.88, 0.95, 1)
-    love.graphics.print("UNDEAD LEGION (" .. #legion .. " Active — No Limit! More is Better!):", 308, 215)
+    love.graphics.print("UNDEAD LEGION (" .. #legion .. " Active — Animated 0x72 Pixel Sprites):", 308, 215)
     drawBtn(845, 212, 42, 22, "UP", nil, {0.2, 0.2, 0.3}, {0.5, 0.5, 0.7})
     drawBtn(894, 212, 42, 22, "DN", nil, {0.2, 0.2, 0.3}, {0.5, 0.5, 0.7})
 
-    -- 군단 4x3 그리드
     for slot = 1, 12 do
         local idx = rosterScroll * 4 + slot
         local col = (slot - 1) % 4
@@ -1111,8 +1110,12 @@ local function drawCamp()
             love.graphics.setLineWidth((isSel or isFuse) and 3 or 1.5)
             love.graphics.rectangle("line", cx, cy, 152, 80, 7, 7)
 
+            -- 0x72 소환수 4프레임 아이들 애니메이션!
+            local anim = quads.anims[meta.animKey]
+            local uf = getAnimFrame(idx * 0.3)
+            local iconScale = (anim.w == 32) and 1.35 or 2.2
             love.graphics.setColor(1, 1, 1, 1)
-            love.graphics.draw(summonsImg, summonQuads[u.id], cx + 24, cy + 56, 0, 2.2, 2.2, 10, 22)
+            love.graphics.draw(atlasImg, anim.idle[uf], cx + 24, cy + 62, 0, iconScale, iconScale, anim.w / 2, anim.h)
 
             love.graphics.setColor(tc[1], tc[2], tc[3], 1)
             love.graphics.print("[" .. meta.tier .. "] " .. meta.name, cx + 46, cy + 7)
@@ -1136,27 +1139,34 @@ local function drawCamp()
 end
 
 local function drawBattle()
-    -- 던전 바닥 타일
-    local ts = 40
-    for gx = 1, 22 do
-        for gy = 1, 11 do
-            love.graphics.setColor((gx + gy) % 2 == 0 and 0.14 or 0.12, 0.10, 0.19, 1)
-            love.graphics.rectangle("fill", gx * ts, 24 + gy * ts, ts, ts)
+    -- 0x72 정품 던전 석재 바닥 타일맵 렌더링 (48x48 스케일)
+    love.graphics.setColor(1, 1, 1, 1)
+    for gx = 1, 18 do
+        for gy = 1, 9 do
+            local q = ((gx + gy) % 2 == 0) and quads.floors[1] or quads.floors2[2]
+            love.graphics.draw(atlasImg, q, gx * 48, 32 + gy * 48, 0, 3, 3)
         end
     end
     love.graphics.setColor(0.40, 0.30, 0.58, 1)
     love.graphics.setLineWidth(3)
-    love.graphics.rectangle("line", 40, 64, 880, 440, 8, 8)
+    love.graphics.rectangle("line", 48, 80, 864, 432, 6, 6)
 
-    -- 전리품 아이콘
+    -- 전리품 드랍 (0x72 해골 / 플라스크 / 코인 도트 아이콘)
     for _, l in ipairs(lootDrops) do
-        love.graphics.setColor(l.col[1], l.col[2], l.col[3], 0.35)
-        love.graphics.circle("fill", l.x, l.y, 9)
-        love.graphics.setColor(l.col[1], l.col[2], l.col[3], 1)
-        love.graphics.rectangle("fill", l.x - 4, l.y - 4, 8, 8)
+        love.graphics.setColor(1, 1, 1, 1)
+        if l.kind == "bones" then
+            love.graphics.draw(atlasImg, quads.skull, l.x, l.y, 0, 1.6, 1.6, 8, 8)
+        elseif l.kind == "herbs" then
+            love.graphics.draw(atlasImg, quads.flask_red, l.x, l.y, 0, 1.5, 1.5, 8, 8)
+        elseif l.kind == "iron" then
+            love.graphics.draw(atlasImg, quads.flask_blue, l.x, l.y, 0, 1.5, 1.5, 8, 8)
+        else
+            local cf = getAnimFrame(l.x)
+            love.graphics.draw(atlasImg, quads.coin[cf], l.x, l.y, 0, 2.5, 2.5, 4, 4)
+        end
     end
 
-    -- 네크로맨서 근접 베기(Melee Cleave Arc) 이펙트!
+    -- 네크로맨서 근접 베기(Melee Cleave Arc)
     if necro.swingTimer > 0 then
         local _, _, wp = getNecroCombatStats()
         local ratio = necro.swingTimer / necro.swingDuration
@@ -1168,12 +1178,13 @@ local function drawBattle()
     end
 
     -- 대시 잔상
+    local stAnim = quads.necro_stages[necro.stage]
     for _, af in ipairs(necro.afterimages) do
         love.graphics.setColor(0.35, 1.0, 0.65, af.life * 2.2)
-        love.graphics.draw(necroImg, necroQuads[necro.stage], af.x, af.y, 0, 2.8 * necro.facing, 2.8, 12, 28)
+        love.graphics.draw(atlasImg, stAnim.run[1], af.x, af.y, 0, 3 * necro.facing, 3, stAnim.w / 2, stAnim.h)
     end
 
-    -- 깊이 정렬 렌더링
+    -- Y좌표 깊이 정렬 후 0x72 4프레임 애니메이션 렌더링
     local drawList = { { kind = "necro", y = necro.y } }
     for _, s in ipairs(activeSummons) do table.insert(drawList, { kind = "summon", y = s.y, ref = s }) end
     for _, e in ipairs(enemies) do table.insert(drawList, { kind = "enemy", y = e.y, ref = e }) end
@@ -1184,25 +1195,32 @@ local function drawBattle()
             love.graphics.setColor(0.04, 0.03, 0.08, 0.5)
             love.graphics.ellipse("fill", necro.x, necro.y + 2, 20, 7)
             love.graphics.setColor(1, 1, 1, 1)
-            love.graphics.draw(necroImg, necroQuads[necro.stage], math.floor(necro.x), math.floor(necro.y), 0, 2.8 * necro.facing, 2.8, 12, 28)
-            drawNecroMeleeWeapon(necro.x, necro.y, 2.6, necro.swingTimer / necro.swingDuration)
+            local nf = getAnimFrame(0)
+            local nQuad = necro.moving and stAnim.run[nf] or stAnim.idle[nf]
+            love.graphics.draw(atlasImg, nQuad, math.floor(necro.x), math.floor(necro.y), 0, 3 * necro.facing, 3, stAnim.w / 2, stAnim.h)
+            draw0x72MeleeWeapon(necro.x, necro.y, 3.0, necro.swingTimer / necro.swingDuration)
         elseif item.kind == "summon" then
             local s = item.ref
+            local anim = quads.anims[s.meta.animKey]
+            local sf = getAnimFrame(s.animOffset)
+            local sQuad = s.moving and anim.run[sf] or anim.idle[sf]
             love.graphics.setColor(0.04, 0.03, 0.08, 0.42)
-            love.graphics.ellipse("fill", s.x, s.y + 2, 13, 5)
+            love.graphics.ellipse("fill", s.x, s.y + 2, 14, 5)
             love.graphics.setColor(1, s.hitFlash > 0 and 0.4 or 1, s.hitFlash > 0 and 0.4 or 1, 1)
-            love.graphics.draw(summonsImg, summonQuads[s.unit.id], math.floor(s.x), math.floor(s.y), 0, 2.3 * s.facing, 2.3, 10, 22)
+            love.graphics.draw(atlasImg, sQuad, math.floor(s.x), math.floor(s.y), 0, s.meta.scale * s.facing, s.meta.scale, anim.w / 2, anim.h)
         elseif item.kind == "enemy" then
             local e = item.ref
+            local anim = quads.anims[e.animKey]
+            local ef = getAnimFrame(e.animOffset)
             love.graphics.setColor(0.04, 0.03, 0.08, 0.48)
             love.graphics.ellipse("fill", e.x, e.y + 2, e.radius, e.radius * 0.4)
             love.graphics.setColor(1, e.hitFlash > 0 and 0.3 or 1, e.hitFlash > 0 and 0.3 or 1, 1)
-            love.graphics.draw(enemiesImg, enemyQuads[e.kind], math.floor(e.x), math.floor(e.y), 0, e.scale, e.scale, 10, 22)
+            love.graphics.draw(atlasImg, anim.run[ef], math.floor(e.x), math.floor(e.y), 0, e.scale * e.facing, e.scale, anim.w / 2, anim.h)
             local bw = e.isBoss and 64 or 28
             love.graphics.setColor(0.1, 0.1, 0.15, 0.85)
-            love.graphics.rectangle("fill", e.x - bw / 2, e.y - e.scale * 22 - 6, bw, 5)
+            love.graphics.rectangle("fill", e.x - bw / 2, e.y - e.scale * anim.h - 6, bw, 5)
             love.graphics.setColor(0.95, 0.28, 0.35, 1)
-            love.graphics.rectangle("fill", e.x - bw / 2, e.y - e.scale * 22 - 6, bw * math.max(0, e.hp / e.maxHp), 5)
+            love.graphics.rectangle("fill", e.x - bw / 2, e.y - e.scale * anim.h - 6, bw * math.max(0, e.hp / e.maxHp), 5)
         end
     end
 
@@ -1215,7 +1233,7 @@ local function drawBattle()
         love.graphics.circle("fill", ep.x, ep.y, 5.5)
     end
 
-    -- 상단 전투 HUD & 포션 단축키 안내
+    -- 상단 전투 HUD
     love.graphics.setColor(0.10, 0.08, 0.16, 0.94)
     love.graphics.rectangle("fill", 0, 0, 960, 48)
     love.graphics.setColor(0.95, 0.28, 0.35, 1)
