@@ -53,6 +53,7 @@ local necro = {
     swingTimer = 0,
     swingDuration = 0.20,
     swingAngle = 0,
+    swingPending = false,
     swingCooldown = 0,
     dashTimer = 0,
     dashCooldown = 0,
@@ -494,7 +495,7 @@ local function startDungeonRun()
     necro.x, necro.y = 480, 290
     necro.direction, necro.walkFrame, necro.walkDistance = "down", 0, 0
     necro.moving = false
-    necro.swingTimer = 0; necro.swingCooldown = 0
+    necro.swingTimer, necro.swingCooldown, necro.swingPending = 0, 0, false
     necro.dashTimer = 0; necro.invulnTimer = 0.6
     necro.frenzyTimer = 0; necro.soulBoostTimer = 0
     necro.afterimages = {}
@@ -571,14 +572,12 @@ local function startDungeonRun()
     })
 end
 
-local function performNecroMeleeSwing()
-    local _, atk, wp = getNecroCombatStats()
-    local mx, my = love.mouse.getPosition()
-    necro.swingAngle = math.atan2(my - (necro.y - 20), mx - necro.x)
-    necro.facing = (mx >= necro.x) and 1 or -1
-    necro.swingTimer = necro.swingDuration
-    necro.swingCooldown = wp.cd
+local function usesStarterSwing()
+    return necro.stage == 1 and necro.weaponIdx == 1
+end
 
+local function applyNecroMeleeSwing()
+    local _, atk, wp = getNecroCombatStats()
     local hitCount = 0
     for _, e in ipairs(enemies) do
         local dx = e.x - necro.x
@@ -600,6 +599,23 @@ local function performNecroMeleeSwing()
         end
     end
     if hitCount > 0 then addShake(0.10, math.min(7, 2 + hitCount)) end
+end
+
+local function startNecroMeleeSwing()
+    local mx, my = love.mouse.getPosition()
+    local dx, dy = mx - necro.x, my - (necro.y - 20)
+    necro.swingAngle = math.atan2(dy, dx)
+    necro.facing = (dx >= 0) and 1 or -1
+    necro.swingCooldown = WEAPONS[necro.weaponIdx].cd
+    local starterSwing = usesStarterSwing()
+    necro.swingDuration = starterSwing and Starter.attackDuration or 0.20
+    necro.swingTimer = necro.swingDuration
+    if starterSwing then
+        necro.direction = Starter.attackFacing(dx, dy, necro.direction)
+        necro.swingPending = true
+    else
+        applyNecroMeleeSwing()
+    end
 end
 
 local function useBattlePotion(slot)
@@ -644,7 +660,7 @@ local function updateBattle(dt)
         necro.x = necro.x + necro.dashDx * 540 * dt
         necro.y = necro.y + necro.dashDy * 540 * dt
         table.insert(necro.afterimages, { x = necro.x, y = necro.y, direction = necro.direction, life = 0.20 })
-    else
+    elseif not usesStarterSwing() or necro.swingTimer <= 0 then
         necro.direction = Starter.facing(dx, dy, necro.direction)
         necro.x = necro.x + dx * 190 * dt
         necro.y = necro.y + dy * 190 * dt
@@ -666,8 +682,12 @@ local function updateBattle(dt)
         if necro.afterimages[i].life <= 0 then table.remove(necro.afterimages, i) end
     end
 
-    if love.mouse.isDown(1) and necro.swingCooldown <= 0 then
-        performNecroMeleeSwing()
+    if necro.swingPending and necro.swingDuration - necro.swingTimer >= Starter.attackWindup then
+        necro.swingPending = false
+        applyNecroMeleeSwing()
+    end
+    if love.mouse.isDown(1) and necro.swingCooldown <= 0 and (not dashing or not usesStarterSwing()) then
+        startNecroMeleeSwing()
     end
 
     local spdMult = (necro.frenzyTimer > 0) and 1.65 or 1.0
@@ -891,6 +911,9 @@ function love.keypressed(key)
                     local mx, my = love.mouse.getPosition()
                     local ang = math.atan2(my - necro.y, mx - necro.x)
                     dx, dy = math.cos(ang), math.sin(ang)
+                end
+                if usesStarterSwing() then
+                    necro.swingTimer, necro.swingPending = 0, false
                 end
                 necro.dashDx, necro.dashDy = dx, dy
                 necro.dashTimer = 0.14
@@ -1196,9 +1219,11 @@ local function drawBattle()
     end
 
     -- 네크로맨서 근접 베기(Melee Cleave Arc)
-    if necro.swingTimer > 0 then
+    local swingWindup = usesStarterSwing() and Starter.attackWindup or 0
+    local swingElapsed = necro.swingDuration - necro.swingTimer
+    if necro.swingTimer > 0 and swingElapsed >= swingWindup then
         local _, _, wp = getNecroCombatStats()
-        local ratio = necro.swingTimer / necro.swingDuration
+        local ratio = necro.swingTimer / (necro.swingDuration - swingWindup)
         love.graphics.setColor(wp.col[1], wp.col[2], wp.col[3], ratio * 0.55)
         love.graphics.arc("fill", necro.x, necro.y - 18, wp.arcRadius, necro.swingAngle - 1.25, necro.swingAngle + 1.25)
         love.graphics.setColor(1, 1, 1, ratio * 0.9)
@@ -1229,14 +1254,18 @@ local function drawBattle()
             love.graphics.ellipse("fill", necro.x, necro.y + 2, 20, 7)
             love.graphics.setColor(1, 1, 1, 1)
             local x, y = math.floor(necro.x), math.floor(necro.y)
-            if necro.stage == 1 then
-                Starter.drawWalk(necro.direction, necro.walkFrame, x, y, 2)
+            if usesStarterSwing() and necro.swingTimer > 0 then
+                Starter.drawAttack(necro.direction, swingElapsed, x, y, 2)
             else
-                local nf = getAnimFrame(0)
-                local nQuad = necro.moving and stAnim.run[nf] or stAnim.idle[nf]
-                love.graphics.draw(atlasImg, nQuad, x, y, 0, 3 * necro.facing, 3, stAnim.w / 2, stAnim.h)
+                if necro.stage == 1 then
+                    Starter.drawWalk(necro.direction, necro.walkFrame, x, y, 2)
+                else
+                    local nf = getAnimFrame(0)
+                    local nQuad = necro.moving and stAnim.run[nf] or stAnim.idle[nf]
+                    love.graphics.draw(atlasImg, nQuad, x, y, 0, 3 * necro.facing, 3, stAnim.w / 2, stAnim.h)
+                end
+                draw0x72MeleeWeapon(necro.x, necro.y, 3.0, necro.swingTimer / necro.swingDuration)
             end
-            draw0x72MeleeWeapon(necro.x, necro.y, 3.0, necro.swingTimer / necro.swingDuration)
         elseif item.kind == "summon" then
             local s = item.ref
             local anim = quads.anims[s.meta.animKey]

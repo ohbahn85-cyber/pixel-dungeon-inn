@@ -90,7 +90,7 @@ const html = `<!doctype html>
 
     <div class="guide">
       <strong>Character</strong>에서 방향 카드를 눌러 외형을 확인하세요.
-      <strong>Dungeon</strong>에서는 WASD 또는 방향키로 걷고, Esc로 돌아올 수 있어요.
+      <strong>Dungeon</strong>에서는 WASD 또는 방향키로 걷고, 좌클릭이나 J로 몽둥이를 휘둘러요. Esc로 돌아올 수 있어요.
       기존 전투 던전은 <strong>Camp</strong>에서 입장할 수 있어요.
     </div>
 

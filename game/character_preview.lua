@@ -21,6 +21,7 @@ local views = {
     { id = "left", label = "Left", x = 598, y = 301 },
     { id = "right", label = "Right", x = 767, y = 301 },
 }
+local directionAngles = { down = math.pi / 2, up = -math.pi / 2, left = math.pi, right = 0 }
 local directionLabels = { down = "Down", up = "Up", left = "Left", right = "Right" }
 
 local color = {
@@ -144,12 +145,19 @@ end
 
 local function changeScreen(nextScreen)
     screen = nextScreen
-    walker.frame, walker.distance = 0, 0
+    walker.frame, walker.distance, walker.attackElapsed = 0, 0, nil
     preferredDirection = walker.direction
 end
 
 function Preview.open()
     changeScreen("character")
+end
+
+local function startAttack(direction)
+    if walker.attackElapsed then return end
+    walker.attackElapsed = 0
+    walker.direction, preferredDirection = direction, direction
+    walker.frame, walker.distance = 0, 0
 end
 
 function Preview.keypressed(key)
@@ -159,6 +167,9 @@ function Preview.keypressed(key)
         if key == "return" then changeScreen("dungeon") end
     elseif key == "escape" then
         changeScreen("character")
+    elseif key == "j" then
+        local dx, dy = Starter.movementInput()
+        startAttack(Starter.facing(dx, dy, preferredDirection))
     elseif direction then
         preferredDirection = direction
     end
@@ -176,11 +187,20 @@ function Preview.mousepressed(x, y)
         for _, view in ipairs(views) do
             if inside(x, y, view.x, view.y, 155, 157) then portraitDirection = view.id end
         end
+    elseif inside(x, y, 0, 65, width, 446) then
+        startAttack(Starter.attackFacing(x / 2 - walker.x, y / 2 - (walker.y - 18), walker.direction))
     end
 end
 
 function Preview.update(dt)
     if screen ~= "dungeon" then return end
+
+    if walker.attackElapsed then
+        walker.attackElapsed = walker.attackElapsed + dt
+        if walker.attackElapsed < Starter.attackDuration then return end
+        dt = walker.attackElapsed - Starter.attackDuration
+        walker.attackElapsed = nil
+    end
 
     local dx, dy = Starter.movementInput()
     walker.direction = Starter.facing(dx, dy, preferredDirection)
@@ -239,6 +259,23 @@ local function drawCharacter()
     text("WASD / Arrows   Rotate", smallFont, color.muted, 598, 477)
 end
 
+local function drawAttackTrail(x, y, direction, elapsed)
+    local progress = (elapsed - Starter.attackWindup) / 0.115
+    if progress < 0 or progress >= 1 then return end
+    local angle = directionAngles[direction]
+    local tip = angle - 0.15 + progress * 1.05
+    lg.push()
+    lg.translate(x, y - 18)
+    lg.scale(1, 0.72)
+    lg.setLineWidth(3)
+    lg.setColor(0.87, 0.78, 0.65, (1 - progress) * 0.66)
+    lg.arc("line", "open", 0, 0, 31, angle - 0.85, tip, 16)
+    lg.setLineWidth(1)
+    lg.setColor(1, 0.93, 0.79, (1 - progress) * 0.83)
+    lg.arc("line", "open", 0, 0, 32, angle - 0.75, tip, 16)
+    lg.pop()
+end
+
 local function drawDungeon(time)
     lg.setColor(1, 1, 1, 1)
     lg.draw(room, 0, 0, 0, 2, 2)
@@ -254,13 +291,20 @@ local function drawDungeon(time)
     local x, y = math.floor(walker.x + 0.5), math.floor(walker.y + 0.5)
     lg.setColor(0.074, 0.065, 0.083, 0.60)
     lg.ellipse("fill", x, y + 1, 13, 4)
-    lg.setColor(1, 1, 1, 1)
-    Starter.drawWalk(walker.direction, walker.frame, x, y, 1)
+    if walker.attackElapsed then
+        drawAttackTrail(x, y, walker.direction, walker.attackElapsed)
+        lg.setColor(1, 1, 1, 1)
+        Starter.drawAttack(walker.direction, walker.attackElapsed, x, y, 1)
+    else
+        lg.setColor(1, 1, 1, 1)
+        Starter.drawWalk(walker.direction, walker.frame, x, y, 1)
+    end
     lg.pop()
 
     filled(color.background, 0, 511, width, 29)
     text("WASD / Arrows   Walk", smallFont, color.text, 30, 518)
-    text("Esc   Character", smallFont, color.muted, 216, 518)
+    text("Click / J   Swing", smallFont, color.text, 218, 518)
+    text("Esc   Character", smallFont, color.muted, 378, 518)
     text("Facing: " .. directionLabels[walker.direction], smallFont, color.accent, 819, 518)
 end
 
