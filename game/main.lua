@@ -2,6 +2,7 @@
 -- Love2D + Lua
 
 local Starter = require("starter_character")
+local Targeting = require("combat_targeting")
 local CharacterPreview = require("character_preview")
 
 local atlasImg
@@ -20,12 +21,8 @@ local res = {
     iron = 6,
 }
 
--- 포션 인벤토리 (전투 중 [1], [2], [3] 키로 즉시 사용)
-local potions = {
-    heal = 2,   -- [1] Red Flask: 군단 전체 45% 회복
-    frenzy = 1, -- [2] Green Flask: 10초간 군단 공격/이동속도 +65%
-    soul = 1,   -- [3] Yellow Flask: 전리품 2배 자석
-}
+-- Camp flasks are consumed automatically during combat.
+local potions = { heal = 2, frenzy = 1, soul = 1 }
 
 -- 0x72 에셋 기반 네크로맨서 근접 무기 5단계 (네크로맨서는 근접 무기만 가능!)
 local WEAPONS = {
@@ -53,15 +50,13 @@ local necro = {
     swingTimer = 0,
     swingDuration = 0.20,
     swingAngle = 0,
+    swingDirection = "down",
+    swingFacing = 1,
     swingPending = false,
     swingCooldown = 0,
-    dashTimer = 0,
-    dashCooldown = 0,
-    dashDx = 0, dashDy = 0,
     invulnTimer = 0,
     frenzyTimer = 0,
     soulBoostTimer = 0,
-    afterimages = {},
 }
 
 -- 0x72 에셋 기반 12종 소환수 상향 트리 (4계보 x 3단계)
@@ -481,7 +476,7 @@ local function brewPotion(pType)
     end
     res.herbs = res.herbs - 2
     potions[pType] = potions[pType] + 1
-    setBanner("BREWED POTION! +1 " .. string.upper(pType) .. " FLASK ready for Dungeon keys [1/2/3]!", {0.45, 1.0, 0.65})
+    setBanner("BREWED POTION! +1 " .. string.upper(pType) .. " FLASK ready for automatic use!", {0.45, 1.0, 0.65})
 end
 
 -- ==============================================================================
@@ -496,9 +491,8 @@ local function startDungeonRun()
     necro.direction, necro.walkFrame, necro.walkDistance = "down", 0, 0
     necro.moving = false
     necro.swingTimer, necro.swingCooldown, necro.swingPending = 0, 0, false
-    necro.dashTimer = 0; necro.invulnTimer = 0.6
+    necro.invulnTimer = 0.6
     necro.frenzyTimer = 0; necro.soulBoostTimer = 0
-    necro.afterimages = {}
     dungeonLootEarned = { souls = 0, bones = 0, herbs = 0, iron = 0 }
 
     activeSummons = {}
@@ -581,12 +575,12 @@ local function applyNecroMeleeSwing()
     local hitCount = 0
     for _, e in ipairs(enemies) do
         local dx = e.x - necro.x
-        local dy = (e.y - 16) - (necro.y - 20)
-        local dist = math.sqrt(dx * dx + dy * dy)
-        if dist <= wp.arcRadius + e.radius then
+        local dy = e.y - necro.y
+        local reach = wp.arcRadius + e.radius
+        if e.hp > 0 and dx * dx + dy * dy <= reach * reach then
             local angToEnemy = math.atan2(dy, dx)
             local diff = math.atan2(math.sin(angToEnemy - necro.swingAngle), math.cos(angToEnemy - necro.swingAngle))
-            if math.abs(diff) <= 1.45 then
+            if (dx == 0 and dy == 0) or math.abs(diff) <= 1.45 then
                 e.hp = e.hp - atk
                 e.hitFlash = 0.14
                 local push = e.isBoss and 6 or 18
@@ -601,26 +595,24 @@ local function applyNecroMeleeSwing()
     if hitCount > 0 then addShake(0.10, math.min(7, 2 + hitCount)) end
 end
 
-local function startNecroMeleeSwing()
-    local mx, my = love.mouse.getPosition()
-    local dx, dy = mx - necro.x, my - (necro.y - 20)
+local function startNecroMeleeSwing(target, weapon)
+    local dx, dy = target.x - necro.x, target.y - necro.y
     necro.swingAngle = math.atan2(dy, dx)
-    necro.facing = (dx >= 0) and 1 or -1
-    necro.swingCooldown = WEAPONS[necro.weaponIdx].cd
+    necro.swingDirection = Starter.attackFacing(dx, dy, "right")
+    necro.swingFacing = dx >= 0 and 1 or -1
+    necro.swingCooldown = weapon.cd
     local starterSwing = usesStarterSwing()
     necro.swingDuration = starterSwing and Starter.attackDuration or 0.20
     necro.swingTimer = necro.swingDuration
     if starterSwing then
-        necro.direction = Starter.attackFacing(dx, dy, necro.direction)
         necro.swingPending = true
     else
         applyNecroMeleeSwing()
     end
 end
 
-local function useBattlePotion(slot)
-    if mode ~= "battle" then return end
-    if slot == 1 and potions.heal > 0 then
+local function useBattlePotion(kind)
+    if kind == "heal" and potions.heal > 0 then
         potions.heal = potions.heal - 1
         necro.hp = math.min(necro.maxHp, necro.hp + math.floor(necro.maxHp * 0.45))
         for _, s in ipairs(activeSummons) do
@@ -628,12 +620,12 @@ local function useBattlePotion(slot)
         end
         spawnPop(necro.x, necro.y - 45, "+45% ARMY HEAL!", {0.35, 1.0, 0.55})
         spawnParticles(necro.x, necro.y - 20, {0.35, 1.0, 0.55}, 22, 130)
-    elseif slot == 2 and potions.frenzy > 0 then
+    elseif kind == "frenzy" and potions.frenzy > 0 then
         potions.frenzy = potions.frenzy - 1
         necro.frenzyTimer = 10.0
         spawnPop(necro.x, necro.y - 45, "FRENZY (+65% SPD)!", {1.0, 0.45, 0.35})
         spawnParticles(necro.x, necro.y - 20, {1.0, 0.45, 0.35}, 22, 140)
-    elseif slot == 3 and potions.soul > 0 then
+    elseif kind == "soul" and potions.soul > 0 then
         potions.soul = potions.soul - 1
         necro.soulBoostTimer = 8.0
         spawnPop(necro.x, necro.y - 45, "2X LOOT MAGNET!", {1.0, 0.85, 0.25})
@@ -643,7 +635,6 @@ end
 local function updateBattle(dt)
     necro.swingTimer = math.max(0, necro.swingTimer - dt)
     necro.swingCooldown = math.max(0, necro.swingCooldown - dt)
-    necro.dashCooldown = math.max(0, necro.dashCooldown - dt)
     necro.invulnTimer = math.max(0, necro.invulnTimer - dt)
     necro.frenzyTimer = math.max(0, necro.frenzyTimer - dt)
     necro.soulBoostTimer = math.max(0, necro.soulBoostTimer - dt)
@@ -652,42 +643,34 @@ local function updateBattle(dt)
     necro.moving = dx ~= 0 or dy ~= 0
     if dx ~= 0 then necro.facing = dx > 0 and 1 or -1 end
     local oldX, oldY = necro.x, necro.y
-    local dashing = necro.dashTimer > 0
-
-    if dashing then
-        necro.dashTimer = necro.dashTimer - dt
-        necro.direction = Starter.facing(necro.dashDx, necro.dashDy, necro.direction)
-        necro.x = necro.x + necro.dashDx * 540 * dt
-        necro.y = necro.y + necro.dashDy * 540 * dt
-        table.insert(necro.afterimages, { x = necro.x, y = necro.y, direction = necro.direction, life = 0.20 })
-    elseif not usesStarterSwing() or necro.swingTimer <= 0 then
-        necro.direction = Starter.facing(dx, dy, necro.direction)
-        necro.x = necro.x + dx * 190 * dt
-        necro.y = necro.y + dy * 190 * dt
-    end
-
-    necro.x = math.max(54, math.min(906, necro.x))
-    necro.y = math.max(84, math.min(495, necro.y))
+    necro.direction = Starter.facing(dx, dy, necro.direction)
+    necro.x = math.max(54, math.min(906, necro.x + dx * 190 * dt))
+    necro.y = math.max(84, math.min(495, necro.y + dy * 190 * dt))
     local movedX, movedY = necro.x - oldX, necro.y - oldY
     local distance = math.sqrt(movedX * movedX + movedY * movedY)
-    if distance > 0 and not dashing then
+    if distance > 0 then
         necro.walkDistance = necro.walkDistance + distance / 2
         necro.walkFrame = Starter.walkFrame(necro.walkDistance)
     else
         necro.walkDistance, necro.walkFrame = 0, 0
     end
 
-    for i = #necro.afterimages, 1, -1 do
-        necro.afterimages[i].life = necro.afterimages[i].life - dt
-        if necro.afterimages[i].life <= 0 then table.remove(necro.afterimages, i) end
+    if necro.hp <= necro.maxHp * 0.5 then useBattlePotion("heal") end
+    if #lootDrops >= 4 and #enemies > 0 and necro.soulBoostTimer <= 0 then
+        useBattlePotion("soul")
     end
 
     if necro.swingPending and necro.swingDuration - necro.swingTimer >= Starter.attackWindup then
         necro.swingPending = false
         applyNecroMeleeSwing()
     end
-    if love.mouse.isDown(1) and necro.swingCooldown <= 0 and (not dashing or not usesStarterSwing()) then
-        startNecroMeleeSwing()
+    if necro.swingCooldown <= 0 then
+        local weapon = WEAPONS[necro.weaponIdx]
+        local target = Targeting.nearest(enemies, necro.x, necro.y, weapon.arcRadius)
+        if target then
+            if #activeSummons > 0 and necro.frenzyTimer <= 0 then useBattlePotion("frenzy") end
+            startNecroMeleeSwing(target, weapon)
+        end
     end
 
     local spdMult = (necro.frenzyTimer > 0) and 1.65 or 1.0
@@ -696,11 +679,7 @@ local function updateBattle(dt)
         s.cdTimer = math.max(0, s.cdTimer - dt * spdMult)
         s.hitFlash = math.max(0, s.hitFlash - dt)
 
-        local nearest, bestDist = nil, 99999
-        for _, e in ipairs(enemies) do
-            local d = math.sqrt((e.x - s.x)^2 + (e.y - s.y)^2)
-            if d < bestDist then bestDist = d; nearest = e end
-        end
+        local nearest, bestDist = Targeting.nearest(enemies, s.x, s.y)
 
         local mvx, mvy = 0, 0
         if nearest then
@@ -761,7 +740,7 @@ local function updateBattle(dt)
         p.x = p.x + p.vx * dt; p.y = p.y + p.vy * dt; p.life = p.life - dt
         local hit = false
         for _, e in ipairs(enemies) do
-            if math.sqrt((e.x - p.x)^2 + ((e.y - 14) - p.y)^2) < e.radius + 5 then
+            if e.hp > 0 and math.sqrt((e.x - p.x)^2 + ((e.y - 14) - p.y)^2) < e.radius + 5 then
                 e.hp = e.hp - p.dmg
                 e.hitFlash = 0.10
                 spawnPop(e.x, e.y - 24, tostring(p.dmg), p.col)
@@ -903,28 +882,6 @@ function love.keypressed(key)
     elseif mode == "camp" and key == "c" then
         CharacterPreview.open()
         mode = "preview"
-    elseif mode == "battle" then
-        if key == "space" or key == "lshift" then
-            if necro.dashCooldown <= 0 then
-                local dx, dy = Starter.movementInput()
-                if dx == 0 and dy == 0 then
-                    local mx, my = love.mouse.getPosition()
-                    local ang = math.atan2(my - necro.y, mx - necro.x)
-                    dx, dy = math.cos(ang), math.sin(ang)
-                end
-                if usesStarterSwing() then
-                    necro.swingTimer, necro.swingPending = 0, false
-                end
-                necro.dashDx, necro.dashDy = dx, dy
-                necro.dashTimer = 0.14
-                necro.dashCooldown = 0.60
-                necro.invulnTimer = 0.25
-                spawnParticles(necro.x, necro.y - 16, {0.35, 1.0, 0.65}, 8, 95)
-            end
-        elseif key == "1" then useBattlePotion(1)
-        elseif key == "2" then useBattlePotion(2)
-        elseif key == "3" then useBattlePotion(3)
-        end
     elseif mode == "victory" or mode == "gameover" then
         if key == "space" or key == "return" then
             mode = "camp"
@@ -1022,8 +979,9 @@ local function draw0x72MeleeWeapon(cx, cy, scale, swingRatio)
     if not q then return end
 
     love.graphics.push()
-    love.graphics.translate(cx + 7 * scale * necro.facing, cy - 8 * scale)
-    local ang = (necro.facing == 1) and 0.45 or -0.45
+    local facing = swingRatio > 0 and necro.swingFacing or necro.facing
+    love.graphics.translate(cx + 7 * scale * facing, cy - 8 * scale)
+    local ang = facing == 1 and 0.45 or -0.45
     if swingRatio > 0 then
         ang = necro.swingAngle + math.pi * 0.5 - 1.2 + (1 - swingRatio) * 2.4
     end
@@ -1083,11 +1041,11 @@ local function drawCamp()
     -- 0x72 정품 포션 플라스크 아이콘 표시
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.draw(atlasImg, quads.flask_red, 45, 308, 0, 1.5, 1.5)
-    love.graphics.print("[1]x" .. potions.heal, 70, 314)
+    love.graphics.print("x" .. potions.heal, 70, 314)
     love.graphics.draw(atlasImg, quads.flask_green, 125, 308, 0, 1.5, 1.5)
-    love.graphics.print("[2]x" .. potions.frenzy, 150, 314)
+    love.graphics.print("x" .. potions.frenzy, 150, 314)
     love.graphics.draw(atlasImg, quads.flask_yellow, 205, 308, 0, 1.5, 1.5)
-    love.graphics.print("[3]x" .. potions.soul, 230, 314)
+    love.graphics.print("x" .. potions.soul, 230, 314)
 
     local nextWp = WEAPONS[necro.weaponIdx + 1]
     local forgeSub = nextWp and ("Need " .. nextWp.costIron .. " Iron, " .. nextWp.costBones .. " Bones") or "MAX WEAPON TIER"
@@ -1231,16 +1189,7 @@ local function drawBattle()
         love.graphics.arc("line", "open", necro.x, necro.y - 18, wp.arcRadius, necro.swingAngle - 1.25, necro.swingAngle + 1.25)
     end
 
-    -- 대시 잔상
     local stAnim = quads.necro_stages[necro.stage]
-    for _, af in ipairs(necro.afterimages) do
-        love.graphics.setColor(0.35, 1.0, 0.65, af.life * 2.2)
-        if necro.stage == 1 then
-            Starter.drawWalk(af.direction, 0, af.x, af.y, 2)
-        else
-            love.graphics.draw(atlasImg, stAnim.run[1], af.x, af.y, 0, 3 * necro.facing, 3, stAnim.w / 2, stAnim.h)
-        end
-    end
 
     -- Y좌표 깊이 정렬 후 0x72 4프레임 애니메이션 렌더링
     local drawList = { { kind = "necro", y = necro.y } }
@@ -1255,14 +1204,15 @@ local function drawBattle()
             love.graphics.setColor(1, 1, 1, 1)
             local x, y = math.floor(necro.x), math.floor(necro.y)
             if usesStarterSwing() and necro.swingTimer > 0 then
-                Starter.drawAttack(necro.direction, swingElapsed, x, y, 2)
+                Starter.drawAttack(necro.swingDirection, swingElapsed, x, y, 2)
             else
                 if necro.stage == 1 then
                     Starter.drawWalk(necro.direction, necro.walkFrame, x, y, 2)
                 else
                     local nf = getAnimFrame(0)
                     local nQuad = necro.moving and stAnim.run[nf] or stAnim.idle[nf]
-                    love.graphics.draw(atlasImg, nQuad, x, y, 0, 3 * necro.facing, 3, stAnim.w / 2, stAnim.h)
+                    local facing = necro.swingTimer > 0 and necro.swingFacing or necro.facing
+                    love.graphics.draw(atlasImg, nQuad, x, y, 0, 3 * facing, 3, stAnim.w / 2, stAnim.h)
                 end
                 draw0x72MeleeWeapon(necro.x, necro.y, 3.0, necro.swingTimer / necro.swingDuration)
             end
@@ -1312,7 +1262,8 @@ local function drawBattle()
     love.graphics.setColor(1.0, 0.85, 0.25, 1)
     love.graphics.print("STAGE " .. dungeonStage .. " | ENEMIES: " .. #enemies .. " | ARMY: " .. #activeSummons, 205, 17)
     love.graphics.setColor(0.45, 1.0, 0.72, 1)
-    love.graphics.print("[1]Heal:" .. potions.heal .. " [2]Frenzy:" .. potions.frenzy .. " [3]Loot:" .. potions.soul .. " | LMB: Melee Cleave | SPACE: Dash", 510, 17)
+    love.graphics.print("WASD / Arrows: Move    |    Auto attack    |    Auto flasks: "
+        .. potions.heal .. " / " .. potions.frenzy .. " / " .. potions.soul, 510, 17)
 end
 
 function love.draw()

@@ -1,15 +1,22 @@
 local Starter = require("starter_character")
+local Targeting = require("combat_targeting")
 local Preview = {}
 
 local lg = love.graphics
 local screen = "character"
 local portraitDirection = "down"
-local walker = { x = 240, y = 175, direction = "down", frame = 0, distance = 0 }
+local walker = { x = 240, y = 175, direction = "down", frame = 0, distance = 0, cooldown = 0 }
 local preferredDirection = "down"
 local room, headingFont, labelFont, smallFont
 
 local width, height = 960, 540
 local roomBounds = { left = 58, top = 98, right = 422, bottom = 237 }
+local attackReach, attackCooldown = 31, 0.38
+local trainingTargets = {
+    { x = 146, y = 175, radius = 9, hp = 1, flash = 0 },
+    { x = 318, y = 175, radius = 9, hp = 1, flash = 0 },
+    { x = 347, y = 199, radius = 9, hp = 1, flash = 0 },
+}
 local tabs = {
     { id = "character", label = "Character", x = 512, width = 132 },
     { id = "dungeon", label = "Dungeon", x = 654, width = 132 },
@@ -145,19 +152,14 @@ end
 
 local function changeScreen(nextScreen)
     screen = nextScreen
-    walker.frame, walker.distance, walker.attackElapsed = 0, 0, nil
+    walker.frame, walker.distance, walker.cooldown = 0, 0, 0
+    walker.attackElapsed, walker.attackTarget = nil, nil
     preferredDirection = walker.direction
+    for _, target in ipairs(trainingTargets) do target.flash = 0 end
 end
 
 function Preview.open()
     changeScreen("character")
-end
-
-local function startAttack(direction)
-    if walker.attackElapsed then return end
-    walker.attackElapsed = 0
-    walker.direction, preferredDirection = direction, direction
-    walker.frame, walker.distance = 0, 0
 end
 
 function Preview.keypressed(key)
@@ -167,9 +169,6 @@ function Preview.keypressed(key)
         if key == "return" then changeScreen("dungeon") end
     elseif key == "escape" then
         changeScreen("character")
-    elseif key == "j" then
-        local dx, dy = Starter.movementInput()
-        startAttack(Starter.facing(dx, dy, preferredDirection))
     elseif direction then
         preferredDirection = direction
     end
@@ -187,20 +186,11 @@ function Preview.mousepressed(x, y)
         for _, view in ipairs(views) do
             if inside(x, y, view.x, view.y, 155, 157) then portraitDirection = view.id end
         end
-    elseif inside(x, y, 0, 65, width, 446) then
-        startAttack(Starter.attackFacing(x / 2 - walker.x, y / 2 - (walker.y - 18), walker.direction))
     end
 end
 
 function Preview.update(dt)
     if screen ~= "dungeon" then return end
-
-    if walker.attackElapsed then
-        walker.attackElapsed = walker.attackElapsed + dt
-        if walker.attackElapsed < Starter.attackDuration then return end
-        dt = walker.attackElapsed - Starter.attackDuration
-        walker.attackElapsed = nil
-    end
 
     local dx, dy = Starter.movementInput()
     walker.direction = Starter.facing(dx, dy, preferredDirection)
@@ -216,6 +206,35 @@ function Preview.update(dt)
         walker.distance, walker.frame = 0, 0
     end
     if dx == 0 and dy == 0 then preferredDirection = walker.direction end
+
+    for _, target in ipairs(trainingTargets) do
+        target.flash = math.max(0, target.flash - dt)
+    end
+
+    if walker.attackElapsed then
+        local elapsed = walker.attackElapsed + dt
+        if walker.attackElapsed < Starter.attackWindup and elapsed >= Starter.attackWindup then
+            local target = walker.attackTarget
+            local ox, oy = target.x - walker.x, target.y - walker.y
+            local reach = attackReach + target.radius
+            if ox * ox + oy * oy <= reach * reach then target.flash = 0.14 end
+        end
+        if elapsed >= Starter.attackDuration then
+            walker.attackElapsed, walker.attackTarget = nil, nil
+        else
+            walker.attackElapsed = elapsed
+        end
+    end
+
+    walker.cooldown = math.max(0, walker.cooldown - dt)
+    if walker.cooldown == 0 then
+        local target = Targeting.nearest(trainingTargets, walker.x, walker.y, attackReach)
+        if target then
+            walker.attackTarget, walker.attackElapsed = target, 0
+            walker.attackDirection = Starter.attackFacing(target.x - walker.x, target.y - walker.y, "right")
+            walker.cooldown = attackCooldown
+        end
+    end
 end
 
 local function drawHeader()
@@ -276,6 +295,20 @@ local function drawAttackTrail(x, y, direction, elapsed)
     lg.pop()
 end
 
+local function drawTrainingTarget(target)
+    local x, y = target.x, target.y
+    local lit = target.flash > 0
+    lg.setColor(0.09, 0.07, 0.08, 0.6)
+    lg.ellipse("fill", x, y + 1, 11, 3)
+    filled({ 0.21, 0.14, 0.12 }, x - 2, y - 16, 4, 16)
+    filled({ 0.36, 0.24, 0.16 }, x - 6, y - 2, 12, 2)
+    filled({ 0.18, 0.12, 0.11 }, x - 10, y - 28, 20, 18)
+    filled(lit and { 0.92, 0.70, 0.48 } or { 0.54, 0.33, 0.20 }, x - 9, y - 27, 18, 16)
+    filled({ 0.35, 0.22, 0.16 }, x - 7, y - 25, 14, 12)
+    filled(lit and { 1.0, 0.94, 0.72 } or { 0.8, 0.45, 0.24 }, x - 5, y - 23, 10, 8)
+    filled({ 0.44, 0.26, 0.19 }, x - 3, y - 21, 6, 4)
+end
+
 local function drawDungeon(time)
     lg.setColor(1, 1, 1, 1)
     lg.draw(room, 0, 0, 0, 2, 2)
@@ -288,24 +321,33 @@ local function drawDungeon(time)
         filled({ 0.94, 0.56, 0.23 }, x - 1, 59 - flicker, 3, 7 + flicker)
         filled({ 1.0, 0.74, 0.36 }, x, 61 - flicker, 1, 5 + flicker)
     end
+    for _, target in ipairs(trainingTargets) do
+        if target.y <= walker.y then drawTrainingTarget(target) end
+    end
+
     local x, y = math.floor(walker.x + 0.5), math.floor(walker.y + 0.5)
     lg.setColor(0.074, 0.065, 0.083, 0.60)
     lg.ellipse("fill", x, y + 1, 13, 4)
     if walker.attackElapsed then
-        drawAttackTrail(x, y, walker.direction, walker.attackElapsed)
+        drawAttackTrail(x, y, walker.attackDirection, walker.attackElapsed)
         lg.setColor(1, 1, 1, 1)
-        Starter.drawAttack(walker.direction, walker.attackElapsed, x, y, 1)
+        Starter.drawAttack(walker.attackDirection, walker.attackElapsed, x, y, 1)
     else
         lg.setColor(1, 1, 1, 1)
         Starter.drawWalk(walker.direction, walker.frame, x, y, 1)
+    end
+
+    for _, target in ipairs(trainingTargets) do
+        if target.y > walker.y then drawTrainingTarget(target) end
     end
     lg.pop()
 
     filled(color.background, 0, 511, width, 29)
     text("WASD / Arrows   Walk", smallFont, color.text, 30, 518)
-    text("Click / J   Swing", smallFont, color.text, 218, 518)
+    text("Auto attack in range", smallFont, color.text, 218, 518)
     text("Esc   Character", smallFont, color.muted, 378, 518)
-    text("Facing: " .. directionLabels[walker.direction], smallFont, color.accent, 819, 518)
+    local facing = walker.attackElapsed and walker.attackDirection or walker.direction
+    text("Facing: " .. directionLabels[facing], smallFont, color.accent, 819, 518)
 end
 
 function Preview.draw(time)
