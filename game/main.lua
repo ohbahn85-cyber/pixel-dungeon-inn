@@ -4,12 +4,13 @@
 local Starter = require("starter_character")
 local Targeting = require("combat_targeting")
 local Progress = require("run_progress")
+local Waves = require("raid_waves")
 local CharacterPreview = require("character_preview")
 
 local atlasImg
 local quads = {}
 
-local mode = "preview" -- "preview" | "camp" | "battle" | "levelup" | "victory" | "gameover"
+local mode = "preview" -- "preview" | "camp" | "battle" | "levelup" | "reward" | "gameover"
 local dungeonStage = 1
 local timeAcc = 0
 local shakeTimer, shakeMag = 0, 0
@@ -100,9 +101,12 @@ local selectedUnitIdx = 1
 local fusionMateIdx = nil
 local rosterScroll = 0
 local maxEquippedRings = 10
-local upgradeCards = { x = 136, y = 222, width = 220, height = 132, gap = 14 }
+local choiceCards = { x = 136, y = 222, width = 220, height = 132, gap = 14 }
 local run = Progress.new()
 local runSynergies = {}
+local raidWave = 1
+local waveRespite = 1.05
+local nextWaveIn, ringRewards
 local xpColor = { 0.40, 0.83, 1.0 }
 local markColor = { 0.97, 0.74, 0.39 }
 local burstColor = { 0.73, 0.48, 1.0 }
@@ -521,10 +525,42 @@ end
 -- 던전 전투 루프
 -- ==============================================================================
 
+local function deployRingSummons(deployed)
+    local present = {}
+    for _, summon in ipairs(activeSummons) do present[summon.unit] = true end
+    for i, ring in ipairs(deployed) do
+        if not present[ring] then
+            local hp, atk, meta = getUnitCombatStats(ring)
+            local spacing = 45 + math.floor((i - 1) / 8) * 28
+            local angle = ((i - 1) % 8) * math.pi / 4
+            activeSummons[#activeSummons + 1] = {
+                unit = ring,
+                meta = meta,
+                x = math.max(50, math.min(910, necro.x + math.cos(angle) * spacing)),
+                y = math.max(82, math.min(495, necro.y + math.sin(angle) * spacing)),
+                hp = hp, maxHp = hp,
+                atk = atk,
+                cdTimer = math.random() * 0.4,
+                hitFlash = 0,
+                facing = 1,
+                moving = false,
+                animOffset = math.random() * 5,
+            }
+        end
+    end
+end
+
+local function beginRaidWave(wave)
+    raidWave, nextWaveIn = wave, nil
+    enemies = Waves.spawn(wave, dungeonStage)
+    projectiles, enemyProjectiles = {}, {}
+    deployRingSummons(equippedRings())
+end
+
 local function startDungeonRun()
-    local deployed = equippedRings()
     run = Progress.new()
-    runSynergies = getSynergies(deployed)
+    runSynergies = getSynergies(equippedRings())
+    ringRewards = nil
     mode = "battle"
     local maxHp = getNecroCombatStats()
     necro.maxHp = maxHp; necro.hp = maxHp
@@ -535,76 +571,25 @@ local function startDungeonRun()
     necro.invulnTimer = 0.6
     necro.frenzyTimer = 0; necro.soulBoostTimer = 0
     dungeonLootEarned = { souls = 0, bones = 0, herbs = 0, iron = 0 }
+    activeSummons, lootDrops, particles, popTexts = {}, {}, {}, {}
+    beginRaidWave(1)
+end
 
-    activeSummons = {}
-    for i, u in ipairs(deployed) do
-        local hp, atk, meta = getUnitCombatStats(u)
-        local ring = 45 + math.floor((i - 1) / 8) * 28
-        local ang = ((i - 1) % 8) * (math.pi * 2 / 8)
-        table.insert(activeSummons, {
-            unit = u,
-            meta = meta,
-            x = necro.x + math.cos(ang) * ring,
-            y = necro.y + math.sin(ang) * ring,
-            hp = hp, maxHp = hp,
-            atk = atk,
-            cdTimer = math.random() * 0.4,
-            hitFlash = 0,
-            facing = 1,
-            moving = false,
-            animOffset = math.random() * 5,
-        })
-    end
+local function openRingRewards()
+    ringRewards = dungeonStage == 1 and { 2, 5, 8 } or { 3, 6, 9 }
+    mode = "reward"
+end
 
-    enemies = {}
-    projectiles = {}
-    enemyProjectiles = {}
-    lootDrops = {}
-
-    local totalEnemies = 7 + dungeonStage * 4
-    for _ = 1, totalEnemies do
-        local side = math.random(1, 4)
-        local ex, ey
-        if side == 1 then ex, ey = 64, math.random(90, 480)
-        elseif side == 2 then ex, ey = 896, math.random(90, 480)
-        elseif side == 3 then ex, ey = math.random(80, 880), 88
-        else ex, ey = math.random(80, 880), 485 end
-
-        local isMage = (dungeonStage >= 2 and math.random() < 0.35)
-        local eHp = math.floor((55 + dungeonStage * 28) * (isMage and 0.85 or 1.0))
-        table.insert(enemies, {
-            animKey = isMage and "enemy_mage" or "enemy_knight",
-            isRanged = isMage,
-            x = ex, y = ey,
-            hp = eHp, maxHp = eHp,
-            atk = 10 + dungeonStage * 4,
-            spd = isMage and 68 or (82 + dungeonStage * 3),
-            cdTimer = 0.7 + math.random() * 0.7,
-            hitFlash = 0,
-            isBoss = false,
-            scale = 2.6,
-            radius = 16,
-            facing = 1,
-            animOffset = math.random() * 5,
-        })
-    end
-
-    local bHp = 400 + dungeonStage * 190
-    table.insert(enemies, {
-        animKey = "enemy_boss",
-        isRanged = false,
-        x = 840, y = 280,
-        hp = bHp, maxHp = bHp,
-        atk = 24 + dungeonStage * 6,
-        spd = 66,
-        cdTimer = 1.0,
-        hitFlash = 0,
-        isBoss = true,
-        scale = 3.0,
-        radius = 30,
-        facing = -1,
-        animOffset = 0,
-    })
+local function chooseRingReward(index)
+    local id = ringRewards and ringRewards[index]
+    if not id then return end
+    table.insert(legion, { id = id, enhance = 0 })
+    selectedUnitIdx = #legion
+    rosterScroll = math.max(0, math.floor((selectedUnitIdx - 1) / 4) - 2)
+    ringRewards = nil
+    dungeonStage = dungeonStage + 1
+    mode = "camp"
+    setBanner(UNIT_DB[id].name .. " ring added to inventory. Equip it for the next raid.", TIER_COLORS[UNIT_DB[id].tier])
 end
 
 local function usesStarterSwing()
@@ -959,20 +944,27 @@ local function updateBattle(dt)
         end
     end
 
+    local cleared = #enemies == 0
+    local finalWave = raidWave == #Waves
     if necro.hp <= 0 then
         mode = "gameover"
-    elseif #enemies == 0 then
-        if #lootDrops == 0 then
-            dungeonStage = dungeonStage + 1
-            mode = "victory"
-        end
-    elseif run.xp >= run.threshold then
+    elseif (not cleared or not finalWave) and run.xp >= run.threshold then
         offerRunUpgrade()
+    elseif cleared and #lootDrops == 0 then
+        if finalWave then
+            openRingRewards()
+        elseif not nextWaveIn then
+            nextWaveIn = waveRespite
+            projectiles, enemyProjectiles = {}, {}
+        else
+            nextWaveIn = nextWaveIn - dt
+            if nextWaveIn <= 0 then beginRaidWave(raidWave + 1) end
+        end
     end
 end
 
 function love.update(dt)
-    if mode == "levelup" then return end
+    if mode == "levelup" or mode == "reward" then return end
     timeAcc = timeAcc + dt
     if shakeTimer > 0 then shakeTimer = math.max(0, shakeTimer - dt) end
     if mode == "preview" then
@@ -994,15 +986,17 @@ function love.update(dt)
 end
 
 function love.keypressed(key)
-    if mode == "levelup" then
+    if mode == "levelup" or mode == "reward" then
         local index = tonumber(key)
-        if index then chooseRunUpgrade(index) end
+        if index then
+            if mode == "levelup" then chooseRunUpgrade(index) else chooseRingReward(index) end
+        end
     elseif mode == "preview" then
         CharacterPreview.keypressed(key)
     elseif mode == "camp" and key == "c" then
         CharacterPreview.open()
         mode = "preview"
-    elseif mode == "victory" or mode == "gameover" then
+    elseif mode == "gameover" then
         if key == "space" or key == "return" then
             mode = "camp"
             setBanner("Returned from Dungeon! Use your loot to Craft, Enhance, Gacha & Fuse!", {0.45, 1.0, 0.72})
@@ -1074,15 +1068,15 @@ function love.mousepressed(x, y, button)
                 end
             end
         end
-    elseif mode == "levelup" then
-        for index = 1, #run.choices do
-            local left = upgradeCards.x + (index - 1) * (upgradeCards.width + upgradeCards.gap)
-            if inRect(x, y, left, upgradeCards.y, upgradeCards.width, upgradeCards.height) then
-                chooseRunUpgrade(index)
+    elseif mode == "levelup" or mode == "reward" then
+        for index = 1, 3 do
+            local left = choiceCards.x + (index - 1) * (choiceCards.width + choiceCards.gap)
+            if inRect(x, y, left, choiceCards.y, choiceCards.width, choiceCards.height) then
+                if mode == "levelup" then chooseRunUpgrade(index) else chooseRingReward(index) end
                 return
             end
         end
-    elseif mode == "victory" or mode == "gameover" then
+    elseif mode == "gameover" then
         mode = "camp"
     end
 end
@@ -1194,7 +1188,7 @@ local function drawCamp()
     drawBtn(32, 386, 122, 46, "WEAPON +" .. (necro.weaponEnhance + 1), wpRate .. "% Chance", {0.28, 0.18, 0.16}, {1.0, 0.78, 0.25})
     drawBtn(160, 386, 122, 46, "ARMOR +" .. (necro.armorEnhance + 1), arRate .. "% Chance", {0.16, 0.24, 0.36}, {0.35, 0.80, 1.0})
 
-    drawBtn(32, 444, 250, 62, "RAID DUNGEON STAGE " .. dungeonStage, "Deploy " .. #deployed .. " ring summons", {0.12, 0.50, 0.28}, {0.35, 1.0, 0.60})
+    drawBtn(32, 444, 250, 62, "RAID DUNGEON STAGE " .. dungeonStage, "3 waves   /   " .. #deployed .. " summons", {0.12, 0.50, 0.28}, {0.35, 1.0, 0.60})
 
     -- 우측 상단: 소환 가챠 & 포션 연금
     drawBtn(306, 68, 165, 52, "RING PULL 1x", "28 Souls (Gacha)", {0.20, 0.14, 0.34}, {0.35, 0.95, 0.65})
@@ -1416,7 +1410,8 @@ local function drawBattle()
     love.graphics.print("HP " .. math.max(0, math.floor(necro.hp)) .. "/" .. necro.maxHp, 28, 17)
 
     love.graphics.setColor(1.0, 0.85, 0.25, 1)
-    love.graphics.print("STAGE " .. dungeonStage .. " | ENEMIES: " .. #enemies .. " | ARMY: " .. #activeSummons, 205, 17)
+    love.graphics.print("STAGE " .. dungeonStage .. "   WAVE " .. raidWave .. "/" .. #Waves
+        .. "   FOES " .. #enemies .. "   SUMMONS " .. #activeSummons, 205, 17)
     love.graphics.setColor(0.94, 0.94, 0.99)
     love.graphics.print("Run Lv. " .. run.level, 505, 9)
     love.graphics.print(run.xp .. " / " .. run.threshold .. " XP", 706, 9)
@@ -1429,31 +1424,60 @@ local function drawBattle()
     love.graphics.print("Auto flasks " .. potions.heal .. "/" .. potions.frenzy .. "/" .. potions.soul, 800, 28)
     love.graphics.setColor(markColor)
     love.graphics.print(synergyText(runSynergies), 505, 28)
+    if nextWaveIn then
+        love.graphics.printf("Next: " .. Waves[raidWave + 1].name, 0, 57, 960, "center")
+    else
+        love.graphics.printf(Waves[raidWave].name, 0, 57, 960, "center")
+    end
+end
+
+local function drawChoiceHeading(title, subtitle, color)
+    love.graphics.setColor(0.045, 0.040, 0.075, 0.88)
+    love.graphics.rectangle("fill", 0, 0, 960, 540)
+    love.graphics.setColor(color)
+    love.graphics.printf(title, 0, 139, 960 / 1.8, "center", 0, 1.8, 1.8)
+    love.graphics.setColor(0.91, 0.92, 0.98)
+    love.graphics.printf(subtitle, 0, 185, 960, "center")
+end
+
+local function drawChoiceCard(index, name, description, color)
+    local cards = choiceCards
+    local x = cards.x + (index - 1) * (cards.width + cards.gap)
+    local y = cards.y
+    love.graphics.setColor(0.14, 0.11, 0.21)
+    love.graphics.rectangle("fill", x, y, cards.width, cards.height, 9, 9)
+    love.graphics.setLineWidth(2)
+    love.graphics.setColor(color)
+    love.graphics.rectangle("line", x, y, cards.width, cards.height, 9, 9)
+    love.graphics.print(tostring(index), x + 15, y + 12)
+    love.graphics.printf(name, x + 17, y + 32, cards.width - 34, "center")
+    love.graphics.setColor(0.89, 0.90, 0.96)
+    love.graphics.printf(description, x + 20, y + 66, cards.width - 40, "center")
 end
 
 local function drawLevelUp()
-    love.graphics.setColor(0.045, 0.040, 0.075, 0.88)
-    love.graphics.rectangle("fill", 0, 0, 960, 540)
-    love.graphics.setColor(xpColor)
-    love.graphics.printf("RUN LEVEL " .. run.level, 0, 139, 960 / 1.8, "center", 0, 1.8, 1.8)
-    love.graphics.setColor(0.91, 0.92, 0.98)
-    love.graphics.printf("Choose a boon for this raid", 0, 185, 960, "center")
-    local cards = upgradeCards
+    drawChoiceHeading("RUN LEVEL " .. run.level, "Choose a boon for this raid", xpColor)
     for index, choice in ipairs(run.choices) do
-        local x = cards.x + (index - 1) * (cards.width + cards.gap)
-        local y = cards.y
-        love.graphics.setColor(0.14, 0.11, 0.21)
-        love.graphics.rectangle("fill", x, y, cards.width, cards.height, 9, 9)
-        love.graphics.setLineWidth(2)
-        love.graphics.setColor(choice.requires and markColor or xpColor)
-        love.graphics.rectangle("line", x, y, cards.width, cards.height, 9, 9)
-        love.graphics.print(tostring(index), x + 15, y + 12)
-        love.graphics.printf(choice.name, x + 17, y + 32, cards.width - 34, "center")
-        love.graphics.setColor(0.89, 0.90, 0.96)
-        love.graphics.printf(choice.description, x + 20, y + 66, cards.width - 40, "center")
+        drawChoiceCard(index, choice.name, choice.description, choice.requires and markColor or xpColor)
     end
     love.graphics.setColor(0.71, 0.76, 0.85)
     love.graphics.printf("Click a card or press 1, 2, or 3", 0, 382, 960, "center")
+end
+
+local function drawRingRewards()
+    drawChoiceHeading("DUNGEON CLEARED", "Choose one ring to bring back to Camp", markColor)
+    for index, id in ipairs(ringRewards) do
+        local summon = UNIT_DB[id]
+        drawChoiceCard(index, "[" .. summon.tier .. "] " .. summon.name,
+            "#" .. string.upper(summonTag(summon)) .. "\n" .. summon.atk .. " ATK   /   " .. summon.hp .. " HP",
+            TIER_COLORS[summon.tier])
+    end
+    love.graphics.setColor(0.89, 0.90, 0.96)
+    local loot = dungeonLootEarned
+    love.graphics.printf("+" .. loot.souls .. " Souls   /   +" .. loot.bones .. " Bones   /   +"
+        .. loot.herbs .. " Herbs   /   +" .. loot.iron .. " Dark Iron", 0, 374, 960, "center")
+    love.graphics.setColor(0.71, 0.76, 0.85)
+    love.graphics.printf("Click a ring or press 1, 2, or 3", 0, 407, 960, "center")
 end
 
 function love.draw()
@@ -1462,30 +1486,14 @@ function love.draw()
         return
     end
     love.graphics.push()
-    if shakeTimer > 0 and mode ~= "levelup" then
+    if shakeTimer > 0 and mode ~= "levelup" and mode ~= "reward" then
         love.graphics.translate((math.random() - 0.5) * shakeMag, (math.random() - 0.5) * shakeMag)
     end
 
     if mode == "camp" then
         drawCamp()
-    elseif mode == "battle" or mode == "levelup" then
+    elseif mode == "battle" or mode == "levelup" or mode == "reward" then
         drawBattle()
-    elseif mode == "victory" then
-        drawBattle()
-        love.graphics.setColor(0.05, 0.04, 0.10, 0.86)
-        love.graphics.rectangle("fill", 0, 0, 960, 540)
-        love.graphics.setColor(0.35, 1.0, 0.65, 1)
-        love.graphics.printf("DUNGEON STAGE " .. (dungeonStage - 1) .. " CONQUERED!", 0, 165, 960, "center")
-        love.graphics.setColor(1, 1, 1, 1)
-        love.graphics.printf(
-            "LOOT HARVESTED:\n\n+" .. dungeonLootEarned.souls .. " Souls   |   +" ..
-            dungeonLootEarned.bones .. " Bone Shards   |   +" ..
-            dungeonLootEarned.herbs .. " Blood Herbs   |   +" ..
-            dungeonLootEarned.iron .. " Dark Iron",
-            0, 215, 960, "center"
-        )
-        love.graphics.setColor(1.0, 0.85, 0.25, 1)
-        love.graphics.printf("Click or Press [SPACE] to return to Camp & Upgrade your Legion!", 0, 330, 960, "center")
     elseif mode == "gameover" then
         drawBattle()
         love.graphics.setColor(0.08, 0.02, 0.05, 0.86)
@@ -1505,6 +1513,7 @@ function love.draw()
         love.graphics.print(pt.text, pt.x - 16, pt.y)
     end
 
-    if mode == "levelup" then drawLevelUp() end
+    if mode == "levelup" then drawLevelUp()
+    elseif mode == "reward" then drawRingRewards() end
     love.graphics.pop()
 end

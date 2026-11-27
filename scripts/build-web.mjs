@@ -91,7 +91,7 @@ const html = `<!doctype html>
     <div class="guide">
       <strong>Character</strong>에서 방향 카드를 눌러 외형을 확인하세요.
       <strong>Dungeon</strong>에서는 WASD 또는 방향키로 걸으세요. 사거리 안에 표적이 들어오면 가장 가까운 쪽을 자동으로 공격해요. Esc로 돌아올 수 있어요.
-      <strong>Camp</strong>에서 반지를 최대 10개 장착하고 출전하세요. 적이 떨어뜨린 파란 경험치를 주우면 강화 3개 중 하나를 골라요.
+      <strong>Camp</strong>에서 반지를 장착하고 출전하세요. 파란 경험치를 모아 강화하고, 세 웨이브를 모두 클리어하면 반지 하나를 골라 가져와요.
     </div>
 
     <script type="text/javascript">
