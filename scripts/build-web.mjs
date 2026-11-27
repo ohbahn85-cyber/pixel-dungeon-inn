@@ -91,8 +91,8 @@ const html = `<!doctype html>
   <body>
     <header>
       <div class="title-wrap">
-        <span class="badge">STEP 1 · Love2D + Lua</span>
-        <h1>💀 네크로맨서 4단계 성장 진화 도트 디자인 (하트 팬티 → 사령군주)</h1>
+        <span class="badge">Love2D + Lua 프로토타입</span>
+        <h1>💀 네크로맨서 가챠 로그라이크 (하데스식 탑다운 액션 + 캠프 가챠 준비)</h1>
       </div>
     </header>
 
@@ -102,9 +102,9 @@ const html = `<!doctype html>
     </div>
 
     <div class="guide">
-      <strong>💡 확인 방법:</strong>
-      상단 4개의 진화 카드(<strong>1단계 하트팬티+거적대기 → 2단계 보라후드 → 3단계 대네크로맨서 → 4단계 각성 사령군주</strong>)를 클릭하거나
-      키보드 <strong>1 / 2 / 3 / 4</strong>를 눌러 하단 확대 검수대에서 자세히 확인해 보세요! (<strong>Space</strong> 또는 중앙 클릭 시 소환 마법 연출!)
+      <strong>💡 플레이 방법:</strong>
+      <strong>[1. 전투 준비 캠프]</strong> 영혼(Souls)으로 <strong>소환수 가챠(C~S급)</strong>와 <strong>장비 가챠</strong>를 뽑아 소환수에게 장착·강화하고, 네크로맨서를 레벨업해 <strong>하트팬티 → 사령군주</strong>로 진화시키세요!
+      <strong>[2. 탑다운 아레나 전투]</strong> <strong>WASD</strong> 이동 · <strong>마우스 좌클릭(홀드)</strong> 영혼탄 발사 · <strong>Space</strong> 섀도우 대시! 웨이브 클리어마다 <strong>로그라이크 축복</strong>을 선택할 수 있습니다.
     </div>
 
     <script type="text/javascript">
