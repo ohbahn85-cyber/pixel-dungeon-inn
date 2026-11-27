@@ -1,16 +1,13 @@
 {
   "name": "pixel-dungeon-inn",
   "private": true,
-  "version": "1.0.0",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview",
-    "simulate": "esbuild scripts/simulate.ts --bundle --platform=node --format=esm --outfile=scripts/.sim-bundle.mjs && node scripts/.sim-bundle.mjs && rm -f scripts/.sim-bundle.mjs"
+    "build": "node scripts/build-web.mjs",
+    "assets": "python3 scripts/generate_assets.py"
   },
   "devDependencies": {
-    "typescript": "^5.6.3",
-    "vite": "^6.0.0"
+    "love.js": "^11.3.1"
   }
 }
