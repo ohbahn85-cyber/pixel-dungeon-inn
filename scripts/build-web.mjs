@@ -102,9 +102,10 @@ const html = `<!doctype html>
     </div>
 
     <div class="guide">
-      <strong>💡 플레이 방법:</strong>
-      <strong>[1. 전투 준비 캠프]</strong> 영혼(Souls)으로 <strong>소환수 가챠(C~S급)</strong>와 <strong>장비 가챠</strong>를 뽑아 소환수에게 장착·강화하고, 네크로맨서를 레벨업해 <strong>하트팬티 → 사령군주</strong>로 진화시키세요!
-      <strong>[2. 탑다운 아레나 전투]</strong> <strong>WASD</strong> 이동 · <strong>마우스 좌클릭(홀드)</strong> 영혼탄 발사 · <strong>Space</strong> 섀도우 대시! 웨이브 클리어마다 <strong>로그라이크 축복</strong>을 선택할 수 있습니다.
+      <strong>💡 핵심 시스템:</strong>
+      <strong>1) 근접 전용 네크로맨서:</strong> 던전 전리품(암흑철·뼈조각)으로 <strong>근접 무기(뼈몽둥이→해골대검→저주할버드→사신의 대낫)</strong>를 제작하고 <strong>확률 강화(+1, +2...)</strong>하세요! 좌클릭으로 시원하게 전방 광역 베기(Cleave)를 날립니다.<br/>
+      <strong>2) 물량 제한 없는 소환수 가챠 & 상향 트리:</strong> 소환수는 많을수록 좋습니다! 각 소환수는 고유 <strong>상향 트리(TREE UP: C→B→A)</strong>와 <strong>확률 강화</strong>가 가능하며, <strong>[MUTANT FUSION(65%)]</strong>으로 같은 등급 2마리를 합치면 <strong>65% 확률로 더 높은 등급의 다른 트리(최종 S급 사신·아크리치·본드래곤)</strong>가 나오고, 실패(35%) 시 같은 등급 랜덤 소환수로 변이합니다!<br/>
+      <strong>3) 전리품 포션 연금:</strong> 던전에서 모은 피약초(Herbs)로 포션을 만들어 전투 중 <strong>[1]군단회복 / [2]광란가속 / [3]전리품2배</strong>를 발동하세요!
     </div>
 
     <script type="text/javascript">
