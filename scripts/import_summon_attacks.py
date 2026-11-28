@@ -1,4 +1,4 @@
-"""Pack swordsman and archer pose sheets, plus the separate recovery sheet."""
+"""Pack combat body poses and preserve weapon grips across sword silhouette edits."""
 
 from argparse import ArgumentParser
 from pathlib import Path
@@ -27,6 +27,7 @@ RECOVERY = (
     ((223, (337, 259), (164, 251)), (222, (335, 260), (166, 250)),
      (223, (336, 259), (169, 253)), (225, (338, 261), (170, 253))),
 )
+REVISED_GRIPS = ((466, 330), (407, 456))
 
 
 def cell(sheet, row, col, rows):
@@ -55,16 +56,35 @@ def place(atlas, sprite, frame, row, scale, root, grip, draw_hand=None):
                  zip(points, ((x, left), (y, top), (x, left), (y, top))))
 
 
-def pack(sword, archer, recovery, output):
+def fit_sword_edit(original, edited, scale, root, original_grip, edited_grip):
+    left, top, _, bottom = bounds(original)
+    grip_x = ROOT_X + round((left - root) * scale) + round((original_grip[0] - left) * scale)
+    new_left, new_top, _, new_bottom = bounds(edited)
+    new_scale = round((bottom - top) * scale) / (new_bottom - new_top)
+    grip_offset = round((edited_grip[0] - new_left) * new_scale)
+    new_root = new_left + (ROOT_X + grip_offset - grip_x) / new_scale
+    return new_scale, new_root
+
+
+def pack(sword, archer, recovery, contact, follow_through, output):
     atlas = Image.new("RGBA", (CELL_WIDTH * 5, CELL_HEIGHT * 8))
     anchors = []
+    revised_sword = {2: (contact, REVISED_GRIPS[0]), 3: (follow_through, REVISED_GRIPS[1])}
     for family, (sheet, poses) in enumerate(((sword, SWORD), (archer, ARCHER))):
         for rank in range(4):
             row = family * 4 + rank
             _, top, _, bottom = bounds(cell(sheet, rank, 0, 4))
             scale = BODY_HEIGHT / (bottom - top)
-            points = [place(atlas, cell(sheet, rank, frame, 4), frame, row, scale, *pose)
-                      for frame, pose in enumerate(poses)]
+            points = []
+            for frame, pose in enumerate(poses):
+                original = cell(sheet, rank, frame, 4)
+                if family == 0 and frame in revised_sword:
+                    strip, grip = revised_sword[frame]
+                    edited = cell(strip, 0, rank, 1)
+                    edit_scale, root = fit_sword_edit(original, edited, scale, *pose, grip)
+                    points.append(place(atlas, edited, frame, row, edit_scale, root, grip))
+                else:
+                    points.append(place(atlas, original, frame, row, scale, *pose))
             change = cell(recovery, family, rank, 2)
             _, top, _, bottom = bounds(change)
             points.append(place(atlas, change, 4, row, BODY_HEIGHT / (bottom - top + 10), *RECOVERY[family][rank]))
@@ -79,8 +99,12 @@ def pack(sword, archer, recovery, output):
 
 if __name__ == "__main__":
     cli = ArgumentParser(description=__doc__)
-    for name in ("sword", "archer", "recovery"):
+    sheets = ("sword", "archer", "recovery", "contact", "follow_through")
+    for name in sheets:
         cli.add_argument(name, type=Path)
     args = cli.parse_args()
-    inputs = [Image.open(file).convert("RGBA") for file in (args.sword, args.archer, args.recovery)]
+    inputs = []
+    for name in sheets:
+        with Image.open(getattr(args, name)) as image:
+            inputs.append(image.convert("RGBA"))
     pack(*inputs, Path(__file__).resolve().parents[1] / "game/assets")
