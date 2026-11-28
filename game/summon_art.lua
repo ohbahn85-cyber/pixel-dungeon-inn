@@ -1,5 +1,6 @@
 local Catalog = require("summon_catalog")
 local pivots = require("assets.summon_pivots")
+local CombatPose = require("summon_combat_pose")
 
 local Art = {}
 local bodies, equipment, flames, familiars
@@ -21,6 +22,7 @@ function Art.load()
     equipment = loadAtlas("summon_gear.png", 96, 96, 6)
     flames = loadAtlas("summon_grave_flame.png", 128, 112, 1)
     familiars = loadAtlas("summon_familiars.png", 128, 112, 6)
+    CombatPose.load(equipment)
 end
 
 function Art.draw(ring, x, y, height, facing, swing)

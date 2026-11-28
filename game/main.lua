@@ -8,6 +8,7 @@ local Progress = require("run_progress")
 local Waves = require("raid_waves")
 local Catalog = require("summon_catalog")
 local SummonArt = require("summon_art")
+local SummonPose = require("summon_combat_pose")
 local GraveFire = require("grave_fire")
 local Roles = require("summon_roles")
 local CharacterPreview = require("character_preview")
@@ -580,6 +581,19 @@ local function directionTo(actor, target)
     return math.atan2(target.y - actor.y, target.x - actor.x)
 end
 
+local function summonHeight(summon)
+    local heroHeight = necro.stage == 1 and raidHeroHeight or quads.necro_stages[necro.stage].h * 2.1
+    return heroHeight * summon.meta.size
+end
+
+local function summonBob(summon)
+    local family = summon.meta.family
+    if summon.meta.fire or family == "moth" or family == "wraith" or family == "raven" then
+        return 7 + math.sin(timeAcc * 5 + summon.slot.index * 1.7) * 3
+    end
+    return summon.moving and math.abs(math.sin(summon.walk)) * 1.6 or 0
+end
+
 local function hitWithSummon(summon, target, damage, tint)
     target.hp = target.hp - damage
     target.hitFlash = 0.10
@@ -588,9 +602,11 @@ local function hitWithSummon(summon, target, damage, tint)
 end
 
 local function shootArrow(summon, target, damage, volley)
-    local angle = directionTo(summon, target)
+    local x, y = SummonPose.arrowOrigin(summon.slot.ring, math.floor(summon.x),
+        math.floor(summon.y - summonBob(summon)), summonHeight(summon), summon.facing, summon.weaponAttack)
+    local angle = math.atan2(target.y - 14 - y, target.x - x)
     projectiles[#projectiles + 1] = {
-        x = summon.x, y = summon.y - 14,
+        x = x, y = y,
         vx = math.cos(angle) * 415, vy = math.sin(angle) * 415,
         dmg = damage, owner = summon, volley = volley, life = 0.90,
         col = summon.meta.rank == 4 and summon.meta.accent or (isMarked(target) and markColor or TIER_COLORS[summon.meta.tier]),
@@ -613,7 +629,7 @@ local function applySummonProjectile(arrow, enemy)
         if summon.trackingHits >= 3 then
             summon.trackingHits = 0
             if enemy.hp > 0 and summon.hp > 0 then
-                shootArrow(summon, enemy, math.floor(arrow.dmg * 1.35), false)
+                summon.followup = {target = enemy, damage = math.floor(arrow.dmg * 1.35)}
             end
         end
     end
@@ -638,7 +654,9 @@ end
 
 local function strikeWithSummon(summon, target, damage)
     local meta = summon.meta
-    summon.attackTime, summon.attackAngle = 0.23, directionTo(summon, target)
+    if not SummonPose[meta.family] then
+        summon.attackTime, summon.attackAngle = 0.23, directionTo(summon, target)
+    end
     if meta.family == "shield" then
         if meta.rank >= 2 then summon.guardTime = 0.64 end
         bashTarget(summon, target, damage)
@@ -681,6 +699,46 @@ local function strikeWithSummon(summon, target, damage)
             if second then shootArrow(summon, second, math.max(1, math.floor(damage * 0.5)), false) end
         end
     end
+end
+
+local function startSummonAttack(summon, target, damage, followup)
+    summon.weaponAttack = {
+        target = target, damage = damage, elapsed = 0, angle = directionTo(summon, target), followup = followup,
+    }
+    summon.facing = target.x >= summon.x and 1 or -1
+end
+
+local function inAttackRange(summon, target)
+    local reach = summon.meta.reach
+    if summon.meta.family == "archer" and runSynergies.markedShot and isMarked(target) then
+        reach = reach * (1 + summon.slot.stats.markedRange)
+    end
+    return target.hp > 0 and (summon.x - target.x)^2 + (summon.y - target.y)^2 <= (reach + target.radius)^2
+end
+
+local function advanceSummonAttack(summon, fallback, dt)
+    local attack = summon.weaponAttack
+    local timing = SummonPose[summon.meta.family]
+    local elapsed = attack.elapsed + dt
+    if attack.elapsed < timing.impact then
+        local target = attack.target
+        if not inAttackRange(summon, target) then target = fallback end
+        local inRange = target and inAttackRange(summon, target)
+        if inRange then
+            attack.target, attack.angle = target, directionTo(summon, target)
+            if math.abs(target.x - summon.x) > 3 then summon.facing = target.x > summon.x and 1 or -1 end
+        end
+        if elapsed >= timing.impact and inRange then
+            attack.elapsed = timing.impact
+            if attack.followup then
+                shootArrow(summon, target, attack.damage, false)
+            else
+                strikeWithSummon(summon, target, attack.damage)
+            end
+        end
+    end
+    attack.elapsed = elapsed
+    if elapsed >= timing.duration then summon.weaponAttack = nil end
 end
 
 local function damageSummon(summon, damage, enemy, fromX, fromY)
@@ -776,14 +834,28 @@ local function updateSummon(summon, dt, spdMult)
     end
 
     local mx, my = 0, 0
+    if summon.weaponAttack then
+        advanceSummonAttack(summon, target, dt * math.min(1.65, spdMult * (1 + attackHaste)))
+    end
+    if not summon.weaponAttack and summon.followup then
+        local followup = summon.followup
+        summon.followup = nil
+        if inAttackRange(summon, followup.target) then
+            startSummonAttack(summon, followup.target, followup.damage, true)
+        end
+    end
     if target then
         local angle = directionTo(summon, target)
-        summon.facing = target.x >= summon.x and 1 or -1
+        if not summon.weaponAttack then summon.facing = target.x >= summon.x and 1 or -1 end
         if distance <= reach + target.radius then
-            if summon.cdTimer <= 0 then
+            if summon.cdTimer <= 0 and not summon.weaponAttack and target.hp > 0 then
                 summon.cdTimer = meta.cd / (1 + stats.speed / 100)
                 local damage = math.floor(summon.atk * (1 + 0.20 * (run.ranks.summon or 0)))
-                strikeWithSummon(summon, target, damage)
+                if SummonPose[meta.family] then
+                    startSummonAttack(summon, target, damage)
+                else
+                    strikeWithSummon(summon, target, damage)
+                end
             end
             if (meta.family == "archer" or meta.fire or meta.family == "raven" or meta.family == "wraith") and distance < 52 then
                 mx, my = -math.cos(angle) * 65, -math.sin(angle) * 65
@@ -796,7 +868,7 @@ local function updateSummon(summon, dt, spdMult)
         local angle = math.atan2(dy, dx)
         local speed = math.max(meta.spd, math.min(220, math.sqrt(leash) * 1.8))
         mx, my = math.cos(angle) * speed, math.sin(angle) * speed
-        summon.facing = dx >= 0 and 1 or -1
+        if not summon.weaponAttack then summon.facing = dx >= 0 and 1 or -1 end
     end
 
     for _, other in ipairs(activeSummons) do
@@ -1484,7 +1556,6 @@ local function drawBattle()
     Melee.drawTrail(necro.attack, necro.x, necro.y - 16, meleeReach(wp), wp.col)
 
     local stAnim = quads.necro_stages[necro.stage]
-    local heroHeight = necro.stage == 1 and raidHeroHeight or stAnim.h * 2.1
 
     -- Y좌표 깊이 정렬 후 0x72 4프레임 애니메이션 렌더링
     local drawList = { { kind = "necro", y = necro.y } }
@@ -1511,10 +1582,7 @@ local function drawBattle()
             end
         elseif item.kind == "summon" then
             local s = item.ref
-            local bob = s.moving and math.abs(math.sin(s.walk)) * 1.6 or 0
-            if s.meta.fire or s.meta.family == "moth" or s.meta.family == "wraith" or s.meta.family == "raven" then
-                bob = 7 + math.sin(timeAcc * 5 + s.slot.index * 1.7) * 3
-            end
+            local bob = summonBob(s)
             local strike = math.sin(s.attackTime / 0.23 * math.pi)
             local x = s.x + math.cos(s.attackAngle) * strike * 5
             local y = s.y + math.sin(s.attackAngle) * strike * 5 - bob
@@ -1544,8 +1612,13 @@ local function drawBattle()
                 love.graphics.arc("line", "open", s.x, s.y - 8, 17, s.attackAngle - 0.9, s.attackAngle + 0.9)
             end
             love.graphics.setColor(1, s.hitFlash > 0 and 0.4 or 1, s.hitFlash > 0 and 0.4 or 1, 1)
-            SummonArt.draw(s.slot.ring, math.floor(x), math.floor(y), heroHeight * s.meta.size, s.facing, strike)
-            if not s.meta.fire and not s.meta.ability and s.meta.family ~= "archer" and s.attackTime > 0 then
+            local height = summonHeight(s)
+            if SummonPose[s.meta.family] then
+                SummonPose.draw(s.slot.ring, math.floor(x), math.floor(y), height, s.facing, s.weaponAttack)
+            else
+                SummonArt.draw(s.slot.ring, math.floor(x), math.floor(y), height, s.facing, strike)
+            end
+            if s.meta.family == "shield" and s.attackTime > 0 then
                 local col = s.meta.rank == 4 and s.meta.accent
                     or (s.meta.family == "shield" and markColor or TIER_COLORS[s.meta.tier])
                 love.graphics.setColor(col[1], col[2], col[3], 0.66 * s.attackTime / 0.23)
@@ -1583,8 +1656,11 @@ local function drawBattle()
     GraveFire.drawEmbers(graveFire)
     for _, p in ipairs(projectiles) do
         love.graphics.setColor(p.col[1], p.col[2], p.col[3], 1)
-        love.graphics.setLineWidth(2)
+        love.graphics.setLineWidth(1.5)
         love.graphics.line(p.x - p.vx * 0.025, p.y - p.vy * 0.025, p.x, p.y)
+        local pointX, pointY = p.x - p.vx * 0.009, p.y - p.vy * 0.009
+        love.graphics.polygon("fill", p.x, p.y, pointX - p.vy * 0.005, pointY + p.vx * 0.005,
+            pointX + p.vy * 0.005, pointY - p.vx * 0.005)
     end
     for _, ep in ipairs(enemyProjectiles) do
         love.graphics.setColor(1.0, 0.42, 0.15, 1)
