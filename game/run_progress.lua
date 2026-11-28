@@ -6,7 +6,6 @@ local upgrades = {
     { id = "speed", name = "Fleet Bones", description = "Increase base movement speed by 10%." },
     { id = "summon", name = "Legion Focus", description = "Summons deal 20% more base damage." },
     { id = "shot", name = "Silver Fletching", description = "Marked Shot bonus damage increases by 25% of base shot damage.", requires = "markedShot" },
-    { id = "burst", name = "Grave Echo", description = "Grave Burst hits a wider area for 25% more of the spell's base damage.", requires = "graveBurst" },
 }
 
 function Progress.new()
@@ -17,7 +16,7 @@ function Progress.offer(run, synergies)
     if run.choices or run.xp < run.threshold then return end
 
     run.xp = run.xp - run.threshold
-    run.threshold = run.threshold + 4
+    run.threshold = run.threshold + 6
     run.level = run.level + 1
 
     local available, comboUpgrades = {}, {}

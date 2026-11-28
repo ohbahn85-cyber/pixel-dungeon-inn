@@ -1,56 +1,70 @@
 local Waves = {
     {
         name = "Closing Ranks",
-        lineup = {
-            { "raider", 88, 238 }, { "raider", 88, 278 }, { "raider", 88, 318 },
-            { "raider", 872, 242 }, { "raider", 872, 282 }, { "raider", 872, 322 },
-        },
+        packs = { { "raider", 6 }, { "raider", 6 }, { "raider", 6 }, { "raider", 6 }, { "raider", 6 } },
     },
     {
         name = "Guard Line",
-        lineup = {
-            { "guard", 420, 148 }, { "guard", 480, 148 }, { "guard", 540, 148 },
-            { "caster", 400, 91 }, { "caster", 480, 91 }, { "caster", 560, 91 },
+        packs = {
+            { "raider", 6 }, { "guard", 4 }, { "raider", 6 }, { "caster", 6 },
+            { "raider", 6 }, { "guard", 4 }, { "caster", 8 },
         },
     },
     {
         name = "The Crypt Warden",
-        lineup = {
-            { "warden", 832, 281 },
-            { "raider", 772, 232 }, { "raider", 772, 330 },
-            { "raider", 160, 442 }, { "raider", 204, 461 },
+        packs = {
+            { "warden", 1 }, { "raider", 7 }, { "guard", 7 }, { "raider", 7 },
+            { "raider", 7 }, { "caster", 7 }, { "raider", 7 }, { "raider", 7 },
         },
     },
 }
 
+Waves.width, Waves.height = 1920, 1152
+Waves.border = 42
+
 local enemyTypes = {
-    raider = { anim = "enemy_knight", hp = 55, hpStep = 16, damage = 10, damageStep = 3, speed = 84, scale = 2.45, radius = 14 },
-    guard = { anim = "enemy_knight", hp = 112, hpStep = 25, damage = 14, damageStep = 3, speed = 58, scale = 3.05, radius = 19 },
-    caster = { anim = "enemy_mage", hp = 54, hpStep = 16, damage = 11, damageStep = 3, speed = 72, scale = 2.6, radius = 15, ranged = true },
-    warden = { anim = "enemy_boss", hp = 390, hpStep = 95, damage = 24, damageStep = 5, speed = 66, scale = 3.25, radius = 30, boss = true },
+    raider = { anim = "enemy_knight", hp = 29, hpStep = 9, damage = 7, damageStep = 2, speed = 89, scale = 1.53, radius = 10 },
+    guard = { anim = "enemy_knight", hp = 66, hpStep = 16, damage = 11, damageStep = 3, speed = 64, scale = 1.88, radius = 13 },
+    caster = { anim = "enemy_mage", hp = 36, hpStep = 11, damage = 8, damageStep = 2, speed = 75, scale = 1.57, radius = 10, ranged = true },
+    warden = { anim = "enemy_boss", hp = 410, hpStep = 92, damage = 22, damageStep = 5, speed = 74, scale = 2.21, radius = 23, boss = true },
 }
 
-function Waves.spawn(wave, stage)
+function Waves.clamp(x, y)
+    return math.max(Waves.border, math.min(Waves.width - Waves.border, x)),
+        math.max(Waves.border, math.min(Waves.height - Waves.border, y))
+end
+
+function Waves.spawn(wave, stage, x, y)
     local enemies = {}
     local stageOffset = stage - 1
-    for i, spawn in ipairs(Waves[wave].lineup) do
-        local kind = enemyTypes[spawn[1]]
-        local hp = kind.hp + stageOffset * kind.hpStep
-        enemies[i] = {
-            x = spawn[2], y = spawn[3],
-            animKey = kind.anim,
-            isRanged = kind.ranged,
-            isBoss = kind.boss,
-            hp = hp, maxHp = hp,
-            atk = kind.damage + stageOffset * kind.damageStep,
-            spd = kind.speed,
-            scale = kind.scale,
-            radius = kind.radius,
-            cdTimer = 0.65 + (i % 3) * 0.17,
-            hitFlash = 0,
-            facing = spawn[2] >= 480 and -1 or 1,
-            animOffset = i * 0.31,
-        }
+    local packs = Waves[wave].packs
+    local centerX = math.max(248, math.min(Waves.width - 248, x))
+    local centerY = math.max(240, math.min(Waves.height - 240, y))
+    for packIndex, group in ipairs(packs) do
+        local kind = enemyTypes[group[1]]
+        local heading = (packIndex - 1) * 2 * math.pi / #packs + (wave - 1) * 0.39
+        local normalX, normalY = math.cos(heading), math.sin(heading)
+        local packRadius = 300 + (packIndex % 3) * 44
+        for i = 1, group[2] do
+            local forward = packRadius + math.floor((i - 1) / 3) * 27
+            local side = ((i - 1) % 3 - 1) * 29
+            local ex, ey = Waves.clamp(centerX + normalX * forward - normalY * side,
+                centerY + normalY * forward + normalX * side)
+            local ox, oy = ex - x, ey - y
+            if ox * ox + oy * oy < 126 * 126 then
+                local inward = x < Waves.width / 2 and 164 or -164
+                ex = Waves.clamp(x + inward + side, ey)
+            end
+            local hp = kind.hp + stageOffset * kind.hpStep
+            enemies[#enemies + 1] = {
+                x = ex, y = ey,
+                animKey = kind.anim, isRanged = kind.ranged, isBoss = kind.boss,
+                hp = hp, maxHp = hp, atk = kind.damage + stageOffset * kind.damageStep,
+                spd = kind.speed, scale = kind.scale, radius = kind.radius,
+                cdTimer = 0.65 + (i % 3) * 0.17, hitFlash = 0,
+                facing = ex >= x and -1 or 1, animOffset = i * 0.31,
+            }
+        end
     end
     return enemies
 end

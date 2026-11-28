@@ -5,12 +5,14 @@ local Starter = require("starter_character")
 local Targeting = require("combat_targeting")
 local Progress = require("run_progress")
 local Waves = require("raid_waves")
+local Catalog = require("summon_catalog")
+local SummonArt = require("summon_art")
 local CharacterPreview = require("character_preview")
 
 local atlasImg
 local quads = {}
 
-local mode = "preview" -- "preview" | "camp" | "battle" | "levelup" | "reward" | "gameover"
+local mode = "camp" -- "preview" | "camp" | "battle" | "levelup" | "reward" | "gameover"
 local dungeonStage = 1
 local timeAcc = 0
 local shakeTimer, shakeMag = 0, 0
@@ -28,11 +30,11 @@ local potions = { heal = 2, frenzy = 1, soul = 1 }
 
 -- 0x72 에셋 기반 네크로맨서 근접 무기 5단계 (네크로맨서는 근접 무기만 가능!)
 local WEAPONS = {
-    { id = 1, name = "Spiked Club",     quadKey = "wp_club",    w = 10, h = 24, baseAtk = 18, arcRadius = 62,  cd = 0.38, costIron = 0,  costBones = 0,  col = {0.90, 0.85, 0.72} },
-    { id = 2, name = "Butcher Cleaver", quadKey = "wp_cleaver", w = 8,  h = 19, baseAtk = 32, arcRadius = 74,  cd = 0.35, costIron = 4,  costBones = 4,  col = {0.82, 0.90, 1.00} },
-    { id = 3, name = "Sawtooth Blade",  quadKey = "wp_saw",     w = 10, h = 25, baseAtk = 52, arcRadius = 88,  cd = 0.33, costIron = 7,  costBones = 7,  col = {0.75, 0.50, 1.00} },
-    { id = 4, name = "Executioner Axe", quadKey = "wp_waraxe",  w = 12, h = 23, baseAtk = 78, arcRadius = 102, cd = 0.31, costIron = 11, costBones = 11, col = {1.00, 0.45, 0.45} },
-    { id = 5, name = "Golden Greatsword",quadKey= "wp_gold",    w = 10, h = 30, baseAtk = 115,arcRadius = 118, cd = 0.28, costIron = 16, costBones = 16, col = {1.00, 0.86, 0.25} },
+    { name = "Spiked Club", quadKey = "wp_club", baseAtk = 18, arcRadius = 62, cd = 0.38, costIron = 0, costBones = 0, col = {0.90, 0.85, 0.72} },
+    { name = "Butcher Cleaver", quadKey = "wp_cleaver", baseAtk = 32, arcRadius = 74, cd = 0.35, costIron = 4, costBones = 4, col = {0.82, 0.90, 1.00} },
+    { name = "Sawtooth Blade", quadKey = "wp_saw", baseAtk = 52, arcRadius = 88, cd = 0.33, costIron = 7, costBones = 7, col = {0.75, 0.50, 1.00} },
+    { name = "Executioner Axe", quadKey = "wp_waraxe", baseAtk = 78, arcRadius = 102, cd = 0.31, costIron = 11, costBones = 11, col = {1.00, 0.45, 0.45} },
+    { name = "Golden Greatsword", quadKey = "wp_gold", baseAtk = 115, arcRadius = 118, cd = 0.28, costIron = 16, costBones = 16, col = {1.00, 0.86, 0.25} },
 }
 
 -- 주인공 네크로맨서 상태 (4단계 외형 진화: 0x72 에셋 내 거지 소년 -> 마도사 -> 붉은 후드 네크로맨서 -> 데몬 로드)
@@ -61,28 +63,7 @@ local necro = {
     soulBoostTimer = 0,
 }
 
--- 0x72 에셋 기반 12종 소환수 상향 트리 (4계보 x 3단계)
-local UNIT_DB = {
-    -- 1. 해골 전사 트리 (C -> B -> A)
-    [1]  = { id = 1,  name = "Tiny Skeleton",   animKey = "tiny_zombie", tree = "warrior", tier = "C", nextId = 2,   role = "melee",  hp = 75,  atk = 12, spd = 130, range = 26,  cd = 0.78, scale = 2.6, oy = 16 },
-    [2]  = { id = 2,  name = "Bone Warrior",    animKey = "skelet",      tree = "warrior", tier = "B", nextId = 3,   role = "melee",  hp = 160, atk = 25, spd = 138, range = 30,  cd = 0.72, scale = 2.8, oy = 16 },
-    [3]  = { id = 3,  name = "Masked Boneknight",animKey= "masked_orc",  tree = "warrior", tier = "A", nextId = nil, role = "melee",  hp = 320, atk = 48, spd = 145, range = 34,  cd = 0.68, scale = 2.8, oy = 23 },
-
-    -- 2. 언데드 원거리/암살 트리 (C -> B -> A)
-    [4]  = { id = 4,  name = "Ghoul Slinger",   animKey = "goblin",      tree = "archer",  tier = "C", nextId = 5,   role = "ranged", hp = 58,  atk = 14, spd = 120, range = 195, cd = 0.92, scale = 2.6, oy = 16 },
-    [5]  = { id = 5,  name = "Frost Zombie",    animKey = "ice_zombie",  tree = "archer",  tier = "B", nextId = 6,   role = "ranged", hp = 120, atk = 29, spd = 125, range = 225, cd = 0.84, scale = 2.8, oy = 16 },
-    [6]  = { id = 6,  name = "Plague Doctor",   animKey = "doc",         tree = "archer",  tier = "A", nextId = nil, role = "ranged", hp = 225, atk = 56, spd = 135, range = 265, cd = 0.74, scale = 2.8, oy = 23 },
-
-    -- 3. 저주 마법/주술 트리 (C -> B -> A)
-    [7]  = { id = 7,  name = "Swamp Ectoplasm", animKey = "swampy",      tree = "mage",    tier = "C", nextId = 8,   role = "ranged", hp = 55,  atk = 16, spd = 125, range = 180, cd = 0.88, scale = 2.6, oy = 16 },
-    [8]  = { id = 8,  name = "Bone Shaman",     animKey = "orc_shaman",  tree = "mage",    tier = "B", nextId = 9,   role = "ranged", hp = 115, atk = 33, spd = 125, range = 215, cd = 0.82, scale = 2.8, oy = 23 },
-    [9]  = { id = 9,  name = "Crimson Lich",    animKey = "necro",       tree = "mage",    tier = "A", nextId = nil, role = "ranged", hp = 230, atk = 62, spd = 130, range = 250, cd = 0.75, scale = 2.8, oy = 23 },
-
-    -- 4. S급 초월 돌연변이 트리 (합성 대성공 또는 5% 극악 가챠!)
-    [10] = { id = 10, name = "Abomination Tank",animKey = "big_zombie",  tree = "mutant",  tier = "S", nextId = nil, role = "melee",  hp = 680, atk = 96, spd = 145, range = 44,  cd = 0.58, scale = 2.5, oy = 36 },
-    [11] = { id = 11, name = "Pumpkin Reaper",  animKey = "pumpkin",     tree = "mutant",  tier = "S", nextId = nil, role = "ranged", hp = 440, atk = 115,spd = 145, range = 280, cd = 0.62, scale = 3.0, oy = 23 },
-    [12] = { id = 12, name = "Abyss Demon Lord",animKey = "big_demon",   tree = "mutant",  tier = "S", nextId = nil, role = "melee",  hp = 580, atk = 112,spd = 160, range = 46,  cd = 0.55, scale = 2.5, oy = 36 },
-}
+local UNIT_DB = Catalog
 
 local TIER_COLORS = {
     C = {0.74, 0.80, 0.88},
@@ -90,11 +71,6 @@ local TIER_COLORS = {
     A = {0.82, 0.45, 1.00},
     S = {1.00, 0.84, 0.20},
 }
-
-local function summonTag(meta)
-    if meta.role == "melee" then return "melee" end
-    return meta.tree == "mage" and "magic" or "ranged"
-end
 
 local legion = {}
 local selectedUnitIdx = 1
@@ -109,12 +85,13 @@ local waveRespite = 1.05
 local nextWaveIn, ringRewards
 local xpColor = { 0.40, 0.83, 1.0 }
 local markColor = { 0.97, 0.74, 0.39 }
-local burstColor = { 0.73, 0.48, 1.0 }
 
-local bannerMsg = "0x72 Official Pixel Art Loaded! Pull Summons, Upgrade Trees, Fuse Mutants & Raid Dungeon!"
+local bannerMsg = "Three starter rings are equipped. Enter the dungeon when ready."
 local bannerCol = {0.55, 1.0, 0.72}
 
-local activeSummons = {}
+local activeSummons, raidRings = {}, {}
+local raidHeroScale = 1.34
+local raidHeroHeight = 128 * 0.4 * raidHeroScale
 local enemies = {}
 local projectiles = {}
 local enemyProjectiles = {}
@@ -138,6 +115,7 @@ function love.load()
     love.graphics.setBackgroundColor(0.08, 0.07, 0.11)
 
     Starter.load()
+    SummonArt.load()
     CharacterPreview.load()
 
     atlasImg = love.graphics.newImage("assets/0x72_dungeon.png")
@@ -179,31 +157,17 @@ function love.load()
         { idle = makeAnimQuads(368, 273, 16, 23, 4), run = makeAnimQuads(432, 273, 16, 23, 4), w = 16, h = 23 },
     }
 
-    -- 12종 소환수 & 적군 4프레임 애니메이션 등록
     quads.anims = {
-        tiny_zombie = { idle = makeAnimQuads(368, 16, 16, 16, 4),  run = makeAnimQuads(432, 16, 16, 16, 4),  w = 16, h = 16 },
-        skelet      = { idle = makeAnimQuads(368, 88, 16, 16, 4),  run = makeAnimQuads(432, 88, 16, 16, 4),  w = 16, h = 16 },
-        masked_orc  = { idle = makeAnimQuads(368, 153, 16, 23, 4), run = makeAnimQuads(432, 153, 16, 23, 4), w = 16, h = 23 },
-        goblin      = { idle = makeAnimQuads(368, 40, 16, 16, 4),  run = makeAnimQuads(432, 40, 16, 16, 4),  w = 16, h = 16 },
-        ice_zombie  = { idle = makeAnimQuads(432, 136, 16, 16, 4), run = makeAnimQuads(432, 136, 16, 16, 4), w = 16, h = 16 },
-        doc         = { idle = makeAnimQuads(368, 345, 16, 23, 4), run = makeAnimQuads(432, 345, 16, 23, 4), w = 16, h = 23 },
-        swampy      = { idle = makeAnimQuads(432, 112, 16, 16, 4), run = makeAnimQuads(432, 112, 16, 16, 4), w = 16, h = 16 },
-        orc_shaman  = { idle = makeAnimQuads(368, 201, 16, 23, 4), run = makeAnimQuads(432, 201, 16, 23, 4), w = 16, h = 23 },
-        necro       = { idle = makeAnimQuads(368, 225, 16, 23, 4), run = makeAnimQuads(368, 225, 16, 23, 4), w = 16, h = 23 },
-        big_zombie  = { idle = makeAnimQuads(16, 332, 32, 36, 4),  run = makeAnimQuads(144, 332, 32, 36, 4), w = 32, h = 36 },
-        pumpkin     = { idle = makeAnimQuads(368, 321, 16, 23, 4), run = makeAnimQuads(432, 321, 16, 23, 4), w = 16, h = 23 },
-        big_demon   = { idle = makeAnimQuads(16, 428, 32, 36, 4),  run = makeAnimQuads(144, 428, 32, 36, 4), w = 32, h = 36 },
-
-        -- 적군 (성기사 보병 / 엘프 마법사 / 거대 오우거 보스)
         enemy_knight = { idle = makeAnimQuads(128, 100, 16, 28, 4), run = makeAnimQuads(192, 100, 16, 28, 4), w = 16, h = 28 },
         enemy_mage   = { idle = makeAnimQuads(128, 132, 16, 28, 4), run = makeAnimQuads(192, 132, 16, 28, 4), w = 16, h = 28 },
         enemy_boss   = { idle = makeAnimQuads(16, 380, 32, 36, 4),  run = makeAnimQuads(144, 380, 32, 36, 4), w = 32, h = 36 },
     }
 
-    -- 시작 군단 3기 지급
-    table.insert(legion, { id = 1, enhance = 0, equipped = true })
-    table.insert(legion, { id = 4, enhance = 0, equipped = true })
-    table.insert(legion, { id = 7, enhance = 0, equipped = true })
+    for _, id in ipairs(Catalog.options(1)) do
+        local ring = Catalog.ring(id)
+        ring.equipped = true
+        legion[#legion + 1] = ring
+    end
 end
 
 local function addShake(dur, mag)
@@ -278,14 +242,13 @@ local function equippedRings()
 end
 
 local function getSynergies(equipped)
-    local melee, archer, mage = false, false, false
+    local shield, archer = false, false
     for _, ring in ipairs(equipped) do
-        local tag = summonTag(UNIT_DB[ring.id])
-        melee = melee or tag == "melee"
-        archer = archer or tag == "ranged"
-        mage = mage or tag == "magic"
+        local family = UNIT_DB[ring.id].family
+        shield = shield or family == "shield"
+        archer = archer or family == "archer"
     end
-    return { markedShot = melee and archer, graveBurst = melee and mage }
+    return { markedShot = shield and archer }
 end
 
 local function toggleSelectedRing()
@@ -307,35 +270,21 @@ local function rollSummonGacha(count)
         return
     end
     res.souls = res.souls - cost
-    local pulledNames = {}
-    local bestTier = "C"
-
+    local bestRank = 1
     for _ = 1, count do
-        local r = math.random()
-        local uid
-        if r < 0.05 then
-            local sPool = {10, 11, 12}
-            uid = sPool[math.random(1, #sPool)]
-            bestTier = "S"
-        elseif r < 0.18 then
-            local aPool = {3, 6, 9}
-            uid = aPool[math.random(1, #aPool)]
-            if bestTier ~= "S" then bestTier = "A" end
-        elseif r < 0.48 then
-            local bPool = {2, 5, 8}
-            uid = bPool[math.random(1, #bPool)]
-            if bestTier == "C" then bestTier = "B" end
-        else
-            local cPool = {1, 4, 7}
-            uid = cPool[math.random(1, #cPool)]
-        end
-        table.insert(legion, { id = uid, enhance = 0 })
-        table.insert(pulledNames, "[" .. UNIT_DB[uid].tier .. "]" .. UNIT_DB[uid].name)
+        local roll = math.random()
+        local rank = roll < 0.05 and 4 or roll < 0.18 and 3 or roll < 0.48 and 2 or 1
+        local options = Catalog.options(rank)
+        local id = options[math.random(#options)]
+        legion[#legion + 1] = Catalog.ring(id, math.random(2))
+        bestRank = math.max(bestRank, rank)
     end
+    local bestTier = UNIT_DB[bestRank].tier
 
     selectedUnitIdx = #legion
+    rosterScroll = math.max(0, math.floor((selectedUnitIdx - 1) / 4) - 2)
     fusionMateIdx = nil
-    setBanner("GACHA (" .. count .. "x): " .. table.concat(pulledNames, ", ") .. " (Select a ring to equip)", TIER_COLORS[bestTier])
+    setBanner("Pulled " .. count .. " ring(s). Best rank " .. bestTier .. ". Select a ring to equip.", TIER_COLORS[bestTier])
     addShake(bestTier == "S" and 0.35 or 0.12, bestTier == "S" and 8 or 3)
     spawnParticles(160, 250, TIER_COLORS[bestTier], count * 8, 140)
 end
@@ -345,11 +294,11 @@ local function promoteUnitTree()
     if not u then return end
     local meta = UNIT_DB[u.id]
     if not meta.nextId then
-        setBanner(meta.name .. " reached max Tree! Use MUTANT FUSION (65%) to reach S-Tier!", {1, 0.82, 0.25})
+        setBanner(meta.name .. " is already rank S.", {1, 0.82, 0.25})
         return
     end
-    local soulCost = (meta.tier == "C") and 35 or 75
-    local boneCost = (meta.tier == "C") and 3 or 6
+    local soulCost = ({35, 75, 160})[meta.rank]
+    local boneCost = meta.rank * 3
     if res.souls < soulCost or res.bones < boneCost then
         setBanner("Tree Upgrade needs " .. soulCost .. " Souls & " .. boneCost .. " Bone Shards!", {1, 0.4, 0.4})
         return
@@ -385,62 +334,26 @@ local function enhanceSelectedSummon()
     end
 end
 
-local function executeMutantFusion(idx1, idx2)
+local function fuseRings(idx1, idx2)
     if idx1 == idx2 then return end
-    local u1, u2 = legion[idx1], legion[idx2]
-    if not u1 or not u2 then return end
-    local m1, m2 = UNIT_DB[u1.id], UNIT_DB[u2.id]
-    if m1.tier ~= m2.tier then
-        setBanner("FUSION ERROR: Select two summons of the SAME Tier ([" .. m1.tier .. "] + [" .. m1.tier .. "])!", {1, 0.45, 0.45})
+    local first, second = legion[idx1], legion[idx2]
+    if not first or not second then return end
+    local meta = UNIT_DB[first.id]
+    if first.id ~= second.id or not meta.nextId then
         fusionMateIdx = nil
-        return
-    end
-    if m1.tier == "S" then
-        setBanner("S-Tier Mutants are already the ultimate evolution!", {1, 0.85, 0.25})
-        fusionMateIdx = nil
+        setBanner("Fusion needs two rings of the same summon and rank C, B, or A.", {1, 0.66, 0.42})
         return
     end
 
-    local keptEnhance = math.max(u1.enhance, u2.enhance)
-    local keepEquipped = u1.equipped or u2.equipped
-    table.remove(legion, math.max(idx1, idx2))
-    table.remove(legion, math.min(idx1, idx2))
-
-    local roll = math.random(1, 100)
-    local resultId
-    if roll <= 65 then
-        local nextTier = (m1.tier == "C") and "B" or (m1.tier == "B" and "A" or "S")
-        local candidates = {}
-        for id, info in ipairs(UNIT_DB) do
-            if info.tier == nextTier and info.tree ~= m1.tree then
-                table.insert(candidates, id)
-            end
-        end
-        if #candidates == 0 then
-            for id, info in ipairs(UNIT_DB) do
-                if info.tier == nextTier then table.insert(candidates, id) end
-            end
-        end
-        resultId = candidates[math.random(1, #candidates)]
-        local resMeta = UNIT_DB[resultId]
-        table.insert(legion, { id = resultId, enhance = keptEnhance, equipped = keepEquipped })
-        selectedUnitIdx = #legion
-        setBanner("MUTANT FUSION SUCCESS (65%)! Cross-Tree Evolved into [" .. resMeta.tier .. "] " .. resMeta.name .. "!", TIER_COLORS[resMeta.tier])
-        addShake(0.35, 8)
-        spawnParticles(520, 240, TIER_COLORS[resMeta.tier], 32, 160)
-    else
-        local samePool = {}
-        for id, info in ipairs(UNIT_DB) do
-            if info.tier == m1.tier then table.insert(samePool, id) end
-        end
-        resultId = samePool[math.random(1, #samePool)]
-        local resMeta = UNIT_DB[resultId]
-        table.insert(legion, { id = resultId, enhance = keptEnhance, equipped = keepEquipped })
-        selectedUnitIdx = #legion
-        setBanner("FUSION FAILED (35%)... Mutated into random same-tier [" .. resMeta.tier .. "] " .. resMeta.name .. "!", {1.0, 0.65, 0.30})
-        addShake(0.18, 4)
-    end
+    first.id = meta.nextId
+    first.enhance = math.max(first.enhance, second.enhance)
+    first.equipped = first.equipped or second.equipped
+    table.remove(legion, idx2)
+    selectedUnitIdx = idx1 - (idx2 < idx1 and 1 or 0)
+    rosterScroll = math.max(0, math.floor((selectedUnitIdx - 1) / 4) - 2)
     fusionMateIdx = nil
+    setBanner("Ring fused into " .. UNIT_DB[first.id].name .. ".", TIER_COLORS[UNIT_DB[first.id].tier])
+    spawnParticles(520, 240, TIER_COLORS[UNIT_DB[first.id].tier], 18, 125)
 end
 
 local function craftNextMeleeWeapon()
@@ -525,71 +438,84 @@ end
 -- 던전 전투 루프
 -- ==============================================================================
 
-local function deployRingSummons(deployed)
-    local present = {}
-    for _, summon in ipairs(activeSummons) do present[summon.unit] = true end
-    for i, ring in ipairs(deployed) do
-        if not present[ring] then
-            local hp, atk, meta = getUnitCombatStats(ring)
-            local spacing = 45 + math.floor((i - 1) / 8) * 28
-            local angle = ((i - 1) % 8) * math.pi / 4
-            activeSummons[#activeSummons + 1] = {
-                unit = ring,
-                meta = meta,
-                x = math.max(50, math.min(910, necro.x + math.cos(angle) * spacing)),
-                y = math.max(82, math.min(495, necro.y + math.sin(angle) * spacing)),
-                hp = hp, maxHp = hp,
-                atk = atk,
-                cdTimer = math.random() * 0.4,
-                hitFlash = 0,
-                facing = 1,
-                moving = false,
-                animOffset = math.random() * 5,
-            }
+local function summonFromRing(slot)
+    local ring = slot.ring
+    local hp, atk, meta = getUnitCombatStats(ring)
+    local angle = (slot.index - 1) * 2.4 + slot.alive * 0.64
+    local x, y = Waves.clamp(necro.x + math.cos(angle) * 44, necro.y + math.sin(angle) * 44)
+    slot.alive = slot.alive + 1
+    activeSummons[#activeSummons + 1] = {
+        slot = slot, meta = meta, x = x, y = y, hp = hp, maxHp = hp, atk = atk,
+        cdTimer = math.random() * 0.32,
+        hitFlash = 0, facing = math.cos(angle) < 0 and -1 or 1, moving = false,
+        attackTime = 0, attackAngle = 0, walk = 0,
+        guardTime = 0, lungeTime = 0, chainTime = 0, strikes = 0,
+    }
+    spawnParticles(x, y - 8, meta.rank == 4 and meta.accent or TIER_COLORS[meta.tier], 5, 70)
+end
+
+local function updateRingSummons(dt)
+    for _, slot in ipairs(raidRings) do
+        if slot.alive < slot.stats.limit then
+            slot.timer = slot.timer - dt
+            if slot.timer <= 0 then
+                summonFromRing(slot)
+                slot.timer = slot.stats.cooldown
+            end
         end
     end
 end
 
 local function beginRaidWave(wave)
     raidWave, nextWaveIn = wave, nil
-    enemies = Waves.spawn(wave, dungeonStage)
+    enemies = Waves.spawn(wave, dungeonStage, necro.x, necro.y)
     projectiles, enemyProjectiles = {}, {}
-    deployRingSummons(equippedRings())
 end
 
 local function startDungeonRun()
     run = Progress.new()
-    runSynergies = getSynergies(equippedRings())
+    local equipped = equippedRings()
+    runSynergies = getSynergies(equipped)
     ringRewards = nil
     mode = "battle"
     local maxHp = getNecroCombatStats()
     necro.maxHp = maxHp; necro.hp = maxHp
-    necro.x, necro.y = 480, 290
+    necro.x, necro.y = Waves.width / 2, Waves.height / 2
     necro.direction, necro.walkFrame, necro.walkDistance = "down", 0, 0
     necro.moving = false
     necro.swingTimer, necro.swingCooldown, necro.swingPending = 0, 0, false
     necro.invulnTimer = 0.6
     necro.frenzyTimer = 0; necro.soulBoostTimer = 0
     dungeonLootEarned = { souls = 0, bones = 0, herbs = 0, iron = 0 }
-    activeSummons, lootDrops, particles, popTexts = {}, {}, {}, {}
+    activeSummons, raidRings, lootDrops, particles, popTexts = {}, {}, {}, {}, {}
+    for index, ring in ipairs(equipped) do
+        local stats = Catalog.stats(ring)
+        local slot = { ring = ring, stats = stats, alive = 0, timer = stats.cooldown, index = index }
+        raidRings[index] = slot
+        summonFromRing(slot)
+    end
     beginRaidWave(1)
 end
 
 local function openRingRewards()
-    ringRewards = dungeonStage == 1 and { 2, 5, 8 } or { 3, 6, 9 }
+    ringRewards = {}
+    for index, id in ipairs(Catalog.options(dungeonStage == 1 and 2 or 3)) do
+        ringRewards[index] = Catalog.ring(id, math.random(2))
+    end
     mode = "reward"
 end
 
 local function chooseRingReward(index)
-    local id = ringRewards and ringRewards[index]
-    if not id then return end
-    table.insert(legion, { id = id, enhance = 0 })
+    local ring = ringRewards and ringRewards[index]
+    if not ring then return end
+    table.insert(legion, ring)
     selectedUnitIdx = #legion
     rosterScroll = math.max(0, math.floor((selectedUnitIdx - 1) / 4) - 2)
     ringRewards = nil
     dungeonStage = dungeonStage + 1
     mode = "camp"
-    setBanner(UNIT_DB[id].name .. " ring added to inventory. Equip it for the next raid.", TIER_COLORS[UNIT_DB[id].tier])
+    local summon = UNIT_DB[ring.id]
+    setBanner(summon.name .. " ring added to inventory. Equip it for the next raid.", TIER_COLORS[summon.tier])
 end
 
 local function usesStarterSwing()
@@ -615,8 +541,7 @@ local function applyNecroMeleeSwing()
                 e.hp = e.hp - atk
                 e.hitFlash = 0.14
                 local push = e.isBoss and 6 or 18
-                e.x = e.x + math.cos(angToEnemy) * push
-                e.y = e.y + math.sin(angToEnemy) * push
+                e.x, e.y = Waves.clamp(e.x + math.cos(angToEnemy) * push, e.y + math.sin(angToEnemy) * push)
                 spawnPop(e.x, e.y - 28, tostring(atk) .. "!", wp.col)
                 spawnParticles(e.x, e.y - 14, wp.col, 6, 110)
                 hitCount = hitCount + 1
@@ -667,33 +592,212 @@ local function isMarked(enemy)
     return (enemy.markTimer or 0) > 0
 end
 
-local function applySummonProjectile(projectile, enemy)
-    local damage = projectile.dmg
-    local tint = projectile.col
-    if projectile.tag == "ranged" and runSynergies.markedShot and isMarked(enemy) then
-        damage = damage + math.floor(damage * (0.5 + 0.25 * (run.ranks.shot or 0)))
-        tint = markColor
-        spawnParticles(enemy.x, enemy.y - 10, tint, 5, 100)
-    end
-    enemy.hp = enemy.hp - damage
-    enemy.hitFlash = 0.10
-    spawnPop(enemy.x, enemy.y - 24, tostring(damage), tint)
+local function directionTo(actor, target)
+    return math.atan2(target.y - actor.y, target.x - actor.x)
+end
 
-    if projectile.tag == "magic" and runSynergies.graveBurst and isMarked(enemy) and enemy.burstReady then
-        enemy.burstReady = false
-        local rank = run.ranks.burst or 0
-        local radius = 70 + rank * 8
-        local splash = math.max(1, math.floor(projectile.dmg * (0.5 + rank * 0.25)))
-        spawnParticles(enemy.x, enemy.y - 12, burstColor, 13, 145)
-        for _, other in ipairs(enemies) do
-            local dx, dy = other.x - enemy.x, other.y - enemy.y
-            if other ~= enemy and other.hp > 0 and dx * dx + dy * dy <= radius * radius then
-                other.hp = other.hp - splash
-                other.hitFlash = 0.10
-                spawnPop(other.x, other.y - 24, tostring(splash), burstColor)
+local function hitWithSummon(summon, target, damage, tint)
+    target.hp = target.hp - damage
+    target.hitFlash = 0.10
+    tint = tint or (summon.meta.rank == 4 and summon.meta.accent or TIER_COLORS[summon.meta.tier])
+    spawnPop(target.x, target.y - 22, tostring(damage), tint)
+end
+
+local function shootArrow(summon, target, damage, volley)
+    local angle = directionTo(summon, target)
+    projectiles[#projectiles + 1] = {
+        x = summon.x, y = summon.y - 14,
+        vx = math.cos(angle) * 415, vy = math.sin(angle) * 415,
+        dmg = damage, owner = summon, volley = volley, life = 0.90,
+        col = summon.meta.rank == 4 and summon.meta.accent or (isMarked(target) and markColor or TIER_COLORS[summon.meta.tier]),
+    }
+end
+
+local function applySummonProjectile(arrow, enemy)
+    local summon = arrow.owner
+    local marked = isMarked(enemy)
+    local damage = arrow.dmg
+    if marked and runSynergies.markedShot then
+        damage = damage + math.floor(damage * (0.5 + 0.25 * (run.ranks.shot or 0)))
+        spawnParticles(enemy.x, enemy.y - 10, markColor, 3, 90)
+    end
+    hitWithSummon(summon, enemy, damage, marked and markColor or arrow.col)
+
+    if marked and arrow.volley and summon.meta.rank >= 4 then
+        summon.trackingHits = summon.tracking == enemy and (summon.trackingHits or 0) + 1 or 1
+        summon.tracking = enemy
+        if summon.trackingHits >= 3 then
+            summon.trackingHits = 0
+            if enemy.hp > 0 and summon.hp > 0 then
+                shootArrow(summon, enemy, math.floor(arrow.dmg * 1.35), false)
             end
         end
     end
+
+    if marked and not arrow.pierced and summon.meta.rank >= 2 then
+        arrow.pierced = enemy
+        arrow.dmg = math.max(1, math.floor(arrow.dmg * (0.65 + summon.slot.stats.pierce)))
+        return false
+    end
+    return true
+end
+
+local function bashTarget(summon, enemy, damage)
+    enemy.markTimer = 3 + summon.slot.stats.mark
+    enemy.provokedBy, enemy.provokeUntil = summon, timeAcc + 1.4
+    local direction = directionTo(summon, enemy)
+    local knockback = enemy.isBoss and 5 or 15 * (1 + summon.slot.stats.push)
+    enemy.x, enemy.y = Waves.clamp(enemy.x + math.cos(direction) * knockback,
+        enemy.y + math.sin(direction) * knockback)
+    hitWithSummon(summon, enemy, damage, markColor)
+end
+
+local function strikeWithSummon(summon, target, damage)
+    local meta = summon.meta
+    summon.attackTime, summon.attackAngle = 0.23, directionTo(summon, target)
+    if meta.family == "shield" then
+        if meta.rank >= 2 then summon.guardTime = 0.64 end
+        bashTarget(summon, target, damage)
+        if meta.rank >= 3 then
+            local angle = summon.attackAngle
+            local second = Targeting.nearest(enemies, summon.x, summon.y, meta.reach, function(enemy)
+                return enemy ~= target and math.cos(directionTo(summon, enemy) - angle) >= 0.30
+            end)
+            if second then bashTarget(summon, second, damage) end
+        end
+    elseif meta.family == "sword" then
+        summon.strikes = summon.strikes + 1
+        if meta.rank >= 2 and summon.strikes % 3 == 0 then damage = damage * 2 end
+        if meta.rank >= 4 and summon.chainTime <= 0 and target.lastSword ~= summon
+            and timeAcc - (target.lastSwordTime or -100) < 0.9 then
+            summon.chainTime = 1.6
+            damage = damage + math.floor(summon.atk * 0.75)
+        end
+        target.lastSword, target.lastSwordTime = summon, timeAcc
+        hitWithSummon(summon, target, damage)
+        if meta.rank >= 3 and target.hp <= 0 then
+            summon.lungeTime, summon.cdTimer = 0.32, math.min(0.24, summon.cdTimer)
+        end
+    else
+        shootArrow(summon, target, damage, true)
+        if meta.rank >= 3 and isMarked(target) then
+            local second = Targeting.nearest(enemies, summon.x, summon.y, meta.reach,
+                function(enemy) return enemy ~= target and isMarked(enemy) end)
+            if second then shootArrow(summon, second, math.max(1, math.floor(damage * 0.5)), false) end
+        end
+    end
+end
+
+local function damageSummon(summon, damage, enemy, fromX, fromY)
+    if summon.guardTime > 0 then
+        local ox, oy = fromX - summon.x, fromY - summon.y
+        if ox * math.cos(summon.attackAngle) + oy * math.sin(summon.attackAngle) >= 0 then
+            summon.guardTime = 0
+            damage = math.max(1, math.floor(damage * 0.4))
+            spawnParticles(summon.x, summon.y - 19, markColor, 5, 85)
+            if summon.meta.rank >= 4 and enemy and enemy.hp > 0 then
+                local dx, dy = enemy.x - summon.x, enemy.y - summon.y
+                if dx * dx + dy * dy <= 68 * 68 then
+                    summon.attackTime, summon.attackAngle = 0.23, directionTo(summon, enemy)
+                    bashTarget(summon, enemy, summon.atk)
+                end
+            end
+        end
+    end
+    summon.hp = summon.hp - damage
+    summon.hitFlash = 0.1
+end
+
+local function damageNecro(damage)
+    if necro.invulnTimer > 0 then return end
+    necro.hp = necro.hp - damage
+    necro.invulnTimer = 0.45
+    addShake(0.13, 5)
+    spawnPop(necro.x, necro.y - 42, "-" .. damage, {1, 0.3, 0.3})
+end
+
+local function enemySeparation(enemy)
+    local sx, sy = 0, 0
+    for _, other in ipairs(enemies) do
+        if enemy ~= other and other.hp > 0 then
+            local dx, dy = enemy.x - other.x, enemy.y - other.y
+            local distanceSquared = dx * dx + dy * dy
+            local spacing = enemy.radius + other.radius + 3
+            if distanceSquared > 0.01 and distanceSquared < spacing * spacing then
+                local force = (spacing / math.sqrt(distanceSquared) - 1) * 5
+                sx, sy = sx + dx * force, sy + dy * force
+            end
+        end
+    end
+    return sx, sy
+end
+
+local function updateSummon(summon, dt, spdMult)
+    local meta, stats = summon.meta, summon.slot.stats
+    summon.cdTimer = math.max(0, summon.cdTimer - dt * spdMult)
+    summon.attackTime = math.max(0, summon.attackTime - dt)
+    summon.hitFlash = math.max(0, summon.hitFlash - dt)
+    summon.guardTime = math.max(0, summon.guardTime - dt)
+    summon.lungeTime = math.max(0, summon.lungeTime - dt)
+    summon.chainTime = math.max(0, summon.chainTime - dt)
+
+    local dx, dy = necro.x - summon.x, necro.y - summon.y
+    local leash = dx * dx + dy * dy
+    local target, distance
+    local reach = meta.reach
+    if leash < 305 * 305 then
+        if meta.family == "archer" and runSynergies.markedShot then
+            reach = reach * (1 + stats.markedRange)
+            target, distance = Targeting.nearest(enemies, summon.x, summon.y, reach, isMarked)
+            if not target then reach = meta.reach end
+        elseif meta.family == "shield" then
+            target = Targeting.nearest(enemies, necro.x, necro.y, 205)
+            if target then
+                local ox, oy = target.x - summon.x, target.y - summon.y
+                distance = math.sqrt(ox * ox + oy * oy)
+            end
+        end
+        if not target then target, distance = Targeting.nearest(enemies, summon.x, summon.y, 255) end
+    end
+
+    local mx, my = 0, 0
+    if target then
+        local angle = directionTo(summon, target)
+        summon.facing = target.x >= summon.x and 1 or -1
+        if distance <= reach + target.radius then
+            if summon.cdTimer <= 0 then
+                summon.cdTimer = meta.cd / (1 + stats.speed / 100)
+                local damage = math.floor(summon.atk * (1 + 0.20 * (run.ranks.summon or 0)))
+                strikeWithSummon(summon, target, damage)
+            end
+            if meta.family == "archer" and distance < 52 then
+                mx, my = -math.cos(angle) * 65, -math.sin(angle) * 65
+            end
+        else
+            local speed = meta.spd * spdMult * (summon.lungeTime > 0 and 1.85 or 1)
+            mx, my = math.cos(angle) * speed, math.sin(angle) * speed
+        end
+    elseif leash > 58 * 58 then
+        local angle = math.atan2(dy, dx)
+        local speed = math.max(meta.spd, math.min(220, math.sqrt(leash) * 1.8))
+        mx, my = math.cos(angle) * speed, math.sin(angle) * speed
+        summon.facing = dx >= 0 and 1 or -1
+    end
+
+    for _, other in ipairs(activeSummons) do
+        if other ~= summon then
+            local ox, oy = summon.x - other.x, summon.y - other.y
+            local distanceSquared = ox * ox + oy * oy
+            if distanceSquared > 0.1 and distanceSquared < 390 then
+                local repulsion = 56 / math.sqrt(distanceSquared)
+                mx, my = mx + ox * repulsion, my + oy * repulsion
+            end
+        end
+    end
+
+    summon.x, summon.y = Waves.clamp(summon.x + mx * dt, summon.y + my * dt)
+    summon.moving = math.abs(mx) > 9 or math.abs(my) > 9
+    if summon.moving then summon.walk = summon.walk + dt * 16 end
 end
 
 local function offerRunUpgrade()
@@ -721,8 +825,7 @@ local function updateBattle(dt)
     local oldX, oldY = necro.x, necro.y
     necro.direction = Starter.facing(dx, dy, necro.direction)
     local speed = 190 * (1 + 0.10 * (run.ranks.speed or 0))
-    necro.x = math.max(54, math.min(906, necro.x + dx * speed * dt))
-    necro.y = math.max(84, math.min(495, necro.y + dy * speed * dt))
+    necro.x, necro.y = Waves.clamp(necro.x + dx * speed * dt, necro.y + dy * speed * dt)
     local movedX, movedY = necro.x - oldX, necro.y - oldY
     local distance = math.sqrt(movedX * movedX + movedY * movedY)
     if distance > 0 then
@@ -754,76 +857,16 @@ local function updateBattle(dt)
         end
     end
 
+    updateRingSummons(dt)
     local spdMult = (necro.frenzyTimer > 0) and 1.65 or 1.0
     for i = #activeSummons, 1, -1 do
-        local s = activeSummons[i]
-        s.cdTimer = math.max(0, s.cdTimer - dt * spdMult)
-        s.hitFlash = math.max(0, s.hitFlash - dt)
-
-        local nearest, bestDist
-        local tag = summonTag(s.meta)
-        if (tag == "ranged" and runSynergies.markedShot) or (tag == "magic" and runSynergies.graveBurst) then
-            nearest, bestDist = Targeting.nearest(enemies, s.x, s.y, s.meta.range, isMarked)
-        end
-        if not nearest then nearest, bestDist = Targeting.nearest(enemies, s.x, s.y) end
-
-        local mvx, mvy = 0, 0
-        if nearest and s.hp > 0 then
-            local ang = math.atan2(nearest.y - s.y, nearest.x - s.x)
-            s.facing = (nearest.x >= s.x) and 1 or -1
-            if bestDist > s.meta.range then
-                mvx = math.cos(ang) * s.meta.spd * spdMult
-                mvy = math.sin(ang) * s.meta.spd * spdMult
-            elseif s.meta.role == "ranged" and bestDist < 95 then
-                mvx = -math.cos(ang) * s.meta.spd * 0.7
-                mvy = -math.sin(ang) * s.meta.spd * 0.7
-            end
-
-            if bestDist <= s.meta.range + nearest.radius and s.cdTimer <= 0 then
-                s.cdTimer = s.meta.cd
-                local damage = math.floor(s.atk * (1 + 0.20 * (run.ranks.summon or 0)))
-                if s.meta.role == "melee" then
-                    nearest.hp = nearest.hp - damage
-                    nearest.hitFlash = 0.10
-                    if runSynergies.markedShot or runSynergies.graveBurst then
-                        nearest.markTimer = 3
-                        nearest.burstReady = runSynergies.graveBurst
-                    end
-                    spawnPop(nearest.x, nearest.y - 24, tostring(damage), TIER_COLORS[s.meta.tier])
-                    spawnParticles(nearest.x, nearest.y - 12, TIER_COLORS[s.meta.tier], 4, 80)
-                else
-                    table.insert(projectiles, {
-                        x = s.x, y = s.y - 14,
-                        vx = math.cos(ang) * 380,
-                        vy = math.sin(ang) * 380,
-                        dmg = damage,
-                        tag = tag,
-                        life = 1.1,
-                        col = TIER_COLORS[s.meta.tier],
-                    })
-                end
-            end
-        end
-
-        for j, other in ipairs(activeSummons) do
-            if i ~= j then
-                local ox, oy = s.x - other.x, s.y - other.y
-                local od = ox * ox + oy * oy
-                if od > 0.1 and od < 520 then
-                    local d = math.sqrt(od)
-                    mvx = mvx + (ox / d) * 85
-                    mvy = mvy + (oy / d) * 85
-                end
-            end
-        end
-
-        s.moving = (math.abs(mvx) > 5 or math.abs(mvy) > 5)
-        s.x = math.max(50, math.min(910, s.x + mvx * dt))
-        s.y = math.max(82, math.min(495, s.y + mvy * dt))
-
-        if s.hp <= 0 then
-            spawnParticles(s.x, s.y - 12, {0.85, 0.85, 0.8}, 8, 90)
+        local summon = activeSummons[i]
+        if summon.hp <= 0 then
+            summon.slot.alive = summon.slot.alive - 1
+            spawnParticles(summon.x, summon.y - 12, {0.85, 0.85, 0.8}, 5, 90)
             table.remove(activeSummons, i)
+        else
+            updateSummon(summon, dt, spdMult)
         end
     end
 
@@ -832,9 +875,9 @@ local function updateBattle(dt)
         p.x = p.x + p.vx * dt; p.y = p.y + p.vy * dt; p.life = p.life - dt
         local hit = false
         for _, e in ipairs(enemies) do
-            if e.hp > 0 and math.sqrt((e.x - p.x)^2 + ((e.y - 14) - p.y)^2) < e.radius + 5 then
-                applySummonProjectile(p, e)
-                hit = true
+            local dx, dy = e.x - p.x, e.y - 14 - p.y
+            if e ~= p.pierced and e.hp > 0 and dx * dx + dy * dy < (e.radius + 5)^2 then
+                hit = applySummonProjectile(p, e)
                 break
             end
         end
@@ -847,9 +890,9 @@ local function updateBattle(dt)
         e.hitFlash = math.max(0, e.hitFlash - dt)
 
         if e.hp <= 0 then
-            table.insert(lootDrops, { x = e.x, y = e.y + 7, kind = "xp", amount = e.isBoss and 8 or 2, col = xpColor })
+            table.insert(lootDrops, { x = e.x, y = e.y + 7, kind = "xp", amount = e.isBoss and 8 or 1, col = xpColor })
             local mult = (necro.soulBoostTimer > 0) and 2 or 1
-            local sDrop = (e.isBoss and (80 + dungeonStage * 25) or (12 + dungeonStage * 3)) * mult
+            local sDrop = (e.isBoss and (80 + dungeonStage * 25) or (4 + dungeonStage)) * mult
             table.insert(lootDrops, { x = e.x, y = e.y, kind = "souls", amount = sDrop, col = {0.35, 1.0, 0.65} })
             if e.isBoss or math.random() < 0.55 then
                 table.insert(lootDrops, { x = e.x + 12, y = e.y - 6, kind = "bones", amount = (e.isBoss and 4 or 1) * mult, col = {0.95, 0.92, 0.82} })
@@ -860,45 +903,50 @@ local function updateBattle(dt)
             if e.isBoss or math.random() < 0.45 then
                 table.insert(lootDrops, { x = e.x + 8, y = e.y + 10, kind = "iron", amount = (e.isBoss and 4 or 1) * mult, col = {0.55, 0.75, 1.0} })
             end
-            spawnParticles(e.x, e.y - 14, {1.0, 0.4, 0.4}, e.isBoss and 28 or 10, 130)
-            addShake(e.isBoss and 0.35 or 0.08, e.isBoss and 8 or 2.5)
+            spawnParticles(e.x, e.y - 14, {1.0, 0.4, 0.4}, e.isBoss and 28 or 5, 130)
+            if e.isBoss then addShake(0.35, 8) end
             table.remove(enemies, i)
         else
             local target = necro
-            local bestD = math.sqrt((necro.x - e.x)^2 + (necro.y - e.y)^2)
-            for _, s in ipairs(activeSummons) do
-                local sd = math.sqrt((s.x - e.x)^2 + (s.y - e.y)^2)
-                if sd < bestD * 0.92 then bestD = sd; target = s end
+            if e.provokedBy and e.provokedBy.hp > 0 and e.provokeUntil > timeAcc then
+                target = e.provokedBy
+            else
+                local bestD = (necro.x - e.x)^2 + (necro.y - e.y)^2
+                for _, s in ipairs(activeSummons) do
+                    local distanceSquared = (s.x - e.x)^2 + (s.y - e.y)^2
+                    if s.hp > 0 and distanceSquared < bestD * 0.85 then
+                        bestD, target = distanceSquared, s
+                    end
+                end
             end
 
-            local ang = math.atan2(target.y - e.y, target.x - e.x)
+            local ang = directionTo(e, target)
+            local distance = math.sqrt((target.x - e.x)^2 + (target.y - e.y)^2)
+            local sx, sy = enemySeparation(e)
             e.facing = (target.x >= e.x) and 1 or -1
-            if e.isRanged and bestD < 210 then
+            if e.isRanged and distance < 210 then
+                e.x, e.y = Waves.clamp(e.x + sx * dt, e.y + sy * dt)
                 if e.cdTimer <= 0 then
-                    e.cdTimer = 1.65
+                    e.cdTimer = 1.65 + e.animOffset * 0.26
                     table.insert(enemyProjectiles, {
                         x = e.x, y = e.y - 14,
                         vx = math.cos(ang) * 205,
                         vy = math.sin(ang) * 205,
                         dmg = e.atk,
+                        attacker = e,
                         life = 2.0,
                     })
                 end
             else
-                e.x = e.x + math.cos(ang) * e.spd * dt
-                e.y = e.y + math.sin(ang) * e.spd * dt
-                if bestD < e.radius + 16 and e.cdTimer <= 0 then
+                local speed = distance > e.radius + 9 and e.spd or 0
+                e.x, e.y = Waves.clamp(e.x + (math.cos(ang) * speed + sx) * dt,
+                    e.y + (math.sin(ang) * speed + sy) * dt)
+                if distance < e.radius + 16 and e.cdTimer <= 0 then
                     e.cdTimer = 0.95
                     if target == necro then
-                        if necro.invulnTimer <= 0 then
-                            necro.hp = necro.hp - e.atk
-                            necro.invulnTimer = 0.45
-                            addShake(0.14, 5)
-                            spawnPop(necro.x, necro.y - 42, "-" .. e.atk, {1, 0.3, 0.3})
-                        end
+                        damageNecro(e.atk)
                     else
-                        target.hp = target.hp - e.atk
-                        target.hitFlash = 0.10
+                        damageSummon(target, e.atk, e, e.x, e.y)
                     end
                 end
             end
@@ -908,26 +956,31 @@ local function updateBattle(dt)
     for i = #enemyProjectiles, 1, -1 do
         local ep = enemyProjectiles[i]
         ep.x = ep.x + ep.vx * dt; ep.y = ep.y + ep.vy * dt; ep.life = ep.life - dt
-        local hit = false
-        if math.sqrt((necro.x - ep.x)^2 + ((necro.y - 18) - ep.y)^2) < 17 then
-            if necro.invulnTimer <= 0 then
-                necro.hp = necro.hp - ep.dmg
-                necro.invulnTimer = 0.45
-                addShake(0.12, 4)
-                spawnPop(necro.x, necro.y - 42, "-" .. ep.dmg, {1, 0.3, 0.3})
+        local target, closest
+        local heroDistance = (necro.x - ep.x)^2 + (necro.y - 14 - ep.y)^2
+        if heroDistance < 15 * 15 then target, closest = necro, heroDistance end
+        for _, summon in ipairs(activeSummons) do
+            local distanceSquared = (summon.x - ep.x)^2 + (summon.y - 14 - ep.y)^2
+            if summon.hp > 0 and distanceSquared < 12 * 12 and (not closest or distanceSquared < closest) then
+                target, closest = summon, distanceSquared
             end
-            hit = true
         end
-        if hit or ep.life <= 0 then table.remove(enemyProjectiles, i) end
+        if target == necro then
+            damageNecro(ep.dmg)
+        elseif target then
+            damageSummon(target, ep.dmg, ep.attacker, target.x - ep.vx, target.y - ep.vy)
+        end
+        if target or ep.life <= 0 then table.remove(enemyProjectiles, i) end
     end
 
-    local magnetRange = (necro.soulBoostTimer > 0 or #enemies == 0) and 999 or 175
+    local cleared = #enemies == 0
+    local magnetRange = cleared and math.huge or (necro.soulBoostTimer > 0 and 999 or 175)
     for i = #lootDrops, 1, -1 do
         local l = lootDrops[i]
         local d = math.sqrt((necro.x - l.x)^2 + (necro.y - l.y)^2)
-        local pickupRange = l.kind == "xp" and #enemies > 0 and 66 or magnetRange
+        local pickupRange = l.kind == "xp" and not cleared and 66 or magnetRange
         if d >= 24 and d < pickupRange then
-            local travel = math.min(d, 360 * dt)
+            local travel = math.min(d, (cleared and 900 or 360) * dt)
             l.x = l.x + (necro.x - l.x) * travel / d
             l.y = l.y + (necro.y - l.y) * travel / d
             d = d - travel
@@ -939,12 +992,13 @@ local function updateBattle(dt)
                 res[l.kind] = res[l.kind] + l.amount
                 dungeonLootEarned[l.kind] = dungeonLootEarned[l.kind] + l.amount
             end
-            spawnPop(necro.x, necro.y - 48, "+" .. l.amount .. " " .. string.upper(l.kind), l.col)
+            if l.kind == "xp" and not cleared then
+                spawnPop(necro.x, necro.y - 48, "+" .. l.amount .. " " .. string.upper(l.kind), l.col)
+            end
             table.remove(lootDrops, i)
         end
     end
 
-    local cleared = #enemies == 0
     local finalWave = raidWave == #Waves
     if necro.hp <= 0 then
         mode = "gameover"
@@ -1041,14 +1095,17 @@ function love.mousepressed(x, y, button)
             else
                 fusionMateIdx = selectedUnitIdx
                 local m = UNIT_DB[legion[selectedUnitIdx].id]
-                setBanner("FUSION MODE: Click another [" .. m.tier .. "-Tier] summon below to combine! (65% Cross-Tree Higher Tier / 35% Random Same Tier)", {1, 0.85, 0.25})
+                setBanner("Choose another [" .. m.tier .. "] " .. m.name .. " ring to fuse.", {1, 0.85, 0.25})
             end
             return
         end
 
         if inRect(x, y, 730, 212, 106, 22) then toggleSelectedRing(); return end
         if inRect(x, y, 845, 212, 42, 22) then rosterScroll = math.max(0, rosterScroll - 1); return end
-        if inRect(x, y, 894, 212, 42, 22) then rosterScroll = rosterScroll + 1; return end
+        if inRect(x, y, 894, 212, 42, 22) then
+            rosterScroll = math.min(rosterScroll + 1, math.max(0, math.ceil(#legion / 4) - 3))
+            return
+        end
 
         for slot = 1, 12 do
             local idx = rosterScroll * 4 + slot
@@ -1060,7 +1117,7 @@ function love.mousepressed(x, y, button)
                 local cy = 240 + row * 88
                 if inRect(x, y, cx, cy, 152, 80) then
                     if fusionMateIdx and fusionMateIdx ~= idx then
-                        executeMutantFusion(fusionMateIdx, idx)
+                        fuseRings(fusionMateIdx, idx)
                     else
                         selectedUnitIdx = idx
                     end
@@ -1100,6 +1157,7 @@ local function draw0x72MeleeWeapon(cx, cy, scale, swingRatio)
     local _, _, wp = getNecroCombatStats()
     local q = quads[wp.quadKey]
     if not q then return end
+    local _, _, width, height = q:getViewport()
 
     love.graphics.push()
     local facing = swingRatio > 0 and necro.swingFacing or necro.facing
@@ -1110,16 +1168,11 @@ local function draw0x72MeleeWeapon(cx, cy, scale, swingRatio)
     end
     love.graphics.rotate(ang)
     love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.draw(atlasImg, q, 0, 0, 0, scale * 0.85, scale * 0.85, wp.w / 2, wp.h - 3)
+    love.graphics.draw(atlasImg, q, 0, 0, 0, scale * 0.85, scale * 0.85, width / 2, height - 3)
     love.graphics.pop()
 end
 
-local function synergyText(synergies)
-    if synergies.markedShot and synergies.graveBurst then return "Marked Shot + Grave Burst" end
-    if synergies.markedShot then return "Marked Shot" end
-    if synergies.graveBurst then return "Grave Burst" end
-    return "No synergy"
-end
+local markedShotLabel = "Shield + Archer: Marked Shot"
 
 local function drawCamp()
     local deployed = equippedRings()
@@ -1128,7 +1181,7 @@ local function drawCamp()
     love.graphics.setColor(0.12, 0.10, 0.18, 1)
     love.graphics.rectangle("fill", 0, 0, 960, 50)
     love.graphics.setColor(0.35, 1.0, 0.65, 1)
-    love.graphics.print("DUNGEON STAGE " .. dungeonStage .. " PREP (0x72 ASSET PACK)", 22, 16)
+    love.graphics.print("DUNGEON STAGE " .. dungeonStage .. " PREP", 22, 16)
     love.graphics.setColor(0.45, 1.0, 0.72, 1)
     love.graphics.print("SOULS: " .. res.souls, 310, 16)
     love.graphics.setColor(0.95, 0.92, 0.82, 1)
@@ -1188,7 +1241,7 @@ local function drawCamp()
     drawBtn(32, 386, 122, 46, "WEAPON +" .. (necro.weaponEnhance + 1), wpRate .. "% Chance", {0.28, 0.18, 0.16}, {1.0, 0.78, 0.25})
     drawBtn(160, 386, 122, 46, "ARMOR +" .. (necro.armorEnhance + 1), arRate .. "% Chance", {0.16, 0.24, 0.36}, {0.35, 0.80, 1.0})
 
-    drawBtn(32, 444, 250, 62, "RAID DUNGEON STAGE " .. dungeonStage, "3 waves   /   " .. #deployed .. " summons", {0.12, 0.50, 0.28}, {0.35, 1.0, 0.60})
+    drawBtn(32, 444, 250, 62, "RAID DUNGEON STAGE " .. dungeonStage, "3 waves   /   " .. #deployed .. " rings equipped", {0.12, 0.50, 0.28}, {0.35, 1.0, 0.60})
 
     -- 우측 상단: 소환 가챠 & 포션 연금
     drawBtn(306, 68, 165, 52, "RING PULL 1x", "28 Souls (Gacha)", {0.20, 0.14, 0.34}, {0.35, 0.95, 0.65})
@@ -1203,11 +1256,12 @@ local function drawCamp()
 
     local selU = legion[selectedUnitIdx]
     local selMeta = selU and UNIT_DB[selU.id] or nil
+    local selStats = selU and Catalog.stats(selU)
     local nextMeta = (selMeta and selMeta.nextId) and UNIT_DB[selMeta.nextId] or nil
     drawBtn(
         306, 154, 205, 48,
         nextMeta and ("TREE UP -> " .. nextMeta.name) or "MAX TREE REACHED",
-        nextMeta and ("Same Tree [" .. nextMeta.tier .. "]") or "Use Mutant Fusion -> S!",
+        nextMeta and ("Next rank [" .. nextMeta.tier .. "]") or "Highest rank [S]",
         {0.16, 0.26, 0.22}, {0.35, 0.95, 0.60}
     )
 
@@ -1221,14 +1275,19 @@ local function drawCamp()
 
     drawBtn(
         734, 154, 204, 48,
-        fusionMateIdx and "SELECT 2ND UNIT..." or "MUTANT FUSION (65%)",
-        "Fuse two same-tier rings",
+        fusionMateIdx and "SELECT 2ND RING..." or "FUSE DUPLICATES",
+        "Same summon and rank",
         fusionMateIdx and {0.45, 0.28, 0.12} or {0.32, 0.16, 0.38},
         {1.0, 0.82, 0.25}
     )
 
     love.graphics.setColor(0.85, 0.88, 0.95, 1)
-    love.graphics.print(#legion .. " rings owned   |   " .. synergyText(synergies), 308, 215)
+    local ringDetails = selStats and (Catalog.equipment(selU).name .. "  /  " .. selStats.bonus) or (#legion .. " rings owned")
+    love.graphics.print(ringDetails, 308, 215)
+    if synergies.markedShot then
+        love.graphics.setColor(markColor)
+        love.graphics.print(markedShotLabel, 308, 500)
+    end
     drawBtn(730, 212, 106, 22, selU and selU.equipped and "UNEQUIP" or "EQUIP RING", nil,
         {0.16, 0.26, 0.25}, {0.49, 0.81, 0.70})
     drawBtn(845, 212, 42, 22, "UP", nil, {0.2, 0.2, 0.3}, {0.5, 0.5, 0.7})
@@ -1254,29 +1313,24 @@ local function drawCamp()
             love.graphics.setLineWidth((isSel or isFuse) and 3 or 1.5)
             love.graphics.rectangle("line", cx, cy, 152, 80, 7, 7)
 
-            -- 0x72 소환수 4프레임 아이들 애니메이션!
-            local anim = quads.anims[meta.animKey]
-            local uf = getAnimFrame(idx * 0.3)
-            local iconScale = (anim.w == 32) and 1.35 or 2.2
             love.graphics.setColor(1, 1, 1, 1)
-            love.graphics.draw(atlasImg, anim.idle[uf], cx + 24, cy + 62, 0, iconScale, iconScale, anim.w / 2, anim.h)
+            SummonArt.draw(u, cx + 22, cy + 66, 41)
 
             love.graphics.setColor(tc[1], tc[2], tc[3], 1)
             local name = "[" .. meta.tier .. "] " .. meta.name
-            local stats = "+" .. u.enhance .. "  ATK " .. uAtk .. "  HP " .. hp
+            local stats = "ATK " .. uAtk .. "  HP " .. hp
+            local ringStats = Catalog.stats(u)
+            local limits = ringStats.limit .. " max / " .. ringStats.cooldown .. "s / +" .. ringStats.speed .. "%"
             local font = love.graphics.getFont()
-            love.graphics.print(name, cx + 46, cy + 7, 0, math.min(1, 101 / font:getWidth(name)), 1)
+            local textX, textWidth = cx + 53, 94
+            love.graphics.print(name, textX, cy + 7, 0, math.min(1, textWidth / font:getWidth(name)), 1)
             love.graphics.setColor(0.75, 0.82, 0.95, 1)
-            love.graphics.print("#" .. string.upper(summonTag(meta)), cx + 46, cy + 25)
+            love.graphics.print("#" .. string.upper(meta.tag), textX, cy + 24)
             love.graphics.setColor(0.92, 0.95, 0.98, 1)
-            love.graphics.print(stats, cx + 46, cy + 44, 0, math.min(1, 101 / font:getWidth(stats)), 1)
-            if u.equipped then
-                love.graphics.setColor(0.45, 1.0, 0.68, 1)
-                love.graphics.print("EQUIPPED", cx + 46, cy + 61)
-            else
-                love.graphics.setColor(0.62, 0.65, 0.72, 1)
-                love.graphics.print("IN INVENTORY", cx + 46, cy + 61)
-            end
+            love.graphics.print(stats, textX, cy + 40, 0, math.min(1, textWidth / font:getWidth(stats)), 1)
+            love.graphics.setColor(u.equipped and {0.45, 1.0, 0.68} or {0.62, 0.65, 0.72})
+            love.graphics.print(limits, textX, cy + 58, 0, math.min(1, textWidth / font:getWidth(limits)), 1)
+            if u.equipped then love.graphics.circle("fill", cx + 34, cy + 68, 3) end
         else
             love.graphics.setColor(0.26, 0.22, 0.36, 0.5)
             love.graphics.setLineWidth(1)
@@ -1285,18 +1339,70 @@ local function drawCamp()
     end
 end
 
-local function drawBattle()
-    -- 0x72 정품 던전 석재 바닥 타일맵 렌더링 (48x48 스케일)
-    love.graphics.setColor(1, 1, 1, 1)
-    for gx = 1, 18 do
-        for gy = 1, 9 do
-            local q = ((gx + gy) % 2 == 0) and quads.floors[1] or quads.floors2[2]
-            love.graphics.draw(atlasImg, q, gx * 48, 32 + gy * 48, 0, 3, 3)
+local function drawEffects()
+    for _, p in ipairs(particles) do
+        love.graphics.setColor(p.col[1], p.col[2], p.col[3], math.max(0, p.life / p.maxLife))
+        love.graphics.rectangle("fill", p.x, p.y, p.size, p.size)
+    end
+    for _, pt in ipairs(popTexts) do
+        love.graphics.setColor(pt.col[1], pt.col[2], pt.col[3], math.max(0, pt.life / pt.maxLife))
+        love.graphics.print(pt.text, pt.x - 16, pt.y)
+    end
+end
+
+local function raidCamera()
+    return math.floor(math.max(0, math.min(Waves.width - 960, necro.x - 480))),
+        math.floor(math.max(0, math.min(Waves.height - 540, necro.y - 270)))
+end
+
+local function drawRaidFloor(cameraX, cameraY)
+    local tile = 48
+    local columns, rows = Waves.width / tile, Waves.height / tile
+    for gx = math.max(0, math.floor((cameraX - 8) / tile)), math.min(columns - 1, math.floor((cameraX + 968) / tile)) do
+        for gy = math.max(0, math.floor((cameraY - 8) / tile)), math.min(rows - 1, math.floor((cameraY + 548) / tile)) do
+            local q = (gx + gy) % 2 == 0 and quads.floors[1] or quads.floors2[2]
+            love.graphics.setColor(0.69, 0.66, 0.72)
+            if gx == 0 or gy == 0 or gx == columns - 1 or gy == rows - 1 then
+                q = (gx + gy) % 5 == 1 and quads.wall_banner_red or quads.wall_mid
+                love.graphics.setColor(0.77, 0.72, 0.80)
+            elseif (gx == 19 or gx == 20 or gy == 11 or gy == 12) then
+                q = quads.floors2[1 + (gx + gy) % 3]
+                love.graphics.setColor(0.80, 0.75, 0.74)
+            elseif (gx * 13 + gy * 17) % 29 == 0 then
+                q = quads.floors[3]
+            end
+            love.graphics.draw(atlasImg, q, gx * tile, gy * tile, 0, 3, 3)
         end
     end
-    love.graphics.setColor(0.40, 0.30, 0.58, 1)
-    love.graphics.setLineWidth(3)
-    love.graphics.rectangle("line", 48, 80, 864, 432, 6, 6)
+end
+
+local function drawRaidMap(cameraX, cameraY)
+    local x, y, w, h = 832, 450, 108, 65
+    local sx, sy = w / Waves.width, h / Waves.height
+    love.graphics.setColor(0.10, 0.08, 0.16, 0.93)
+    love.graphics.rectangle("fill", x, y, w, h, 3, 3)
+    love.graphics.setLineWidth(1)
+    love.graphics.setColor(0.52, 0.43, 0.61)
+    love.graphics.rectangle("line", x, y, w, h, 3, 3)
+    love.graphics.setColor(0.25, 0.21, 0.34)
+    love.graphics.rectangle("fill", x + cameraX * sx, y + cameraY * sy, 960 * sx, 540 * sy)
+    for _, enemy in ipairs(enemies) do
+        love.graphics.setColor(enemy.isBoss and {1, 0.64, 0.26} or {0.74, 0.29, 0.38})
+        love.graphics.circle("fill", x + enemy.x * sx, y + enemy.y * sy, enemy.isBoss and 2.5 or 1.2)
+    end
+    love.graphics.setColor(0.68, 1.0, 0.90)
+    love.graphics.circle("fill", x + necro.x * sx, y + necro.y * sy, 2.5)
+end
+
+local function drawBattle()
+    local cameraX, cameraY = raidCamera()
+    love.graphics.push()
+    if shakeTimer > 0 and mode == "battle" then
+        local amplitude = shakeMag * math.min(1, shakeTimer * 10)
+        love.graphics.translate((math.random() - 0.5) * amplitude, (math.random() - 0.5) * amplitude)
+    end
+    love.graphics.translate(-cameraX, -cameraY)
+    drawRaidFloor(cameraX, cameraY)
 
     -- 전리품 드랍 (0x72 해골 / 플라스크 / 코인 도트 아이콘)
     for _, l in ipairs(lootDrops) do
@@ -1335,6 +1441,7 @@ local function drawBattle()
     end
 
     local stAnim = quads.necro_stages[necro.stage]
+    local heroHeight = necro.stage == 1 and raidHeroHeight or stAnim.h * 2.1
 
     -- Y좌표 깊이 정렬 후 0x72 4프레임 애니메이션 렌더링
     local drawList = { { kind = "necro", y = necro.y } }
@@ -1345,31 +1452,51 @@ local function drawBattle()
     for _, item in ipairs(drawList) do
         if item.kind == "necro" then
             love.graphics.setColor(0.04, 0.03, 0.08, 0.5)
-            love.graphics.ellipse("fill", necro.x, necro.y + 2, 20, 7)
+            love.graphics.ellipse("fill", necro.x, necro.y + 2, 14, 5)
             love.graphics.setColor(1, 1, 1, 1)
             local x, y = math.floor(necro.x), math.floor(necro.y)
             if usesStarterSwing() and necro.swingTimer > 0 then
-                Starter.drawAttack(necro.swingDirection, swingElapsed, x, y, 2)
+                Starter.drawAttack(necro.swingDirection, swingElapsed, x, y, raidHeroScale)
             else
                 if necro.stage == 1 then
-                    Starter.drawWalk(necro.direction, necro.walkFrame, x, y, 2)
+                    Starter.drawWalk(necro.direction, necro.walkFrame, x, y, raidHeroScale)
                 else
                     local nf = getAnimFrame(0)
                     local nQuad = necro.moving and stAnim.run[nf] or stAnim.idle[nf]
                     local facing = necro.swingTimer > 0 and necro.swingFacing or necro.facing
-                    love.graphics.draw(atlasImg, nQuad, x, y, 0, 3 * facing, 3, stAnim.w / 2, stAnim.h)
+                    love.graphics.draw(atlasImg, nQuad, x, y, 0, 2.1 * facing, 2.1, stAnim.w / 2, stAnim.h)
                 end
-                draw0x72MeleeWeapon(necro.x, necro.y, 3.0, necro.swingTimer / necro.swingDuration)
+                draw0x72MeleeWeapon(necro.x, necro.y, 1.85, necro.swingTimer / necro.swingDuration)
             end
         elseif item.kind == "summon" then
             local s = item.ref
-            local anim = quads.anims[s.meta.animKey]
-            local sf = getAnimFrame(s.animOffset)
-            local sQuad = s.moving and anim.run[sf] or anim.idle[sf]
+            local bob = s.moving and math.abs(math.sin(s.walk)) * 1.6 or 0
+            local strike = math.sin(s.attackTime / 0.23 * math.pi)
+            local x = s.x + math.cos(s.attackAngle) * strike * 5
+            local y = s.y + math.sin(s.attackAngle) * strike * 5 - bob
             love.graphics.setColor(0.04, 0.03, 0.08, 0.42)
-            love.graphics.ellipse("fill", s.x, s.y + 2, 14, 5)
+            love.graphics.ellipse("fill", s.x, s.y + 2, 10, 4)
+            if s.meta.rank == 4 then
+                local col = s.meta.accent
+                love.graphics.setColor(col[1], col[2], col[3], 0.62)
+                love.graphics.setLineWidth(1)
+                love.graphics.ellipse("line", s.x, s.y + 2, 11, 4)
+            end
+            if s.guardTime > 0 then
+                local col = s.meta.rank == 4 and s.meta.accent or markColor
+                love.graphics.setColor(col[1], col[2], col[3], 0.66)
+                love.graphics.setLineWidth(2)
+                love.graphics.arc("line", "open", s.x, s.y - 8, 17, s.attackAngle - 0.9, s.attackAngle + 0.9)
+            end
             love.graphics.setColor(1, s.hitFlash > 0 and 0.4 or 1, s.hitFlash > 0 and 0.4 or 1, 1)
-            love.graphics.draw(atlasImg, sQuad, math.floor(s.x), math.floor(s.y), 0, s.meta.scale * s.facing, s.meta.scale, anim.w / 2, anim.h)
+            SummonArt.draw(s.slot.ring, math.floor(x), math.floor(y), heroHeight * s.meta.size, s.facing, strike)
+            if s.meta.family ~= "archer" and s.attackTime > 0 then
+                local col = s.meta.rank == 4 and s.meta.accent
+                    or (s.meta.family == "shield" and markColor or TIER_COLORS[s.meta.tier])
+                love.graphics.setColor(col[1], col[2], col[3], 0.66 * s.attackTime / 0.23)
+                love.graphics.setLineWidth(2)
+                love.graphics.arc("line", "open", x, y - 11, s.meta.reach + 5, s.attackAngle - 0.64, s.attackAngle + 0.64)
+            end
         elseif item.kind == "enemy" then
             local e = item.ref
             local anim = quads.anims[e.animKey]
@@ -1378,11 +1505,13 @@ local function drawBattle()
             love.graphics.ellipse("fill", e.x, e.y + 2, e.radius, e.radius * 0.4)
             love.graphics.setColor(1, e.hitFlash > 0 and 0.3 or 1, e.hitFlash > 0 and 0.3 or 1, 1)
             love.graphics.draw(atlasImg, anim.run[ef], math.floor(e.x), math.floor(e.y), 0, e.scale * e.facing, e.scale, anim.w / 2, anim.h)
-            local bw = e.isBoss and 64 or 28
-            love.graphics.setColor(0.1, 0.1, 0.15, 0.85)
-            love.graphics.rectangle("fill", e.x - bw / 2, e.y - e.scale * anim.h - 6, bw, 5)
-            love.graphics.setColor(0.95, 0.28, 0.35, 1)
-            love.graphics.rectangle("fill", e.x - bw / 2, e.y - e.scale * anim.h - 6, bw * math.max(0, e.hp / e.maxHp), 5)
+            if e.isBoss or e.hp < e.maxHp then
+                local bw = e.isBoss and 60 or 20
+                love.graphics.setColor(0.1, 0.1, 0.15, 0.85)
+                love.graphics.rectangle("fill", e.x - bw / 2, e.y - e.scale * anim.h - 5, bw, 3)
+                love.graphics.setColor(0.95, 0.28, 0.35, 1)
+                love.graphics.rectangle("fill", e.x - bw / 2, e.y - e.scale * anim.h - 5, bw * math.max(0, e.hp / e.maxHp), 3)
+            end
             if isMarked(e) then
                 local x, y = math.floor(e.x), math.floor(e.y - e.scale * anim.h - 14)
                 love.graphics.setColor(markColor)
@@ -1393,12 +1522,16 @@ local function drawBattle()
 
     for _, p in ipairs(projectiles) do
         love.graphics.setColor(p.col[1], p.col[2], p.col[3], 1)
-        love.graphics.circle("fill", p.x, p.y, 4.5)
+        love.graphics.setLineWidth(2)
+        love.graphics.line(p.x - p.vx * 0.025, p.y - p.vy * 0.025, p.x, p.y)
     end
     for _, ep in ipairs(enemyProjectiles) do
         love.graphics.setColor(1.0, 0.42, 0.15, 1)
         love.graphics.circle("fill", ep.x, ep.y, 5.5)
     end
+    drawEffects()
+    love.graphics.pop()
+    drawRaidMap(cameraX, cameraY)
 
     -- 상단 전투 HUD
     love.graphics.setColor(0.10, 0.08, 0.16, 0.94)
@@ -1423,7 +1556,7 @@ local function drawBattle()
     love.graphics.print("WASD / Arrows", 800, 9)
     love.graphics.print("Auto flasks " .. potions.heal .. "/" .. potions.frenzy .. "/" .. potions.soul, 800, 28)
     love.graphics.setColor(markColor)
-    love.graphics.print(synergyText(runSynergies), 505, 28)
+    if runSynergies.markedShot then love.graphics.print(markedShotLabel, 505, 28) end
     if nextWaveIn then
         love.graphics.printf("Next: " .. Waves[raidWave + 1].name, 0, 57, 960, "center")
     else
@@ -1466,11 +1599,17 @@ end
 
 local function drawRingRewards()
     drawChoiceHeading("DUNGEON CLEARED", "Choose one ring to bring back to Camp", markColor)
-    for index, id in ipairs(ringRewards) do
-        local summon = UNIT_DB[id]
-        drawChoiceCard(index, "[" .. summon.tier .. "] " .. summon.name,
-            "#" .. string.upper(summonTag(summon)) .. "\n" .. summon.atk .. " ATK   /   " .. summon.hp .. " HP",
-            TIER_COLORS[summon.tier])
+    for index, ring in ipairs(ringRewards) do
+        local summon = UNIT_DB[ring.id]
+        local x = choiceCards.x + (index - 1) * (choiceCards.width + choiceCards.gap)
+        local y = choiceCards.y
+        local ringStats = Catalog.stats(ring)
+        drawChoiceCard(index, "[" .. summon.tier .. "] " .. summon.name, "", TIER_COLORS[summon.tier])
+        love.graphics.setColor(1, 1, 1)
+        SummonArt.draw(ring, x + 55, y + 120, 67)
+        local details = Catalog.equipment(ring).name .. "\n" .. ringStats.limit
+            .. " max / " .. ringStats.cooldown .. "s respawn"
+        love.graphics.printf(details, x + 93, y + 71, choiceCards.width - 104, "center")
     end
     love.graphics.setColor(0.89, 0.90, 0.96)
     local loot = dungeonLootEarned
@@ -1486,12 +1625,13 @@ function love.draw()
         return
     end
     love.graphics.push()
-    if shakeTimer > 0 and mode ~= "levelup" and mode ~= "reward" then
+    if shakeTimer > 0 and mode == "camp" then
         love.graphics.translate((math.random() - 0.5) * shakeMag, (math.random() - 0.5) * shakeMag)
     end
 
     if mode == "camp" then
         drawCamp()
+        drawEffects()
     elseif mode == "battle" or mode == "levelup" or mode == "reward" then
         drawBattle()
     elseif mode == "gameover" then
@@ -1502,15 +1642,6 @@ function love.draw()
         love.graphics.printf("FALLEN IN DUNGEON STAGE " .. dungeonStage .. " (You keep all looted materials!)", 0, 220, 960, "center")
         love.graphics.setColor(1, 1, 1, 1)
         love.graphics.printf("Click or Press [SPACE] to return to Camp, Gacha/Enhance & Retry!", 0, 265, 960, "center")
-    end
-
-    for _, p in ipairs(particles) do
-        love.graphics.setColor(p.col[1], p.col[2], p.col[3], math.max(0, p.life / p.maxLife))
-        love.graphics.rectangle("fill", p.x, p.y, p.size, p.size)
-    end
-    for _, pt in ipairs(popTexts) do
-        love.graphics.setColor(pt.col[1], pt.col[2], pt.col[3], math.max(0, pt.life / pt.maxLife))
-        love.graphics.print(pt.text, pt.x - 16, pt.y)
     end
 
     if mode == "levelup" then drawLevelUp()
