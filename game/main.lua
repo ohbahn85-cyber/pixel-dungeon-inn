@@ -7,6 +7,7 @@ local Progress = require("run_progress")
 local Waves = require("raid_waves")
 local Catalog = require("summon_catalog")
 local SummonArt = require("summon_art")
+local GraveFire = require("grave_fire")
 local CharacterPreview = require("character_preview")
 
 local atlasImg
@@ -86,7 +87,7 @@ local nextWaveIn, ringRewards
 local xpColor = { 0.40, 0.83, 1.0 }
 local markColor = { 0.97, 0.74, 0.39 }
 
-local bannerMsg = "Three starter rings are equipped. Enter the dungeon when ready."
+local bannerMsg = "Grave Flame is in your inventory. Select it and equip its ring to try it."
 local bannerCol = {0.55, 1.0, 0.72}
 
 local activeSummons, raidRings = {}, {}
@@ -95,6 +96,7 @@ local raidHeroHeight = 128 * 0.4 * raidHeroScale
 local enemies = {}
 local projectiles = {}
 local enemyProjectiles = {}
+local graveFire = GraveFire.new()
 local lootDrops = {}
 local particles = {}
 local popTexts = {}
@@ -163,9 +165,9 @@ function love.load()
         enemy_boss   = { idle = makeAnimQuads(16, 380, 32, 36, 4),  run = makeAnimQuads(144, 380, 32, 36, 4), w = 32, h = 36 },
     }
 
-    for _, id in ipairs(Catalog.options(1)) do
+    for index, id in ipairs(Catalog.options(1)) do
         local ring = Catalog.ring(id)
-        ring.equipped = true
+        ring.equipped = index <= 3
         legion[#legion + 1] = ring
     end
 end
@@ -242,13 +244,11 @@ local function equippedRings()
 end
 
 local function getSynergies(equipped)
-    local shield, archer = false, false
+    local families = {}
     for _, ring in ipairs(equipped) do
-        local family = UNIT_DB[ring.id].family
-        shield = shield or family == "shield"
-        archer = archer or family == "archer"
+        families[UNIT_DB[ring.id].family] = true
     end
-    return { markedShot = shield and archer }
+    return { markedShot = families.shield and families.archer, kindling = families.sword and families.ember }
 end
 
 local function toggleSelectedRing()
@@ -451,7 +451,7 @@ local function summonFromRing(slot)
         attackTime = 0, attackAngle = 0, walk = 0,
         guardTime = 0, lungeTime = 0, chainTime = 0, strikes = 0,
     }
-    spawnParticles(x, y - 8, meta.rank == 4 and meta.accent or TIER_COLORS[meta.tier], 5, 70)
+    spawnParticles(x, y - 8, (meta.fire or meta.rank == 4) and meta.accent or TIER_COLORS[meta.tier], 5, 70)
 end
 
 local function updateRingSummons(dt)
@@ -470,6 +470,7 @@ local function beginRaidWave(wave)
     raidWave, nextWaveIn = wave, nil
     enemies = Waves.spawn(wave, dungeonStage, necro.x, necro.y)
     projectiles, enemyProjectiles = {}, {}
+    graveFire = GraveFire.new()
 end
 
 local function startDungeonRun()
@@ -499,7 +500,9 @@ end
 
 local function openRingRewards()
     ringRewards = {}
-    for index, id in ipairs(Catalog.options(dungeonStage == 1 and 2 or 3)) do
+    local options = Catalog.options(dungeonStage == 1 and 2 or 3)
+    for index = 1, 3 do
+        local id = table.remove(options, math.random(#options))
         ringRewards[index] = Catalog.ring(id, math.random(2))
     end
     mode = "reward"
@@ -673,11 +676,18 @@ local function strikeWithSummon(summon, target, damage)
             summon.chainTime = 1.6
             damage = damage + math.floor(summon.atk * 0.75)
         end
+        if runSynergies.kindling and target.burning then
+            damage = damage + math.floor(damage * (0.30 + 0.15 * (run.ranks.kindling or 0)))
+        end
         target.lastSword, target.lastSwordTime = summon, timeAcc
         hitWithSummon(summon, target, damage)
         if meta.rank >= 3 and target.hp <= 0 then
             summon.lungeTime, summon.cdTimer = 0.32, math.min(0.24, summon.cdTimer)
         end
+    elseif meta.fire then
+        local center = GraveFire.cast(graveFire, summon, target, enemies, damage)
+        summon.attackAngle = directionTo(summon, center)
+        summon.facing = center.x >= summon.x and 1 or -1
     else
         shootArrow(summon, target, damage, true)
         if meta.rank >= 3 and isMarked(target) then
@@ -770,7 +780,7 @@ local function updateSummon(summon, dt, spdMult)
                 local damage = math.floor(summon.atk * (1 + 0.20 * (run.ranks.summon or 0)))
                 strikeWithSummon(summon, target, damage)
             end
-            if meta.family == "archer" and distance < 52 then
+            if (meta.family == "archer" or meta.fire) and distance < 52 then
                 mx, my = -math.cos(angle) * 65, -math.sin(angle) * 65
             end
         else
@@ -818,6 +828,7 @@ local function updateBattle(dt)
     for _, enemy in ipairs(enemies) do
         if enemy.markTimer then enemy.markTimer = math.max(0, enemy.markTimer - dt) end
     end
+    GraveFire.update(graveFire, enemies, dt, hitWithSummon)
 
     local dx, dy = Starter.movementInput()
     necro.moving = dx ~= 0 or dy ~= 0
@@ -938,7 +949,7 @@ local function updateBattle(dt)
                     })
                 end
             else
-                local speed = distance > e.radius + 9 and e.spd or 0
+                local speed = distance > e.radius + 9 and e.spd * (1 - (e.burnSlow or 0)) or 0
                 e.x, e.y = Waves.clamp(e.x + (math.cos(ang) * speed + sx) * dt,
                     e.y + (math.sin(ang) * speed + sy) * dt)
                 if distance < e.radius + 16 and e.cdTimer <= 0 then
@@ -1010,6 +1021,7 @@ local function updateBattle(dt)
         elseif not nextWaveIn then
             nextWaveIn = waveRespite
             projectiles, enemyProjectiles = {}, {}
+            graveFire = GraveFire.new()
         else
             nextWaveIn = nextWaveIn - dt
             if nextWaveIn <= 0 then beginRaidWave(raidWave + 1) end
@@ -1173,6 +1185,12 @@ local function draw0x72MeleeWeapon(cx, cy, scale, swingRatio)
 end
 
 local markedShotLabel = "Shield + Archer: Marked Shot"
+local kindlingLabel = "Sword + Flame: +30% vs burning"
+
+local function ringDisplayName(ring)
+    local item = Catalog.equipment(ring)
+    return item and item.name or Catalog.stats(ring).name
+end
 
 local function drawCamp()
     local deployed = equippedRings()
@@ -1282,11 +1300,19 @@ local function drawCamp()
     )
 
     love.graphics.setColor(0.85, 0.88, 0.95, 1)
-    local ringDetails = selStats and (Catalog.equipment(selU).name .. "  /  " .. selStats.bonus) or (#legion .. " rings owned")
+    local ringDetails = selStats and (ringDisplayName(selU) .. "  /  " .. selStats.bonus) or (#legion .. " rings owned")
     love.graphics.print(ringDetails, 308, 215)
+    if selMeta and selMeta.fire then
+        love.graphics.setColor(selMeta.fire.color)
+        love.graphics.print("[" .. selMeta.tier .. "] " .. selMeta.fire.trait, 620, 500)
+    end
     if synergies.markedShot then
         love.graphics.setColor(markColor)
         love.graphics.print(markedShotLabel, 308, 500)
+    end
+    if synergies.kindling then
+        love.graphics.setColor(1, 0.62, 0.31)
+        love.graphics.print(kindlingLabel, 308, 519)
     end
     drawBtn(730, 212, 106, 22, selU and selU.equipped and "UNEQUIP" or "EQUIP RING", nil,
         {0.16, 0.26, 0.25}, {0.49, 0.81, 0.70})
@@ -1318,7 +1344,7 @@ local function drawCamp()
 
             love.graphics.setColor(tc[1], tc[2], tc[3], 1)
             local name = "[" .. meta.tier .. "] " .. meta.name
-            local stats = "ATK " .. uAtk .. "  HP " .. hp
+            local stats = (meta.fire and "BURN " or "ATK ") .. uAtk .. "  HP " .. hp
             local ringStats = Catalog.stats(u)
             local limits = ringStats.limit .. " max / " .. ringStats.cooldown .. "s / +" .. ringStats.speed .. "%"
             local font = love.graphics.getFont()
@@ -1403,6 +1429,7 @@ local function drawBattle()
     end
     love.graphics.translate(-cameraX, -cameraY)
     drawRaidFloor(cameraX, cameraY)
+    GraveFire.drawPatches(graveFire)
 
     -- 전리품 드랍 (0x72 해골 / 플라스크 / 코인 도트 아이콘)
     for _, l in ipairs(lootDrops) do
@@ -1471,6 +1498,7 @@ local function drawBattle()
         elseif item.kind == "summon" then
             local s = item.ref
             local bob = s.moving and math.abs(math.sin(s.walk)) * 1.6 or 0
+            if s.meta.fire then bob = 7 + math.sin(timeAcc * 5 + s.slot.index * 1.7) * 3 end
             local strike = math.sin(s.attackTime / 0.23 * math.pi)
             local x = s.x + math.cos(s.attackAngle) * strike * 5
             local y = s.y + math.sin(s.attackAngle) * strike * 5 - bob
@@ -1490,7 +1518,7 @@ local function drawBattle()
             end
             love.graphics.setColor(1, s.hitFlash > 0 and 0.4 or 1, s.hitFlash > 0 and 0.4 or 1, 1)
             SummonArt.draw(s.slot.ring, math.floor(x), math.floor(y), heroHeight * s.meta.size, s.facing, strike)
-            if s.meta.family ~= "archer" and s.attackTime > 0 then
+            if not s.meta.fire and s.meta.family ~= "archer" and s.attackTime > 0 then
                 local col = s.meta.rank == 4 and s.meta.accent
                     or (s.meta.family == "shield" and markColor or TIER_COLORS[s.meta.tier])
                 love.graphics.setColor(col[1], col[2], col[3], 0.66 * s.attackTime / 0.23)
@@ -1520,6 +1548,7 @@ local function drawBattle()
         end
     end
 
+    GraveFire.drawEmbers(graveFire)
     for _, p in ipairs(projectiles) do
         love.graphics.setColor(p.col[1], p.col[2], p.col[3], 1)
         love.graphics.setLineWidth(2)
@@ -1557,6 +1586,10 @@ local function drawBattle()
     love.graphics.print("Auto flasks " .. potions.heal .. "/" .. potions.frenzy .. "/" .. potions.soul, 800, 28)
     love.graphics.setColor(markColor)
     if runSynergies.markedShot then love.graphics.print(markedShotLabel, 505, 28) end
+    if runSynergies.kindling then
+        love.graphics.setColor(1, 0.62, 0.31)
+        love.graphics.print("Kindling", 716, 28)
+    end
     if nextWaveIn then
         love.graphics.printf("Next: " .. Waves[raidWave + 1].name, 0, 57, 960, "center")
     else
@@ -1607,7 +1640,7 @@ local function drawRingRewards()
         drawChoiceCard(index, "[" .. summon.tier .. "] " .. summon.name, "", TIER_COLORS[summon.tier])
         love.graphics.setColor(1, 1, 1)
         SummonArt.draw(ring, x + 55, y + 120, 67)
-        local details = Catalog.equipment(ring).name .. "\n" .. ringStats.limit
+        local details = ringDisplayName(ring) .. "\n" .. ringStats.limit
             .. " max / " .. ringStats.cooldown .. "s respawn"
         love.graphics.printf(details, x + 93, y + 71, choiceCards.width - 104, "center")
     end

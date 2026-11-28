@@ -44,20 +44,38 @@ local families = {
             { name = "Twin Fletching", bonus = "+20% base damage after piercing from B rank", limit = 2, cooldown = 9, speed = 0, markedRange = 0, pierce = 0.20 },
         },
     },
+    {
+        key = "ember", tag = "magic / aoe", size = 0.60, speed = 135, reach = 157, cooldown = 2.25,
+        names = { "Grave Flame", "Wake Lantern", "Ember Censer", "Violet Pyre" },
+        health = { 46, 64, 87, 122 }, damage = { 5, 7, 9, 12 },
+        fire = {
+            { radius = 34, duration = 2.0, color = {1, 0.77, 0.27}, trait = "Sets the ground alight" },
+            { radius = 44, duration = 2.4, color = {1, 0.53, 0.23}, trait = "Wider, longer fires" },
+            { radius = 48, duration = 2.6, color = {1, 0.35, 0.49}, slow = 0.22, trait = "Fires slow foes by 22%" },
+            { radius = 54, duration = 2.8, color = {0.76, 0.46, 1}, slow = 0.22, spread = true,
+                trait = "First burn kill spreads fire" },
+        },
+        rings = {
+            { name = "Cinder Ring", bonus = "+15% fire radius", limit = 1, cooldown = 6, speed = 20, radius = 0.15, duration = 0 },
+            { name = "Ash Nest Ring", bonus = "+0.75s fire duration", limit = 2, cooldown = 10, speed = 0, radius = 0, duration = 0.75 },
+        },
+    },
 }
 
 for familyIndex, family in ipairs(families) do
     for rank, tier in ipairs(tiers) do
         local id = (familyIndex - 1) * #tiers + rank
+        local fire = family.fire and family.fire[rank]
         Catalog[id] = {
             id = id, family = family.key, familyIndex = familyIndex, tag = family.tag,
             name = family.names[rank], tier = tier, rank = rank,
             nextId = rank < #tiers and id + 1 or nil,
             hp = family.health[rank], atk = family.damage[rank], spd = family.speed,
-            reach = family.reach, cd = family.cooldown, size = family.size, accent = family.accent,
+            reach = family.reach, cd = family.cooldown, size = family.size, accent = fire and fire.color or family.accent,
+            fire = fire,
         }
     end
-    for variant, kit in ipairs(family.gearNames) do
+    for variant, kit in ipairs(family.gearNames or {}) do
         for rank, item in ipairs(kit) do
             kit[rank] = {
                 id = ((familyIndex - 1) * 2 + variant - 1) * #tiers + rank,
@@ -77,11 +95,14 @@ end
 
 function Catalog.equipment(ring)
     local summon = Catalog[ring.id]
-    return families[summon.familyIndex].gearNames[ring.variation or 1][summon.rank]
+    local gear = families[summon.familyIndex].gearNames
+    return gear and gear[ring.variation or 1][summon.rank]
 end
 
 function Catalog.options(rank)
-    return { rank, rank + #tiers, rank + 2 * #tiers }
+    local options = {}
+    for index = 1, #families do options[index] = (index - 1) * #tiers + rank end
+    return options
 end
 
 return Catalog

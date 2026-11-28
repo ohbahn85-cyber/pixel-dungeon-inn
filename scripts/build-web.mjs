@@ -92,6 +92,7 @@ const html = `<!doctype html>
       <strong>Character</strong>에서 방향 카드를 눌러 외형을 확인하세요.
       <strong>Dungeon</strong>에서는 WASD 또는 방향키로 걸으세요. 사거리 안에 표적이 들어오면 자동으로 공격해요.
       <strong>Camp</strong>에서 시작 반지 3개로 바로 출전할 수 있어요. 해골들이 알아서 싸우는 동안 포위를 피하고, 파란 경험치를 모아 강화하세요. 세 웨이브를 모두 넘기면 반지 하나를 골라 가져와요.
+      무덤불을 써보려면 Camp에서 <strong>Grave Flame</strong>을 고르고 <strong>Equip Ring</strong>을 누르세요.
     </div>
 
     <script type="text/javascript">

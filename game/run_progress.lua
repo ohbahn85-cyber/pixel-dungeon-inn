@@ -6,6 +6,7 @@ local upgrades = {
     { id = "speed", name = "Fleet Bones", description = "Increase base movement speed by 10%." },
     { id = "summon", name = "Legion Focus", description = "Summons deal 20% more base damage." },
     { id = "shot", name = "Silver Fletching", description = "Marked Shot bonus damage increases by 25% of base shot damage.", requires = "markedShot" },
+    { id = "kindling", name = "Ember Edge", description = "Sword Skeletons deal another +15% damage to burning foes.", requires = "kindling" },
 }
 
 function Progress.new()
