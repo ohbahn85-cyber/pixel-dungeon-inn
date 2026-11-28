@@ -8,6 +8,7 @@ local Waves = require("raid_waves")
 local Catalog = require("summon_catalog")
 local SummonArt = require("summon_art")
 local GraveFire = require("grave_fire")
+local Roles = require("summon_roles")
 local CharacterPreview = require("character_preview")
 
 local atlasImg
@@ -87,7 +88,7 @@ local nextWaveIn, ringRewards
 local xpColor = { 0.40, 0.83, 1.0 }
 local markColor = { 0.97, 0.74, 0.39 }
 
-local bannerMsg = "Grave Flame is in your inventory. Select it and equip its ring to try it."
+local bannerMsg = "Select a summon in the inventory, then Equip Ring to take it into a raid."
 local bannerCol = {0.55, 1.0, 0.72}
 
 local activeSummons, raidRings = {}, {}
@@ -97,6 +98,8 @@ local enemies = {}
 local projectiles = {}
 local enemyProjectiles = {}
 local graveFire = GraveFire.new()
+local roleEffects = Roles.new()
+local omenXpReadyAt = 0
 local lootDrops = {}
 local particles = {}
 local popTexts = {}
@@ -248,7 +251,12 @@ local function getSynergies(equipped)
     for _, ring in ipairs(equipped) do
         families[UNIT_DB[ring.id].family] = true
     end
-    return { markedShot = families.shield and families.archer, kindling = families.sword and families.ember }
+    return {
+        markedShot = families.shield and families.archer, kindling = families.sword and families.ember,
+        searing = families.ember and families.spider, tailwind = families.moth and families.archer,
+        bulwark = families.doll and families.shield, snare = families.wraith and families.spider,
+        omen = families.raven and families.mole,
+    }
 end
 
 local function toggleSelectedRing()
@@ -471,6 +479,7 @@ local function beginRaidWave(wave)
     enemies = Waves.spawn(wave, dungeonStage, necro.x, necro.y)
     projectiles, enemyProjectiles = {}, {}
     graveFire = GraveFire.new()
+    roleEffects = Roles.new()
 end
 
 local function startDungeonRun()
@@ -486,6 +495,8 @@ local function startDungeonRun()
     necro.moving = false
     necro.swingTimer, necro.swingCooldown, necro.swingPending = 0, 0, false
     necro.invulnTimer = 0.6
+    necro.hasteUntil, necro.barrierUntil = 0, 0
+    omenXpReadyAt = 0
     necro.frenzyTimer = 0; necro.soulBoostTimer = 0
     dungeonLootEarned = { souls = 0, bones = 0, herbs = 0, iron = 0 }
     activeSummons, raidRings, lootDrops, particles, popTexts = {}, {}, {}, {}, {}
@@ -688,6 +699,10 @@ local function strikeWithSummon(summon, target, damage)
         local center = GraveFire.cast(graveFire, summon, target, enemies, damage)
         summon.attackAngle = directionTo(summon, center)
         summon.facing = center.x >= summon.x and 1 or -1
+    elseif meta.family == "spider" then
+        summon.fuseTime, summon.fuseDamage = 0.32, damage
+    elseif meta.ability then
+        Roles.strike(roleEffects, summon, target, enemies, damage, hitWithSummon, timeAcc, runSynergies)
     else
         shootArrow(summon, target, damage, true)
         if meta.rank >= 3 and isMarked(target) then
@@ -714,14 +729,16 @@ local function damageSummon(summon, damage, enemy, fromX, fromY)
             end
         end
     end
-    summon.hp = summon.hp - damage
+    summon.hp = summon.hp - Roles.absorb(summon, damage, timeAcc)
     summon.hitFlash = 0.1
 end
 
 local function damageNecro(damage)
     if necro.invulnTimer > 0 then return end
+    damage = Roles.absorb(necro, damage, timeAcc)
     necro.hp = necro.hp - damage
     necro.invulnTimer = 0.45
+    if damage == 0 then return end
     addShake(0.13, 5)
     spawnPop(necro.x, necro.y - 42, "-" .. damage, {1, 0.3, 0.3})
 end
@@ -744,18 +761,36 @@ end
 
 local function updateSummon(summon, dt, spdMult)
     local meta, stats = summon.meta, summon.slot.stats
-    summon.cdTimer = math.max(0, summon.cdTimer - dt * spdMult)
+    local attackHaste, moveHaste = Roles.haste(summon, timeAcc)
+    summon.cdTimer = math.max(0, summon.cdTimer - dt * spdMult * (1 + attackHaste))
     summon.attackTime = math.max(0, summon.attackTime - dt)
     summon.hitFlash = math.max(0, summon.hitFlash - dt)
     summon.guardTime = math.max(0, summon.guardTime - dt)
     summon.lungeTime = math.max(0, summon.lungeTime - dt)
     summon.chainTime = math.max(0, summon.chainTime - dt)
+    if summon.fuseTime then
+        summon.moving = false
+        summon.fuseTime = summon.fuseTime - dt * (1 + attackHaste)
+        if summon.fuseTime <= 0 then
+            Roles.explode(roleEffects, summon, summon.fuseDamage, enemies, hitWithSummon, timeAcc, runSynergies.searing)
+        end
+        return
+    end
+    if meta.support and summon.cdTimer <= 0 then
+        local used
+        if meta.family == "mole" then
+            used = Roles.collect(roleEffects, summon, lootDrops)
+        elseif meta.family == "doll" or Targeting.nearest(enemies, summon.x, summon.y, 285) then
+            used = Roles.support(roleEffects, summon, activeSummons, necro, runSynergies, timeAcc, spawnPop)
+        end
+        if used then summon.cdTimer = meta.cd / (1 + stats.speed / 100) end
+    end
 
     local dx, dy = necro.x - summon.x, necro.y - summon.y
     local leash = dx * dx + dy * dy
     local target, distance
     local reach = meta.reach
-    if leash < 305 * 305 then
+    if not meta.support and leash < 305 * 305 then
         if meta.family == "archer" and runSynergies.markedShot then
             reach = reach * (1 + stats.markedRange)
             target, distance = Targeting.nearest(enemies, summon.x, summon.y, reach, isMarked)
@@ -780,7 +815,7 @@ local function updateSummon(summon, dt, spdMult)
                 local damage = math.floor(summon.atk * (1 + 0.20 * (run.ranks.summon or 0)))
                 strikeWithSummon(summon, target, damage)
             end
-            if (meta.family == "archer" or meta.fire) and distance < 52 then
+            if (meta.family == "archer" or meta.fire or meta.family == "raven" or meta.family == "wraith") and distance < 52 then
                 mx, my = -math.cos(angle) * 65, -math.sin(angle) * 65
             end
         else
@@ -805,7 +840,7 @@ local function updateSummon(summon, dt, spdMult)
         end
     end
 
-    summon.x, summon.y = Waves.clamp(summon.x + mx * dt, summon.y + my * dt)
+    summon.x, summon.y = Waves.clamp(summon.x + mx * (1 + moveHaste) * dt, summon.y + my * (1 + moveHaste) * dt)
     summon.moving = math.abs(mx) > 9 or math.abs(my) > 9
     if summon.moving then summon.walk = summon.walk + dt * 16 end
 end
@@ -820,8 +855,9 @@ local function chooseRunUpgrade(index)
 end
 
 local function updateBattle(dt)
+    local heroHaste, heroMoveHaste = Roles.haste(necro, timeAcc)
     necro.swingTimer = math.max(0, necro.swingTimer - dt)
-    necro.swingCooldown = math.max(0, necro.swingCooldown - dt)
+    necro.swingCooldown = math.max(0, necro.swingCooldown - dt * (1 + heroHaste))
     necro.invulnTimer = math.max(0, necro.invulnTimer - dt)
     necro.frenzyTimer = math.max(0, necro.frenzyTimer - dt)
     necro.soulBoostTimer = math.max(0, necro.soulBoostTimer - dt)
@@ -829,13 +865,14 @@ local function updateBattle(dt)
         if enemy.markTimer then enemy.markTimer = math.max(0, enemy.markTimer - dt) end
     end
     GraveFire.update(graveFire, enemies, dt, hitWithSummon)
+    Roles.update(roleEffects, dt, timeAcc, enemies, hitWithSummon)
 
     local dx, dy = Starter.movementInput()
     necro.moving = dx ~= 0 or dy ~= 0
     if dx ~= 0 then necro.facing = dx > 0 and 1 or -1 end
     local oldX, oldY = necro.x, necro.y
     necro.direction = Starter.facing(dx, dy, necro.direction)
-    local speed = 190 * (1 + 0.10 * (run.ranks.speed or 0))
+    local speed = 190 * (1 + 0.10 * (run.ranks.speed or 0)) * (1 + heroMoveHaste)
     necro.x, necro.y = Waves.clamp(necro.x + dx * speed * dt, necro.y + dy * speed * dt)
     local movedX, movedY = necro.x - oldX, necro.y - oldY
     local distance = math.sqrt(movedX * movedX + movedY * movedY)
@@ -901,7 +938,11 @@ local function updateBattle(dt)
         e.hitFlash = math.max(0, e.hitFlash - dt)
 
         if e.hp <= 0 then
-            table.insert(lootDrops, { x = e.x, y = e.y + 7, kind = "xp", amount = e.isBoss and 8 or 1, col = xpColor })
+            local amount = e.isBoss and 8 or 1
+            if runSynergies.omen and timeAcc >= omenXpReadyAt and Roles.cursed(e, timeAcc) then
+                amount, omenXpReadyAt = amount + 1, timeAcc + 4
+            end
+            table.insert(lootDrops, { x = e.x, y = e.y + 7, kind = "xp", amount = amount, col = xpColor })
             local mult = (necro.soulBoostTimer > 0) and 2 or 1
             local sDrop = (e.isBoss and (80 + dungeonStage * 25) or (4 + dungeonStage)) * mult
             table.insert(lootDrops, { x = e.x, y = e.y, kind = "souls", amount = sDrop, col = {0.35, 1.0, 0.65} })
@@ -943,21 +984,21 @@ local function updateBattle(dt)
                         x = e.x, y = e.y - 14,
                         vx = math.cos(ang) * 205,
                         vy = math.sin(ang) * 205,
-                        dmg = e.atk,
+                        dmg = Roles.enemyDamage(e, timeAcc),
                         attacker = e,
                         life = 2.0,
                     })
                 end
             else
-                local speed = distance > e.radius + 9 and e.spd * (1 - (e.burnSlow or 0)) or 0
+                local speed = distance > e.radius + 9 and e.spd * (1 - Roles.enemySlow(e, timeAcc)) or 0
                 e.x, e.y = Waves.clamp(e.x + (math.cos(ang) * speed + sx) * dt,
                     e.y + (math.sin(ang) * speed + sy) * dt)
                 if distance < e.radius + 16 and e.cdTimer <= 0 then
                     e.cdTimer = 0.95
                     if target == necro then
-                        damageNecro(e.atk)
+                        damageNecro(Roles.enemyDamage(e, timeAcc))
                     else
-                        damageSummon(target, e.atk, e, e.x, e.y)
+                        damageSummon(target, Roles.enemyDamage(e, timeAcc), e, e.x, e.y)
                     end
                 end
             end
@@ -990,8 +1031,8 @@ local function updateBattle(dt)
         local l = lootDrops[i]
         local d = math.sqrt((necro.x - l.x)^2 + (necro.y - l.y)^2)
         local pickupRange = l.kind == "xp" and not cleared and 66 or magnetRange
-        if d >= 24 and d < pickupRange then
-            local travel = math.min(d, (cleared and 900 or 360) * dt)
+        if d >= 24 and (l.gathered or d < pickupRange) then
+            local travel = math.min(d, (cleared and 900 or (l.gathered and 510 or 360)) * dt)
             l.x = l.x + (necro.x - l.x) * travel / d
             l.y = l.y + (necro.y - l.y) * travel / d
             d = d - travel
@@ -1022,6 +1063,7 @@ local function updateBattle(dt)
             nextWaveIn = waveRespite
             projectiles, enemyProjectiles = {}, {}
             graveFire = GraveFire.new()
+            roleEffects = Roles.new()
         else
             nextWaveIn = nextWaveIn - dt
             if nextWaveIn <= 0 then beginRaidWave(raidWave + 1) end
@@ -1184,8 +1226,21 @@ local function draw0x72MeleeWeapon(cx, cy, scale, swingRatio)
     love.graphics.pop()
 end
 
-local markedShotLabel = "Shield + Archer: Marked Shot"
-local kindlingLabel = "Sword + Flame: +30% vs burning"
+local comboNames = {
+    {"markedShot", "Marked Shot"}, {"kindling", "Kindling"}, {"searing", "Searing Blast"},
+    {"tailwind", "Tailwind"}, {"bulwark", "Mended Bulwark"}, {"snare", "Tight Snare"}, {"omen", "Grave Omen"},
+}
+
+local function drawActiveCombos(synergies, x, y, width)
+    local names = {}
+    for _, combo in ipairs(comboNames) do
+        if synergies[combo[1]] then names[#names + 1] = combo[2] end
+    end
+    if #names == 0 then return end
+    local label = table.concat(names, "  /  ")
+    love.graphics.setColor(markColor)
+    love.graphics.print(label, x, y, 0, math.min(1, width / love.graphics.getFont():getWidth(label)), 1)
+end
 
 local function ringDisplayName(ring)
     local item = Catalog.equipment(ring)
@@ -1302,18 +1357,12 @@ local function drawCamp()
     love.graphics.setColor(0.85, 0.88, 0.95, 1)
     local ringDetails = selStats and (ringDisplayName(selU) .. "  /  " .. selStats.bonus) or (#legion .. " rings owned")
     love.graphics.print(ringDetails, 308, 215)
-    if selMeta and selMeta.fire then
-        love.graphics.setColor(selMeta.fire.color)
-        love.graphics.print("[" .. selMeta.tier .. "] " .. selMeta.fire.trait, 620, 500)
+    local selectedAbility = selMeta and (selMeta.fire or selMeta.ability)
+    if selectedAbility then
+        love.graphics.setColor(selMeta.accent)
+        love.graphics.print("[" .. selMeta.tier .. "] " .. selectedAbility.trait, 308, 500)
     end
-    if synergies.markedShot then
-        love.graphics.setColor(markColor)
-        love.graphics.print(markedShotLabel, 308, 500)
-    end
-    if synergies.kindling then
-        love.graphics.setColor(1, 0.62, 0.31)
-        love.graphics.print(kindlingLabel, 308, 519)
-    end
+    drawActiveCombos(synergies, 308, 519, 628)
     drawBtn(730, 212, 106, 22, selU and selU.equipped and "UNEQUIP" or "EQUIP RING", nil,
         {0.16, 0.26, 0.25}, {0.49, 0.81, 0.70})
     drawBtn(845, 212, 42, 22, "UP", nil, {0.2, 0.2, 0.3}, {0.5, 0.5, 0.7})
@@ -1344,14 +1393,19 @@ local function drawCamp()
 
             love.graphics.setColor(tc[1], tc[2], tc[3], 1)
             local name = "[" .. meta.tier .. "] " .. meta.name
-            local stats = (meta.fire and "BURN " or "ATK ") .. uAtk .. "  HP " .. hp
+            local stats = "ATK " .. uAtk .. "  HP " .. hp
+            if meta.fire then stats = "BURN " .. uAtk .. "  HP " .. hp end
+            if meta.family == "doll" then stats = "HEAL " .. uAtk .. "  HP " .. hp end
+            if meta.family == "moth" then stats = "HASTE " .. math.floor(meta.ability.haste * 100 + 0.5) .. "%" end
+            if meta.family == "mole" then stats = "FIND " .. meta.ability.radius .. "  HP " .. hp end
             local ringStats = Catalog.stats(u)
             local limits = ringStats.limit .. " max / " .. ringStats.cooldown .. "s / +" .. ringStats.speed .. "%"
             local font = love.graphics.getFont()
             local textX, textWidth = cx + 53, 94
             love.graphics.print(name, textX, cy + 7, 0, math.min(1, textWidth / font:getWidth(name)), 1)
             love.graphics.setColor(0.75, 0.82, 0.95, 1)
-            love.graphics.print("#" .. string.upper(meta.tag), textX, cy + 24)
+            local tags = "#" .. string.upper(meta.tag)
+            love.graphics.print(tags, textX, cy + 24, 0, math.min(1, textWidth / font:getWidth(tags)), 1)
             love.graphics.setColor(0.92, 0.95, 0.98, 1)
             love.graphics.print(stats, textX, cy + 40, 0, math.min(1, textWidth / font:getWidth(stats)), 1)
             love.graphics.setColor(u.equipped and {0.45, 1.0, 0.68} or {0.62, 0.65, 0.72})
@@ -1472,7 +1526,9 @@ local function drawBattle()
 
     -- Y좌표 깊이 정렬 후 0x72 4프레임 애니메이션 렌더링
     local drawList = { { kind = "necro", y = necro.y } }
-    for _, s in ipairs(activeSummons) do table.insert(drawList, { kind = "summon", y = s.y, ref = s }) end
+    for _, s in ipairs(activeSummons) do
+        if s.hp > 0 then table.insert(drawList, {kind = "summon", y = s.y, ref = s}) end
+    end
     for _, e in ipairs(enemies) do table.insert(drawList, { kind = "enemy", y = e.y, ref = e }) end
     table.sort(drawList, function(a, b) return a.y < b.y end)
 
@@ -1498,12 +1554,25 @@ local function drawBattle()
         elseif item.kind == "summon" then
             local s = item.ref
             local bob = s.moving and math.abs(math.sin(s.walk)) * 1.6 or 0
-            if s.meta.fire then bob = 7 + math.sin(timeAcc * 5 + s.slot.index * 1.7) * 3 end
+            if s.meta.fire or s.meta.family == "moth" or s.meta.family == "wraith" or s.meta.family == "raven" then
+                bob = 7 + math.sin(timeAcc * 5 + s.slot.index * 1.7) * 3
+            end
             local strike = math.sin(s.attackTime / 0.23 * math.pi)
             local x = s.x + math.cos(s.attackAngle) * strike * 5
             local y = s.y + math.sin(s.attackAngle) * strike * 5 - bob
             love.graphics.setColor(0.04, 0.03, 0.08, 0.42)
             love.graphics.ellipse("fill", s.x, s.y + 2, 10, 4)
+            if s.fuseTime then
+                local radius = s.meta.ability.radius + (s.slot.stats.radius or 0)
+                love.graphics.setColor(1, 0.36, 0.16, 0.62 - s.fuseTime)
+                love.graphics.setLineWidth(1)
+                love.graphics.circle("line", s.x, s.y, radius, 24)
+            end
+            if Roles.barrier(s, timeAcc) > 0 then
+                love.graphics.setColor(0.36, 1, 0.70, 0.6)
+                love.graphics.setLineWidth(1)
+                love.graphics.ellipse("line", s.x, s.y - 14, 16, 21)
+            end
             if s.meta.rank == 4 then
                 local col = s.meta.accent
                 love.graphics.setColor(col[1], col[2], col[3], 0.62)
@@ -1518,7 +1587,7 @@ local function drawBattle()
             end
             love.graphics.setColor(1, s.hitFlash > 0 and 0.4 or 1, s.hitFlash > 0 and 0.4 or 1, 1)
             SummonArt.draw(s.slot.ring, math.floor(x), math.floor(y), heroHeight * s.meta.size, s.facing, strike)
-            if not s.meta.fire and s.meta.family ~= "archer" and s.attackTime > 0 then
+            if not s.meta.fire and not s.meta.ability and s.meta.family ~= "archer" and s.attackTime > 0 then
                 local col = s.meta.rank == 4 and s.meta.accent
                     or (s.meta.family == "shield" and markColor or TIER_COLORS[s.meta.tier])
                 love.graphics.setColor(col[1], col[2], col[3], 0.66 * s.attackTime / 0.23)
@@ -1545,9 +1614,14 @@ local function drawBattle()
                 love.graphics.setColor(markColor)
                 love.graphics.polygon("fill", x, y - 5, x + 5, y, x, y + 5, x - 5, y)
             end
+            if Roles.cursed(e, timeAcc) then
+                love.graphics.setColor(0.97, 0.37, 0.67, 0.86)
+                love.graphics.rectangle("fill", math.floor(e.x + 9), math.floor(e.y - e.scale * anim.h - 11), 4, 4)
+            end
         end
     end
 
+    Roles.draw(roleEffects)
     GraveFire.drawEmbers(graveFire)
     for _, p in ipairs(projectiles) do
         love.graphics.setColor(p.col[1], p.col[2], p.col[3], 1)
@@ -1584,12 +1658,13 @@ local function drawBattle()
     love.graphics.setColor(0.68, 0.80, 0.87)
     love.graphics.print("WASD / Arrows", 800, 9)
     love.graphics.print("Auto flasks " .. potions.heal .. "/" .. potions.frenzy .. "/" .. potions.soul, 800, 28)
-    love.graphics.setColor(markColor)
-    if runSynergies.markedShot then love.graphics.print(markedShotLabel, 505, 28) end
-    if runSynergies.kindling then
-        love.graphics.setColor(1, 0.62, 0.31)
-        love.graphics.print("Kindling", 716, 28)
+    drawActiveCombos(runSynergies, 205, 33, 582)
+    local guard = Roles.barrier(necro, timeAcc)
+    if guard > 0 then
+        love.graphics.setColor(0.36, 1, 0.7)
+        love.graphics.print("Barrier " .. guard, 28, 35, 0, 0.85, 0.85)
     end
+    love.graphics.setColor(markColor)
     if nextWaveIn then
         love.graphics.printf("Next: " .. Waves[raidWave + 1].name, 0, 57, 960, "center")
     else

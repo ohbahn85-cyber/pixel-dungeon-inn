@@ -2,7 +2,7 @@ local Catalog = require("summon_catalog")
 local pivots = require("assets.summon_pivots")
 
 local Art = {}
-local bodies, equipment, flames
+local bodies, equipment, flames, familiars
 
 local function loadAtlas(file, width, height, rows)
     local image = love.graphics.newImage("assets/" .. file)
@@ -20,16 +20,20 @@ function Art.load()
     bodies = loadAtlas("summon_ranks.png", 128, 112, 3)
     equipment = loadAtlas("summon_gear.png", 96, 96, 6)
     flames = loadAtlas("summon_grave_flame.png", 128, 112, 1)
+    familiars = loadAtlas("summon_familiars.png", 128, 112, 6)
 end
 
 function Art.draw(ring, x, y, height, facing, swing)
     local summon = Catalog[ring.id]
     local scale = height / 96
     local motion = swing or 0
-    if summon.fire then
+    if summon.fire or summon.artRow then
+        local atlas = summon.fire and flames or familiars
+        local index = (summon.artRow and (summon.artRow - 1) * 4 or 0) + summon.rank
         local size = scale * (0.80 + 0.05 * summon.rank)
-        love.graphics.draw(flames.image, flames.quads[summon.rank], x, y, -motion * 0.12,
-            size * (facing or 1), size, 64, 104)
+        local direction = (summon.family == "raven" or summon.family == "mole") and -1 or 1
+        love.graphics.draw(atlas.image, atlas.quads[index], x, y, -motion * 0.12,
+            size * direction * (facing or 1), size, 64, 104)
         return
     end
     local item = Catalog.equipment(ring)
