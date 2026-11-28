@@ -1,4 +1,5 @@
-local Starter = { attackDuration = 0.32, attackWindup = 0.085 }
+local Melee = require("melee_attack")
+local Starter = {}
 
 local directions = { "down", "left", "right", "up" }
 local directionKeys = {
@@ -11,25 +12,24 @@ local width, height = 120, 144
 local originX, originY = 60, 134
 local artScale = 0.4
 local walkFrames, distancePerFrame = 4, 10
-local attackWidth, attackFrames = 176, 4
-local image, attackImage
-local portraits, walking, attacking = {}, {}, {}
+local image, club
+local portraits, walking = {}, {}
+local grips = {
+    down = {{77, 108}, {77, 98}, {77, 100}, {83, 98}, {77, 100}},
+    left = {{48, 107}, {38, 100}, {52, 101}, {39, 98}, {52, 101}},
+    right = {{72, 107}, {82, 97}, {65, 101}, {81, 97}, {65, 101}},
+    up = {{77, 107}, {81, 96}, {77, 99}, {79, 101}, {77, 101}},
+}
 
 function Starter.load()
     image = love.graphics.newImage("assets/starter_character.png")
     local imageWidth, imageHeight = image:getDimensions()
-    attackImage = love.graphics.newImage("assets/starter_attack.png")
-    local attackImageWidth, attackImageHeight = attackImage:getDimensions()
+    club = love.graphics.newImage("assets/starter_club.png")
     for i, direction in ipairs(directions) do
         portraits[direction] = love.graphics.newQuad((i - 1) * width, 0, width, height, imageWidth, imageHeight)
         walking[direction] = {}
         for frame = 0, walkFrames do
             walking[direction][frame] = love.graphics.newQuad(frame * width, i * height, width, height, imageWidth, imageHeight)
-        end
-        attacking[direction] = {}
-        for frame = 1, attackFrames do
-            attacking[direction][frame] = love.graphics.newQuad((frame - 1) * attackWidth, (i - 1) * height,
-                attackWidth, height, attackImageWidth, attackImageHeight)
         end
     end
 end
@@ -73,23 +73,23 @@ function Starter.drawPortrait(direction, x, y, scale)
     love.graphics.draw(image, portraits[direction], x, y, 0, scale, scale, originX, originY)
 end
 
-function Starter.drawWalk(direction, frame, x, y, scale)
+function Starter.drawClub(x, y, angle, scale)
     scale = scale * artScale
-    love.graphics.draw(image, walking[direction][frame], x, y, 0, scale, scale, originX, originY)
+    love.graphics.draw(club, x, y, angle + math.pi / 2, scale, scale, 7, 30)
 end
 
-function Starter.drawAttack(direction, elapsed, x, y, scale)
-    local frame = 4
-    if elapsed < Starter.attackWindup then
-        frame = 1
-    elseif elapsed < 0.145 then
-        frame = 2
-    elseif elapsed < 0.235 then
-        frame = 3
-    end
-    scale = scale * artScale
-    love.graphics.draw(attackImage, attacking[direction][frame], x, y, 0,
-        scale, scale, attackWidth / 2, originY)
+function Starter.drawArmed(direction, frame, x, y, scale, attack, drawWeapon)
+    local angle, lean = Melee.pose(attack, direction)
+    local grip = grips[direction][frame + 1]
+    local bodyScale = scale * artScale
+    local gripX, gripY = (grip[1] - originX) * bodyScale, (grip[2] - originY) * bodyScale
+    local cos, sin = math.cos(lean), math.sin(lean)
+    local handX, handY = x + gripX * cos - gripY * sin, y + gripX * sin + gripY * cos
+    local weapon = drawWeapon or Starter.drawClub
+    local behind = direction == "up" and math.sin(angle) < -0.5
+    if behind then weapon(handX, handY, angle, scale) end
+    love.graphics.draw(image, walking[direction][frame], x, y, lean, bodyScale, bodyScale, originX, originY)
+    if not behind then weapon(handX, handY, angle, scale) end
 end
 
 return Starter

@@ -1,4 +1,5 @@
 local Starter = require("starter_character")
+local Melee = require("melee_attack")
 local Targeting = require("combat_targeting")
 local Preview = {}
 
@@ -28,8 +29,8 @@ local views = {
     { id = "left", label = "Left", x = 598, y = 301 },
     { id = "right", label = "Right", x = 767, y = 301 },
 }
-local directionAngles = { down = math.pi / 2, up = -math.pi / 2, left = math.pi, right = 0 }
 local directionLabels = { down = "Down", up = "Up", left = "Left", right = "Right" }
+local attackColor = {0.90, 0.85, 0.72}
 
 local color = {
     background = { 0.064, 0.068, 0.082 },
@@ -153,7 +154,7 @@ end
 local function changeScreen(nextScreen)
     screen = nextScreen
     walker.frame, walker.distance, walker.cooldown = 0, 0, 0
-    walker.attackElapsed, walker.attackTarget = nil, nil
+    walker.attack = nil
     preferredDirection = walker.direction
     for _, target in ipairs(trainingTargets) do target.flash = 0 end
 end
@@ -211,29 +212,26 @@ function Preview.update(dt)
         target.flash = math.max(0, target.flash - dt)
     end
 
-    if walker.attackElapsed then
-        local elapsed = walker.attackElapsed + dt
-        if walker.attackElapsed < Starter.attackWindup and elapsed >= Starter.attackWindup then
-            local target = walker.attackTarget
-            local ox, oy = target.x - walker.x, target.y - walker.y
-            local reach = attackReach + target.radius
-            if ox * ox + oy * oy <= reach * reach then target.flash = 0.14 end
-        end
-        if elapsed >= Starter.attackDuration then
-            walker.attackElapsed, walker.attackTarget = nil, nil
-        else
-            walker.attackElapsed = elapsed
+    local impact
+    walker.attack, impact = Melee.advance(walker.attack, dt, x, y, trainingTargets, attackReach)
+    if impact then
+        for _, target in ipairs(trainingTargets) do
+            if Melee.contains(impact, x, y, target, attackReach) then target.flash = 0.11 end
         end
     end
 
     walker.cooldown = math.max(0, walker.cooldown - dt)
-    if walker.cooldown == 0 then
+    if not walker.attack and walker.cooldown == 0 then
         local target = Targeting.nearest(trainingTargets, walker.x, walker.y, attackReach)
         if target then
-            walker.attackTarget, walker.attackElapsed = target, 0
-            walker.attackDirection = Starter.attackFacing(target.x - walker.x, target.y - walker.y, "right")
+            walker.attack = Melee.start(x, y, target, walker.direction)
             walker.cooldown = attackCooldown
         end
+    end
+    if walker.distance == 0 and walker.attack then
+        local angle = walker.attack.angle
+        walker.direction = Starter.attackFacing(math.cos(angle), math.sin(angle), walker.direction)
+        preferredDirection = walker.direction
     end
 end
 
@@ -278,23 +276,6 @@ local function drawCharacter()
     text("WASD / Arrows   Rotate", smallFont, color.muted, 598, 477)
 end
 
-local function drawAttackTrail(x, y, direction, elapsed)
-    local progress = (elapsed - Starter.attackWindup) / 0.115
-    if progress < 0 or progress >= 1 then return end
-    local angle = directionAngles[direction]
-    local tip = angle - 0.15 + progress * 1.05
-    lg.push()
-    lg.translate(x, y - 18)
-    lg.scale(1, 0.72)
-    lg.setLineWidth(3)
-    lg.setColor(0.87, 0.78, 0.65, (1 - progress) * 0.66)
-    lg.arc("line", "open", 0, 0, 31, angle - 0.85, tip, 16)
-    lg.setLineWidth(1)
-    lg.setColor(1, 0.93, 0.79, (1 - progress) * 0.83)
-    lg.arc("line", "open", 0, 0, 32, angle - 0.75, tip, 16)
-    lg.pop()
-end
-
 local function drawTrainingTarget(target)
     local x, y = target.x, target.y
     local lit = target.flash > 0
@@ -328,14 +309,9 @@ local function drawDungeon(time)
     local x, y = math.floor(walker.x + 0.5), math.floor(walker.y + 0.5)
     lg.setColor(0.074, 0.065, 0.083, 0.60)
     lg.ellipse("fill", x, y + 1, 13, 4)
-    if walker.attackElapsed then
-        drawAttackTrail(x, y, walker.attackDirection, walker.attackElapsed)
-        lg.setColor(1, 1, 1, 1)
-        Starter.drawAttack(walker.attackDirection, walker.attackElapsed, x, y, 1)
-    else
-        lg.setColor(1, 1, 1, 1)
-        Starter.drawWalk(walker.direction, walker.frame, x, y, 1)
-    end
+    Melee.drawTrail(walker.attack, x, y - 13, attackReach, attackColor)
+    lg.setColor(1, 1, 1, 1)
+    Starter.drawArmed(walker.direction, walker.frame, x, y, 1, walker.attack)
 
     for _, target in ipairs(trainingTargets) do
         if target.y > walker.y then drawTrainingTarget(target) end
@@ -346,8 +322,7 @@ local function drawDungeon(time)
     text("WASD / Arrows   Walk", smallFont, color.text, 30, 518)
     text("Auto attack in range", smallFont, color.text, 218, 518)
     text("Esc   Character", smallFont, color.muted, 378, 518)
-    local facing = walker.attackElapsed and walker.attackDirection or walker.direction
-    text("Facing: " .. directionLabels[facing], smallFont, color.accent, 819, 518)
+    text("Facing: " .. directionLabels[walker.direction], smallFont, color.accent, 819, 518)
 end
 
 function Preview.draw(time)

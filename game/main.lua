@@ -2,6 +2,7 @@
 -- Love2D + Lua
 
 local Starter = require("starter_character")
+local Melee = require("melee_attack")
 local Targeting = require("combat_targeting")
 local Progress = require("run_progress")
 local Waves = require("raid_waves")
@@ -32,7 +33,7 @@ local potions = { heal = 2, frenzy = 1, soul = 1 }
 
 -- 0x72 에셋 기반 네크로맨서 근접 무기 5단계 (네크로맨서는 근접 무기만 가능!)
 local WEAPONS = {
-    { name = "Spiked Club", quadKey = "wp_club", baseAtk = 18, arcRadius = 62, cd = 0.38, costIron = 0, costBones = 0, col = {0.90, 0.85, 0.72} },
+    { name = "Spiked Club", baseAtk = 18, arcRadius = 62, cd = 0.38, costIron = 0, costBones = 0, col = {0.90, 0.85, 0.72} },
     { name = "Butcher Cleaver", quadKey = "wp_cleaver", baseAtk = 32, arcRadius = 74, cd = 0.35, costIron = 4, costBones = 4, col = {0.82, 0.90, 1.00} },
     { name = "Sawtooth Blade", quadKey = "wp_saw", baseAtk = 52, arcRadius = 88, cd = 0.33, costIron = 7, costBones = 7, col = {0.75, 0.50, 1.00} },
     { name = "Executioner Axe", quadKey = "wp_waraxe", baseAtk = 78, arcRadius = 102, cd = 0.31, costIron = 11, costBones = 11, col = {1.00, 0.45, 0.45} },
@@ -53,12 +54,6 @@ local necro = {
     walkDistance = 0,
     walkFrame = 0,
     moving = false,
-    swingTimer = 0,
-    swingDuration = 0.20,
-    swingAngle = 0,
-    swingDirection = "down",
-    swingFacing = 1,
-    swingPending = false,
     swingCooldown = 0,
     invulnTimer = 0,
     frenzyTimer = 0,
@@ -144,7 +139,6 @@ function love.load()
     quads.flask_blue = love.graphics.newQuad(304, 336, 16, 16, aw, ah)
 
     -- 근접 무기 5종 (0x72 정품 도트)
-    quads.wp_club    = love.graphics.newQuad(339, 39, 10, 24, aw, ah)
     quads.wp_cleaver = love.graphics.newQuad(294, 105, 5, 22, aw, ah)
     quads.wp_saw     = love.graphics.newQuad(307, 70, 10, 25, aw, ah)
     quads.wp_waraxe  = love.graphics.newQuad(324, 168, 12, 23, aw, ah)
@@ -176,6 +170,7 @@ function love.load()
 end
 
 local function addShake(dur, mag)
+    if shakeTimer <= 0 then shakeMag = 0 end
     shakeTimer = math.max(shakeTimer, dur)
     shakeMag = math.max(shakeMag, mag)
 end
@@ -493,7 +488,8 @@ local function startDungeonRun()
     necro.x, necro.y = Waves.width / 2, Waves.height / 2
     necro.direction, necro.walkFrame, necro.walkDistance = "down", 0, 0
     necro.moving = false
-    necro.swingTimer, necro.swingCooldown, necro.swingPending = 0, 0, false
+    necro.attack, necro.swingCooldown = nil, 0
+    shakeTimer, shakeMag = 0, 0
     necro.invulnTimer = 0.6
     necro.hasteUntil, necro.barrierUntil = 0, 0
     omenXpReadyAt = 0
@@ -532,53 +528,27 @@ local function chooseRingReward(index)
     setBanner(summon.name .. " ring added to inventory. Equip it for the next raid.", TIER_COLORS[summon.tier])
 end
 
-local function usesStarterSwing()
-    return necro.stage == 1 and necro.weaponIdx == 1
-end
-
 local function meleeReach(weapon)
     return weapon.arcRadius + 12 * (run.ranks.range or 0)
 end
 
-local function applyNecroMeleeSwing()
+local function applyNecroMeleeSwing(impact, reach)
     local _, atk, wp = getNecroCombatStats()
     atk = math.floor(atk * (1 + 0.25 * (run.ranks.weapon or 0)))
     local hitCount = 0
     for _, e in ipairs(enemies) do
-        local dx = e.x - necro.x
-        local dy = e.y - necro.y
-        local reach = meleeReach(wp) + e.radius
-        if e.hp > 0 and dx * dx + dy * dy <= reach * reach then
-            local angToEnemy = math.atan2(dy, dx)
-            local diff = math.atan2(math.sin(angToEnemy - necro.swingAngle), math.cos(angToEnemy - necro.swingAngle))
-            if (dx == 0 and dy == 0) or math.abs(diff) <= 1.45 then
-                e.hp = e.hp - atk
-                e.hitFlash = 0.14
-                local push = e.isBoss and 6 or 18
-                e.x, e.y = Waves.clamp(e.x + math.cos(angToEnemy) * push, e.y + math.sin(angToEnemy) * push)
-                spawnPop(e.x, e.y - 28, tostring(atk) .. "!", wp.col)
-                spawnParticles(e.x, e.y - 14, wp.col, 6, 110)
-                hitCount = hitCount + 1
-            end
+        if e.hp > 0 and Melee.contains(impact, necro.x, necro.y, e, reach) then
+            local angle = math.atan2(e.y - necro.y, e.x - necro.x)
+            local pushSpeed = e.isBoss and 71 or 212
+            e.hp = e.hp - atk
+            e.hitFlash, e.recoilTime = 0.10, 0.085
+            e.recoilX, e.recoilY = math.cos(angle) * pushSpeed, math.sin(angle) * pushSpeed
+            spawnPop(e.x, e.y - 28, tostring(atk) .. "!", wp.col)
+            spawnParticles(e.x, e.y - 14, wp.col, 5, 100)
+            hitCount = hitCount + 1
         end
     end
-    if hitCount > 0 then addShake(0.10, math.min(7, 2 + hitCount)) end
-end
-
-local function startNecroMeleeSwing(target, weapon)
-    local dx, dy = target.x - necro.x, target.y - necro.y
-    necro.swingAngle = math.atan2(dy, dx)
-    necro.swingDirection = Starter.attackFacing(dx, dy, "right")
-    necro.swingFacing = dx >= 0 and 1 or -1
-    necro.swingCooldown = weapon.cd
-    local starterSwing = usesStarterSwing()
-    necro.swingDuration = starterSwing and Starter.attackDuration or 0.20
-    necro.swingTimer = necro.swingDuration
-    if starterSwing then
-        necro.swingPending = true
-    else
-        applyNecroMeleeSwing()
-    end
+    if hitCount > 0 then addShake(0.075, math.min(3.5, 1.5 + hitCount * 0.5)) end
 end
 
 local function useBattlePotion(kind)
@@ -856,8 +826,8 @@ end
 
 local function updateBattle(dt)
     local heroHaste, heroMoveHaste = Roles.haste(necro, timeAcc)
-    necro.swingTimer = math.max(0, necro.swingTimer - dt)
-    necro.swingCooldown = math.max(0, necro.swingCooldown - dt * (1 + heroHaste))
+    local attackDt = dt * (1 + heroHaste)
+    necro.swingCooldown = math.max(0, necro.swingCooldown - attackDt)
     necro.invulnTimer = math.max(0, necro.invulnTimer - dt)
     necro.frenzyTimer = math.max(0, necro.frenzyTimer - dt)
     necro.soulBoostTimer = math.max(0, necro.soulBoostTimer - dt)
@@ -892,17 +862,24 @@ local function updateBattle(dt)
         if resourcesOnGround >= 4 then useBattlePotion("soul") end
     end
 
-    if necro.swingPending and necro.swingDuration - necro.swingTimer >= Starter.attackWindup then
-        necro.swingPending = false
-        applyNecroMeleeSwing()
-    end
-    if necro.swingCooldown <= 0 then
-        local weapon = WEAPONS[necro.weaponIdx]
-        local target = Targeting.nearest(enemies, necro.x, necro.y, meleeReach(weapon))
+    local weapon = WEAPONS[necro.weaponIdx]
+    local reach = meleeReach(weapon)
+    local impact
+    necro.attack, impact = Melee.advance(necro.attack, attackDt, necro.x, necro.y, enemies, reach)
+    if impact then applyNecroMeleeSwing(impact, reach) end
+    if not necro.attack and necro.swingCooldown <= 0 then
+        local target = Targeting.nearest(enemies, necro.x, necro.y, reach)
         if target then
             if #activeSummons > 0 and necro.frenzyTimer <= 0 then useBattlePotion("frenzy") end
-            startNecroMeleeSwing(target, weapon)
+            necro.attack = Melee.start(necro.x, necro.y, target, necro.direction)
+            necro.swingCooldown = weapon.cd
         end
+    end
+    if not necro.moving and necro.attack then
+        local angle = necro.attack.angle
+        necro.direction = Starter.attackFacing(math.cos(angle), math.sin(angle), necro.direction)
+        if necro.direction == "left" then necro.facing = -1 end
+        if necro.direction == "right" then necro.facing = 1 end
     end
 
     updateRingSummons(dt)
@@ -958,6 +935,10 @@ local function updateBattle(dt)
             spawnParticles(e.x, e.y - 14, {1.0, 0.4, 0.4}, e.isBoss and 28 or 5, 130)
             if e.isBoss then addShake(0.35, 8) end
             table.remove(enemies, i)
+        elseif (e.recoilTime or 0) > 0 then
+            local travel = math.min(e.recoilTime, dt)
+            e.x, e.y = Waves.clamp(e.x + e.recoilX * travel, e.y + e.recoilY * travel)
+            e.recoilTime = e.recoilTime - travel
         else
             local target = necro
             if e.provokedBy and e.provokedBy.hp > 0 and e.provokeUntil > timeAcc then
@@ -1206,24 +1187,15 @@ local function drawBtn(x, y, w, h, title, sub, bg, border)
     end
 end
 
--- 0x72 정품 도트 근접 무기를 네크로맨서 손에 렌더링!
-local function draw0x72MeleeWeapon(cx, cy, scale, swingRatio)
-    local _, _, wp = getNecroCombatStats()
-    local q = quads[wp.quadKey]
-    if not q then return end
-    local _, _, width, height = q:getViewport()
-
-    love.graphics.push()
-    local facing = swingRatio > 0 and necro.swingFacing or necro.facing
-    love.graphics.translate(cx + 7 * scale * facing, cy - 8 * scale)
-    local ang = facing == 1 and 0.45 or -0.45
-    if swingRatio > 0 then
-        ang = necro.swingAngle + math.pi * 0.5 - 1.2 + (1 - swingRatio) * 2.4
+local function drawEquippedWeapon(x, y, angle, scale)
+    local wp = WEAPONS[necro.weaponIdx]
+    if not wp.quadKey then
+        Starter.drawClub(x, y, angle, scale)
+        return
     end
-    love.graphics.rotate(ang)
-    love.graphics.setColor(1, 1, 1, 1)
-    love.graphics.draw(atlasImg, q, 0, 0, 0, scale * 0.85, scale * 0.85, width / 2, height - 3)
-    love.graphics.pop()
+    local q = quads[wp.quadKey]
+    local _, _, width, height = q:getViewport()
+    love.graphics.draw(atlasImg, q, x, y, angle + math.pi / 2, scale * 0.80, scale * 0.80, width / 2, height - 3)
 end
 
 local comboNames = {
@@ -1289,7 +1261,7 @@ local function drawCamp()
         Starter.drawPortrait("down", 157, 257, 3)
     else
         love.graphics.draw(atlasImg, stAnim.idle[fIdx], 157, 260, 0, 5, 5, stAnim.w / 2, stAnim.h)
-        draw0x72MeleeWeapon(157, 260, 4.5, 0)
+        drawEquippedWeapon(185, 228, 0.62, 4.5)
     end
     drawBtn(50, 263, 214, 20, "CHARACTER / WALK TEST [C]", nil, {0.16, 0.15, 0.23}, {0.52, 0.47, 0.64})
 
@@ -1508,18 +1480,8 @@ local function drawBattle()
         end
     end
 
-    -- 네크로맨서 근접 베기(Melee Cleave Arc)
-    local swingWindup = usesStarterSwing() and Starter.attackWindup or 0
-    local swingElapsed = necro.swingDuration - necro.swingTimer
-    if necro.swingTimer > 0 and swingElapsed >= swingWindup then
-        local _, _, wp = getNecroCombatStats()
-        local ratio = necro.swingTimer / (necro.swingDuration - swingWindup)
-        love.graphics.setColor(wp.col[1], wp.col[2], wp.col[3], ratio * 0.55)
-        love.graphics.arc("fill", necro.x, necro.y - 18, meleeReach(wp), necro.swingAngle - 1.25, necro.swingAngle + 1.25)
-        love.graphics.setColor(1, 1, 1, ratio * 0.9)
-        love.graphics.setLineWidth(4)
-        love.graphics.arc("line", "open", necro.x, necro.y - 18, meleeReach(wp), necro.swingAngle - 1.25, necro.swingAngle + 1.25)
-    end
+    local wp = WEAPONS[necro.weaponIdx]
+    Melee.drawTrail(necro.attack, necro.x, necro.y - 16, meleeReach(wp), wp.col)
 
     local stAnim = quads.necro_stages[necro.stage]
     local heroHeight = necro.stage == 1 and raidHeroHeight or stAnim.h * 2.1
@@ -1538,18 +1500,14 @@ local function drawBattle()
             love.graphics.ellipse("fill", necro.x, necro.y + 2, 14, 5)
             love.graphics.setColor(1, 1, 1, 1)
             local x, y = math.floor(necro.x), math.floor(necro.y)
-            if usesStarterSwing() and necro.swingTimer > 0 then
-                Starter.drawAttack(necro.swingDirection, swingElapsed, x, y, raidHeroScale)
+            if necro.stage == 1 then
+                Starter.drawArmed(necro.direction, necro.walkFrame, x, y, raidHeroScale, necro.attack, drawEquippedWeapon)
             else
-                if necro.stage == 1 then
-                    Starter.drawWalk(necro.direction, necro.walkFrame, x, y, raidHeroScale)
-                else
-                    local nf = getAnimFrame(0)
-                    local nQuad = necro.moving and stAnim.run[nf] or stAnim.idle[nf]
-                    local facing = necro.swingTimer > 0 and necro.swingFacing or necro.facing
-                    love.graphics.draw(atlasImg, nQuad, x, y, 0, 2.1 * facing, 2.1, stAnim.w / 2, stAnim.h)
-                end
-                draw0x72MeleeWeapon(necro.x, necro.y, 1.85, necro.swingTimer / necro.swingDuration)
+                local nf = getAnimFrame(0)
+                local nQuad = necro.moving and stAnim.run[nf] or stAnim.idle[nf]
+                local angle, lean = Melee.pose(necro.attack, necro.direction)
+                love.graphics.draw(atlasImg, nQuad, x, y, lean, 2.1 * necro.facing, 2.1, stAnim.w / 2, stAnim.h)
+                drawEquippedWeapon(x + 8 * necro.facing, y - 18, angle, 2.1)
             end
         elseif item.kind == "summon" then
             local s = item.ref
