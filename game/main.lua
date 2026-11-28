@@ -716,19 +716,25 @@ local function inAttackRange(summon, target)
     return target.hp > 0 and (summon.x - target.x)^2 + (summon.y - target.y)^2 <= (reach + target.radius)^2
 end
 
+local function canAimAt(summon, target, canTurn)
+    return target and inAttackRange(summon, target)
+        and (canTurn or (target.x - summon.x) * summon.facing >= -6)
+end
+
 local function advanceSummonAttack(summon, fallback, dt)
     local attack = summon.weaponAttack
     local timing = SummonPose[summon.meta.family]
     local elapsed = attack.elapsed + dt
     if attack.elapsed < timing.impact then
+        local canTurn = attack.elapsed < timing.turn
         local target = attack.target
-        if not inAttackRange(summon, target) then target = fallback end
-        local inRange = target and inAttackRange(summon, target)
-        if inRange then
+        if not canAimAt(summon, target, canTurn) then target = fallback end
+        local canAim = canAimAt(summon, target, canTurn)
+        if canAim then
             attack.target, attack.angle = target, directionTo(summon, target)
-            if math.abs(target.x - summon.x) > 3 then summon.facing = target.x > summon.x and 1 or -1 end
+            if canTurn and math.abs(target.x - summon.x) > 3 then summon.facing = target.x > summon.x and 1 or -1 end
         end
-        if elapsed >= timing.impact and inRange then
+        if elapsed >= timing.impact and canAim then
             attack.elapsed = timing.impact
             if attack.followup then
                 shootArrow(summon, target, attack.damage, false)
@@ -869,6 +875,11 @@ local function updateSummon(summon, dt, spdMult)
         local speed = math.max(meta.spd, math.min(220, math.sqrt(leash) * 1.8))
         mx, my = math.cos(angle) * speed, math.sin(angle) * speed
         if not summon.weaponAttack then summon.facing = dx >= 0 and 1 or -1 end
+    end
+
+    if summon.weaponAttack and summon.weaponAttack.elapsed < SummonPose[meta.family].recover then
+        summon.moving = false
+        return
     end
 
     for _, other in ipairs(activeSummons) do
